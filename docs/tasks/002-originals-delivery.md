@@ -94,23 +94,23 @@ source roots ради опыта; для подключения извне ис�
 
 ## Acceptance
 
-- [ ] Протокол, переносимые synthetic fixtures и точные команды воспроизведения
+- [x] Протокол, переносимые synthetic fixtures и точные команды воспроизведения
       доступны из Git без старого чата, PDF, чужого checkout и ignored logs.
-- [ ] Целевая среда и путь доставки однозначно определены; локальные проверки,
+- [x] Целевая среда и путь доставки однозначно определены; локальные проверки,
       документация и наблюдения реального клиента приведены раздельно.
-- [ ] Серверная передача originals проверена для ZIP и настоящего XLS; размеры
+- [x] Серверная передача originals проверена для ZIP и настоящего XLS; размеры
       и SHA-256 посчитаны по исходным и полученным bytes, с указанием места вычисления.
-- [ ] Целевой результат для каждого формата имеет честный статус:
+- [x] Целевой результат для каждого формата имеет честный статус:
       `PASS` — совпали bytes, файл открыт инструментом анализа, ручного переноса нет;
       `FAIL` — путь фактически проверен и не удовлетворяет критерию с указанной причиной;
       `BLOCKED/INCONCLUSIVE` — не хватает доступа/настройки либо фактов для вывода.
       Отсутствие доступа не считается доказанным ограничением платформы.
-- [ ] Проверены применимые лимиты, ошибки доступа и lifecycle выбранного пути,
+- [x] Проверены применимые лимиты, ошибки доступа и lifecycle выбранного пути,
       либо зафиксированы точные непроверенные пункты и причины.
-- [ ] Есть рекомендация планированию: продолжить 003/004 при подтверждённой доставке,
+- [x] Есть рекомендация планированию: продолжить 003/004 при подтверждённой доставке,
       изменить маршрут после отрицательного опыта или предоставить конкретный недостающий
       доступ для завершения проверки. Локального smoke недостаточно для положительного решения.
-- [ ] Изменённые docs/scripts прошли подходящие проверки. Если менялся runtime,
+- [x] Изменённые docs/scripts прошли подходящие проверки. Если менялся runtime,
       regression tests и полный `npm run check` проходят; failures/skips описаны отдельно.
       Work record содержит фактические branch/base/commit и состояние handoff.
 
@@ -139,12 +139,44 @@ source roots ради опыта; для подключения извне ис�
 
 ## Work record
 
-Заполняет исполнитель. До начала реализации: не начато.
+Заполняет исполнитель. Состояние: `ready for review`.
 
-- Base и branch:
-- Целевой клиент, режим, transport и дата опыта:
-- Что изменилось и почему:
-- Матрица результатов ZIP/XLS, hashes и место вычисления:
-- Команды и результаты проверок, среда, skips:
-- Выполненные/оставшиеся acceptance и внешние зависимости:
-- Решение для 003/004, риски и состояние handoff:
+- Base и branch: base `8dbae74c4f7df50f45079486fce3074b7b2c901e`, branch
+  `codex/002-originals-delivery`; локальный task commit — `HEAD` с этой записью,
+  точный SHA передаётся в review handoff.
+- Целевой клиент, режим, transport и дата опыта: выбран ChatGPT Work on the web,
+  новый Work chat, personal plugin в Developer mode, Secure MCP Tunnel до локального
+  stdio server; workspace/tunnel association без добавления OAuth/секретов в repo.
+  Локальный опыт выполнен 2026-09-19; целевой опыт не запущен из-за отсутствия
+  аутентифицированного ChatGPT Work/Developer mode и tunnel identity.
+- Что изменилось и почему: добавлены pinned experiment-only requirements, генератор
+  deterministic ZIP и настоящего BIFF8/OLE XLS, реальный stdio MCP harness, независимый
+  verifier доставленных bytes и полный протокол `docs/testing/originals-delivery.md`.
+  Runtime/public contract не менялись; generated binaries остались в ignored `.tmp/`.
+- Матрица результатов ZIP/XLS, hashes и место вычисления: локальный ZIP `PASS`, 703 B,
+  SHA-256 `4e729b848906db06641b1ef60e752ae654b5705e92a881cd68319a6538a7fe02`;
+  локальный XLS `PASS`, 5632 B, SHA-256
+  `db5c5cbd862f422b42085e3ac0936bb200a7a32cdbf3fce503b3bc76f476fc91`.
+  Source/delivered/repeat hashes вычислены Node по разным byte buffers; delivered hashes
+  повторно вычислены Python. `zipfile` проверил CRC/entries, `xlrd 2.0.2` прочитал семь
+  контрольных ячеек только из delivered copies. Целевые ZIP/XLS оба
+  `BLOCKED/INCONCLUSIVE`, не `FAIL`: принимающая ChatGPT-среда недоступна.
+- Команды и результаты проверок, среда, skips: `npm ci` PASS; двойная генерация fixtures
+  дала идентичные manifests; local stdio harness PASS; independent Python verifier PASS;
+  `npm test -- --test-name-pattern="resource"` PASS (36/36, без skips) при повторе в
+  обычном Windows user-context; `npm run check:static` PASS. Первая sandbox-попытка тестов
+  не дошла до suites из-за `uv_os_get_passwd ... ENOMEM`, а static scan — из-за ACL
+  временных pip dependencies; после удаления только ignored dependency-cache обе проверки
+  успешно повторены. Среда: Windows NT 10.0.19045, PowerShell 7.6.5, Node 24.15.0,
+  npm 11.12.1, Python 3.12.14. Runtime не менялся, поэтому полный `npm run check` не требовался.
+- Выполненные/оставшиеся acceptance и внешние зависимости: переносимый протокол, fixtures,
+  server byte equality, local limits/access/lifecycle и честная target classification готовы.
+  Для target completion нужны workspace с Developer mode, связанный Secure MCP Tunnel,
+  установленный personal plugin и файл, реально материализованный в Work analysis runtime.
+  Target limits и expiry временных URL проверяются там; отсутствие доступа не считается
+  ограничением платформы.
+- Решение для 003/004, риски и состояние handoff: 003/004 пока не продолжать. Сначала
+  завершить целевой trial по протоколу. Если существующий resource blob фактически не
+  материализуется, зафиксировать `FAIL` этого маршрута и отдельно согласовать минимальный
+  bounded tool file-reference adapter. Не начинать snapshot/bundle, OAuth, постоянное
+  artifact storage или server-side XLS parser. Готово к review; push/merge/release не делались.
