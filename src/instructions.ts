@@ -50,6 +50,7 @@ export function buildSectionsRecord(readOnly: boolean): Record<string, string> {
       'Guidelines:',
       '```',
       `root_access: ${LIST_ROOTS.name} lists configured or accepted roots; every other tool is scoped to them.`,
+      'root_selection: Omit path only when configured root entries resolve to exactly one filesystem location; with roots at multiple locations, provide an explicit path.',
       'modern_root_grants: Modern clients do not automatically send workspace roots. Call a tool with a concrete path and approve its grant when elicitation is available.',
       `path_resolution: Confirm a path with ${LIST.name} or ${FIND_FILES.name} before acting on it.`,
       '```',

@@ -186,42 +186,42 @@ MCP stdio client. `npx ...@latest` эту задачу не проверяет. 
 
 ## Критерии приёмки
 
-- [ ] Regression tests воспроизводят исходные дефекты и проверяют итоговый
+- [x] Regression tests воспроизводят исходные дефекты и проверяют итоговый
       контракт. Fixtures создаются из Buffer в temp, не зависят от Git EOL.
-- [ ] UTF-16LE и UTF-16BE с BOM не возвращаются повреждённым текстом ни через
+- [x] UTF-16LE и UTF-16BE с BOM не возвращаются повреждённым текстом ни через
       full/head/tail/range, ни через batch. Batch сохраняет успешный UTF-8 файл
       и понятный per-file error при стратегии отказа; при полной поддержке
       возвращает корректный UTF-16 результат.
-- [ ] Directory search и explicit-file search исключают binary `.bin`, `.txt`
+- [x] Directory search и explicit-file search исключают binary `.bin`, `.txt`
       и без расширения; оба UTF-16 BOM обрабатываются выбранной стратегией.
       Literal и regex идут через ту же политику.
-- [ ] UTF-8 с CRLF, umlaut, кириллицей и пустой файл читаются корректно;
+- [x] UTF-8 с CRLF, umlaut, кириллицей и пустой файл читаются корректно;
       прежний контракт полных и частичных строк сохраняется. UTF-8, разрезанный
       границей MIME sample, не объявляется binary. Существующий тест на это
       остаётся зелёным.
-- [ ] Ненулевые skip counters проверены через MCP-ответ и при переходе на
+- [x] Ненулевые skip counters проверены через MCP-ответ и при переходе на
       следующую страницу; externalized JSON содержит те же итоги. Проверено
       отсутствие совпадений при наличии пропусков. Размерный лимит и отмена
       сохраняют прежние причины остановки/пропуска.
-- [ ] Resources возвращают binary оригинал byte-for-byte: сравнить
+- [x] Resources возвращают binary оригинал byte-for-byte: сравнить
       `Buffer.from(blob, 'base64')` с исходным Buffer, при желании и SHA-256.
       Покрыть синтетический ZIP или существующий media fixture и binary с
       misleading `.txt`. При любой выбранной стратегии отдельно проверить оба
       UTF-16 `.txt` как исходный blob, включая BOM. Проверки SVG/text и PNG/audio
       подтверждают сохранение прежнего контракта. Исходники на диске не изменились.
-- [ ] MCP descriptions и tests согласованы для одного/нескольких roots;
+- [x] MCP descriptions и tests согласованы для одного/нескольких roots;
       PathGuard, read-only tool inventory и deny rules не ослаблены.
-- [ ] `.gitattributes` задаёт LF для text и сохраняет binary. Чистый Windows
+- [x] `.gitattributes` задаёт LF для text и сохраняет binary. Чистый Windows
       checkout/worktree применяет эту политику при `core.autocrlf=true` без
       изменения global config; `git ls-files --eol` и проверка attributes дают
       ожидаемый результат. Текущий working tree также проходит Prettier.
-- [ ] `npm run check` проходит локально на Windows; CI содержит Ubuntu и
+- [x] `npm run check` проходит локально на Windows; CI содержит Ubuntu и
       Windows с полным check. Remote CI считается пройденным только после
       реального запуска; если не запускался, указать это явно.
-- [ ] Обновлены `docs/reference/architecture.md` и
+- [x] Обновлены `docs/reference/architecture.md` и
       `docs/development/windows.md` по фактическому результату. При
       необходимости синхронизированы затронутые README/instructions.
-- [ ] Не изменены версии `package.json`/`server.json`: это делает Release
+- [x] Не изменены версии `package.json`/`server.json`: это делает Release
       workflow. Dependency upgrades, force push и публикация не требуются.
 
 Начать с нужных regression cases, затем выполнить полный `npm run check` один
@@ -260,15 +260,49 @@ diff. Если commit не создан, написать об этом. Сос�
 
 ## Work record — заполняет coding chat
 
-Состояние: не начато. Интеграционный статус хранится на центральной доске.
+Состояние: ready for review. Интеграционный статус хранится на центральной доске.
 
-- Owner / checkout / branch / base SHA:
-- Выбранная encoding policy и причины:
-- Изменённый публичный контракт, включая skip counters:
-- Проверки: команды, OS/Node, pass/fail/skip с причинами:
-- Windows/Ubuntu CI: ссылки либо «не запускался»:
-- Checkpoint: создан / working-tree diff; итоговый SHA передать в handoff сообщении:
-- Риски, ограничения и предложения для planning chat:
+- Owner / checkout / branch / base SHA: coding chat 001 / `.worktrees/001-baseline-defects` /
+  `codex/001-baseline-defects` / `7c1b151a49c5c468c32d1d557f1c1403c5ee02ad`.
+- Выбранная encoding policy и причины: текстовые operations явно отклоняют
+  UTF-16 LE/BE с BOM через per-file `INVALID_INPUT`; полная поддержка потребовала бы
+  пересчёта line/range/tail по UTF-16. Ошибка направляет к file resource, который отдаёт
+  исходные bytes как base64 blob.
+- Изменённый публичный контракт, включая skip counters: `search_text` не ищет в binary
+  независимо от расширения и публикует `skippedBinary` и `skippedUnsupportedEncoding`
+  рядом с `skippedTooLarge`/`skippedInaccessible`. Счётчики сохраняются в `_meta`, на всех
+  страницах, в externalized JSON и в текстовом summary. `filesScanned` включает доступные
+  проверенные файлы с этими skip reasons, но не `skippedInaccessible`. Optional path можно
+  опускать только при одной canonical root location.
+- Review follow-up: устранён media fast-path для `.svg`, из-за которого UTF-16 SVG при
+  full/batch read мог вернуться успешным image block, хотя partial read уже отклонялся.
+  Теперь любой SVG проходит общую text/encoding classification; UTF-8 SVG остаётся text,
+  UTF-16 LE/BE SVG получает тот же `INVALID_INPUT`, а file resource сохраняет исходный blob.
+  Regression покрывает оба byte order для single full, mixed batch, partial и raw resource.
+- Windows CI follow-up: run `35438896940` на Windows Server 2025 воспроизвёл 8 failures,
+  когда fixture root пришёл как `C:\Users\RUNNER~1`, а `realpath` вернул
+  `C:\Users\runneradmin`. Реальный defect был в omitted-path выборе: requested+real aliases
+  одной location считались несколькими roots. `resolvePathOrRoot` теперь группирует access
+  aliases по canonical `realpath`, сохраняя обе формы для PathGuard containment. Остальные
+  failures были неверными test assumptions: core read возвращает resolved path,
+  `ValidatedPathDetails.isSymlink` означает requested != real, delete result содержит
+  validated path, а roots seeding проверяется по стабильности before/after, не длине `1`.
+- Проверки: Windows 10 `10.0.19045`, Node `v24.15.0`, npm `11.12.1`; исходный и
+  исправленный synthetic stdio repro выполнены на локальном `dist`; после review follow-up
+  `npm run check` — 350 tests, 343 pass, 0 fail, 7 skip. Skips: два POSIX-only сценария и
+  пять сценариев с недоступным Windows file symlink. Targeted alias suite — 30/30 как с
+  обычным temp, так и с `TEMP` через настоящий Windows 8.3 short alias.
+  Sandbox-only test launch не загрузил suites из-за `tsx` / `uv_os_get_passwd ENOMEM`; та же
+  команда в разрешённом Windows-процессе прошла.
+- Windows/Ubuntu CI: workflow содержит одинаковый full check на `ubuntu-latest` и
+  `windows-latest`; для `3fe4e68a` Ubuntu прошёл, Windows завершился с описанными выше
+  8.3 failures. Повторный remote CI для нового commit ещё не запускался.
+- Checkpoint: первичный commit `0266effd`, SVG follow-up `3fe4e68a`; новый итоговый SHA —
+  в handoff сообщении.
+- Риски, ограничения и предложения для planning chat: UTF-16 без BOM и прочие legacy
+  encodings не угадываются; binary/content detection использует первые 512 bytes, как и до
+  задачи. `.gitignore`, `.prettierignore` и `Dockerfile` изменены только EOL; версии и dependencies не
+  менялись. Существенного расширения scope нет.
 
 ## Готовый запрос для нового чата
 

@@ -2,7 +2,7 @@ import { McpServer, ProtocolErrorCode, ResourceNotFoundError } from '@modelconte
 import type { ReadResourceResult, ServerContext } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -39,6 +39,14 @@ function firstResourceContent(result: ReadResourceResult): ReadResourceResult['c
   const content = result.contents[0];
   assert.ok(content, 'expected one resource content item');
   return content;
+}
+
+function utf16BomBytes(text: string): { le: Buffer; be: Buffer } {
+  const leBody = Buffer.from(text, 'utf16le');
+  return {
+    le: Buffer.concat([Buffer.from([0xff, 0xfe]), leBody]),
+    be: Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(leBody).swap16()]),
+  };
 }
 
 describe('MCP Resources', () => {
@@ -80,6 +88,10 @@ describe('MCP Resources', () => {
 
       assert.match(guidelines, /configured or accepted roots/i);
       assert.match(guidelines, /modern.*concrete path.*grant/i);
+      assert.match(
+        guidelines,
+        /omit path.*exactly one filesystem location.*multiple locations.*explicit path/i,
+      );
       assert.match(constraints, /legacy.*roots\/list/i);
       assert.doesNotMatch(guidelines, /discover.*unknown workspace/i);
 
@@ -341,6 +353,78 @@ describe('MCP Resources', () => {
       assert.ok('blob' in binaryResource);
       assert.strictEqual(binaryResource.blob, pngBytes.toString('base64'));
       assert.ok(!('text' in binaryResource));
+    });
+
+    it('returns misleading binary and UTF-16 files as byte-exact blobs regardless of extension', async () => {
+      const misleadingBinary = Buffer.concat([
+        Buffer.from([0, 1, 2, 3, 0xff, 0]),
+        Buffer.from('ASCII_MARKER_BINARY\n', 'ascii'),
+        Buffer.from([0, 0xff]),
+      ]);
+      const utf16 = utf16BomBytes('UTF16_MARKER Größe Антенна\r\n');
+      const utf16Svg = utf16BomBytes('<svg><text>UTF16_SVG</text></svg>\r\n');
+      const fixtures = [
+        ['misleading-binary.txt', misleadingBinary, 'application/octet-stream'],
+        ['utf16-le.txt', utf16.le, 'application/octet-stream'],
+        ['utf16-be.txt', utf16.be, 'application/octet-stream'],
+        ['utf16-le.svg', utf16Svg.le, 'image/svg+xml'],
+        ['utf16-be.svg', utf16Svg.be, 'image/svg+xml'],
+      ] as const;
+      const contracts = getResourceContracts({ resourceStore: store, pathGuard, readOnly: true });
+      const fileContract = contracts.find((contract) => contract.name === 'filesystem-mcp-file');
+      assert.ok(fileContract);
+
+      for (const [name, bytes, mimeType] of fixtures) {
+        const filePath = join(tmpDir, name);
+        await writeFile(filePath, bytes);
+        const uri = new URL(buildFileResourceUri(filePath));
+        const result = await fileContract.read(uri, { path: filePath }, dummyContext);
+        const content = firstResourceContent(result);
+        assert.strictEqual(content.mimeType, mimeType, name);
+        assert.ok('blob' in content, name);
+        assert.deepStrictEqual(Buffer.from(content.blob, 'base64'), bytes, name);
+        assert.ok(!('text' in content), name);
+        assert.deepStrictEqual(await readFile(filePath), bytes, `${name} changed on disk`);
+      }
+    });
+
+    it('keeps SVG as text while audio remains a byte-exact blob', async () => {
+      const svg = Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg"><text>SVG_MARKER</text></svg>\n',
+        'utf8',
+      );
+      const wav = Buffer.concat([
+        Buffer.from('RIFF', 'ascii'),
+        Buffer.from([4, 0, 0, 0]),
+        Buffer.from('WAVE', 'ascii'),
+      ]);
+      const contracts = getResourceContracts({ resourceStore: store, pathGuard, readOnly: true });
+      const fileContract = contracts.find((contract) => contract.name === 'filesystem-mcp-file');
+      assert.ok(fileContract);
+
+      const svgPath = join(tmpDir, 'resource.svg');
+      await writeFile(svgPath, svg);
+      const svgResult = await fileContract.read(
+        new URL(buildFileResourceUri(svgPath)),
+        { path: svgPath },
+        dummyContext,
+      );
+      const svgContent = firstResourceContent(svgResult);
+      assert.strictEqual(svgContent.mimeType, 'image/svg+xml');
+      assert.ok('text' in svgContent);
+      assert.strictEqual(svgContent.text, svg.toString('utf8'));
+
+      const wavPath = join(tmpDir, 'resource.wav');
+      await writeFile(wavPath, wav);
+      const wavResult = await fileContract.read(
+        new URL(buildFileResourceUri(wavPath)),
+        { path: wavPath },
+        dummyContext,
+      );
+      const wavContent = firstResourceContent(wavResult);
+      assert.strictEqual(wavContent.mimeType, 'audio/wav');
+      assert.ok('blob' in wavContent);
+      assert.deepStrictEqual(Buffer.from(wavContent.blob, 'base64'), wav);
     });
 
     it('TC-FUNC-063: WatcherRegistry - acquire attaches a watcher and debounces notifications', async () => {

@@ -58,10 +58,17 @@ describe('Client roots seeding (legacy era)', () => {
   });
 
   it('TC-ROOTS-002: re-seeding is idempotent', async () => {
-    // Every root already granted or refused: nothing new to add.
+    // Establish the state inside this test rather than relying on TC-ROOTS-001
+    // having run first (test-name filtering may select this case alone).
+    assert.equal(await seedRootsFromClient(serverCtx), 1);
+    const before = serverCtx.pathGuard.getAllowedDirectories();
+
+    // Every root is now already granted or refused: the visible access set
+    // must remain byte-for-byte stable even when it contains requested+real
+    // aliases for one logical root.
     const granted = await seedRootsFromClient(serverCtx);
-    assert.equal(granted, 1); // applyGrant is a dedup no-op but still reports true
-    const dirs = serverCtx.pathGuard.getAllowedDirectories();
-    assert.equal(dirs.length, 1);
+    assert.equal(granted, 1); // a repeated accepted grant still reports true
+    const after = serverCtx.pathGuard.getAllowedDirectories();
+    assert.deepStrictEqual(after, before);
   });
 });

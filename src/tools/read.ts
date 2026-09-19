@@ -9,7 +9,7 @@ import * as z from 'zod/v4';
 import { processInParallel } from '../core/concurrency.js';
 import { ErrorCode } from '../core/errors.js';
 import { buildFileResourceLinkFor, buildFileResourceUri } from '../core/file-uri.js';
-import { detectMimeFromContent, detectMimeType } from '../core/mime.js';
+import { detectMimeFromContent, detectMimeType, isKnownBinaryExtension } from '../core/mime.js';
 import type { ReadFileResult, ReadSpec } from '../core/read.js';
 import { readFileWithStats } from '../core/read.js';
 import {
@@ -347,8 +347,9 @@ async function readOnePath(
   // INVALID_INPUT ("Binary file detected."). Line-range reads are
   // text-oriented and stay rejected. `readRaw` enforces the same size cap as
   // the text path (getMaxTextFileSize), so a too-large image surfaces TOO_LARGE
-  // rather than blowing memory. svg carries kind:'image' but is XML text —
-  // readRaw.isBinary is false for it, so it falls through to the text path.
+  // rather than blowing memory. SVG carries kind:'image' but is a text format,
+  // so every SVG (including misleading binary or UTF-16 bytes) must go through
+  // the shared text reader and its encoding classification in every mode.
   const isRangeRead =
     args.head !== undefined ||
     args.tail !== undefined ||
@@ -356,7 +357,7 @@ async function readOnePath(
     args.endLine !== undefined;
   if (!isRangeRead) {
     const mime = detectMimeType(filePath);
-    if (mime.kind === 'image' || mime.kind === 'audio') {
+    if ((mime.kind === 'image' || mime.kind === 'audio') && isKnownBinaryExtension(filePath)) {
       const raw = await ctx.fs.readRaw(filePath, { signal: ctx.signal });
       if (raw.isBinary) {
         return {

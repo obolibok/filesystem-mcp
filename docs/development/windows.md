@@ -17,6 +17,11 @@ npm run build
 [workflow](parallel-work.md). Каждому worktree нужны свои `node_modules` и `dist`.
 Версии в `package.json` и `server.json` вручную не менять.
 
+Tracked text нормализуется в LF правилом `* text=auto eol=lf` в корневом
+`.gitattributes`. `text=auto` оставляет binary без EOL-преобразований, а `eol=lf` имеет
+приоритет над Windows `core.autocrlf=true`. Глобальную Git configuration менять не
+нужно.
+
 ## Проверки
 
 ```powershell
@@ -38,11 +43,11 @@ node node_modules/knip/bin/knip.js
 npm test -- --test-name-pattern="resources"
 ```
 
-На baseline `4f2625bf` Windows checkout с `core.autocrlf=true` не проходит Prettier
-из-за CRLF. Все 96 failures исходного прогона объяснялись только EOL; типы, ESLint,
-Knip и 329 tests прошли. [Задача 001](../tasks/001-baseline-defects.md) должна
-исправить репозиторную политику и добавить Windows CI. До этого не маскировать
-проблему отключением форматтера и не форматировать весь checkout в unrelated task.
+На историческом baseline `4f2625bf` Windows checkout с `core.autocrlf=true` не проходил
+Prettier из-за CRLF. Все 96 failures исходного прогона объяснялись только EOL; типы,
+ESLint, Knip и 329 tests прошли. Задача 001 ввела репозиторную LF-политику и
+Windows job в CI с теми же `npm ci` и `npm run check`, что и на Ubuntu. Это не заменяет
+фактический remote run обоих jobs.
 
 Полезная read-only диагностика:
 
@@ -51,6 +56,11 @@ git ls-files --eol
 git config --show-origin --get core.autocrlf
 git check-attr text eol -- src/core/read.ts
 ```
+
+В чистом checkout ожидается `i/lf w/lf attr/text=auto eol=lf` для tracked text в
+`git ls-files --eol`; binary может показывать `-text`/`none` и не менять bytes. Для
+проверки политики с `core.autocrlf=true` использовать отдельный clean worktree/
+checkout; не перезаписывать незавершённые правки в текущем worktree.
 
 Если sandbox сообщает `tsx`/`uv_os_get_passwd` до загрузки tests, это сбой среды,
 а не 22 независимых дефекта suites. Использовать разрешённый запуск с рабочим
@@ -61,6 +71,13 @@ POSIX-only и недоступные Windows file-symlink tests могут им�
 Если Git сообщает dubious ownership из-за sandbox identity, допустимо разовое
 `git -c safe.directory=<проверенный-абсолютный-git-root> ...`. Сначала проверить
 реальный путь; не использовать `safe.directory=*` или глобальные изменения.
+
+Windows runner или `os.tmpdir()` может вернуть 8.3 spelling вроде
+`C:\Users\RUNNER~1`, тогда как `realpath` возвращает
+`C:\Users\runneradmin`. Это aliases одной filesystem location: тесты path identity
+сравнивают canonical real paths, а не raw strings. PathGuard намеренно сохраняет
+requested и real aliases для lexical/resolved containment checks; omitted `path`
+группирует их по canonical location и требует explicit path только для разных locations.
 
 ## Synthetic каталог и конфигурация
 
@@ -79,8 +96,9 @@ node dist/index.js --read-only --root-boundary $fixturePath $fixturePath --print
 ```
 
 Ожидаются `transport: stdio`, `readOnly: true`, roots этого fixture, семь tools и
-лимит полного чтения 10 MiB. Если каталог имеет alias через junction/drive mapping,
-сервер может показать оба пути. Для запросов явно передавать нужный `path`.
+лимит полного чтения 10 MiB. Если каталог имеет alias через junction/drive mapping или
+Windows 8.3 name, сервер может показать оба пути. Они не делают omitted `path`
+неоднозначным, пока разрешаются в одну location.
 
 MCP-клиент должен запускать `node` с аргументами:
 

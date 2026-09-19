@@ -1,12 +1,15 @@
-import { stat as fsStat, readFile } from 'node:fs/promises';
+import type { Stats } from 'node:fs';
+import { stat as fsStat } from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import type { RE2ExecArray } from '@adguard/re2-wasm';
 import { RE2 } from '@adguard/re2-wasm';
 
+import { ErrorCode, isFsError } from './errors.js';
 import { globEntries, type GlobEntry } from './glob.js';
 import type { PathGuard } from './path.js';
 import { escapeRegexLiteral } from './primitives.js';
+import { readFileWithStats } from './read.js';
 import { getMaxTextFileSize } from './util.js';
 
 interface SearchResult {
@@ -198,6 +201,10 @@ export interface SearchContentOutcome {
     skippedInaccessible: number;
     /** Files skipped unread because they exceed maxFileSize. */
     skippedTooLarge: number;
+    /** Files skipped because their bytes are binary, regardless of extension. */
+    skippedBinary: number;
+    /** Files skipped because their BOM declares an unsupported text encoding. */
+    skippedUnsupportedEncoding: number;
     /**
      * `StoppedReason` narrowed to the stops these scans can produce: both call
      * only `hitMaxResults`/`hitAbort` (see concurrency.ts) — never
@@ -236,6 +243,8 @@ export async function searchContent(
     let filesMatched = 0;
     let matchingLines = 0;
     let skippedTooLarge = 0;
+    let skippedBinary = 0;
+    let skippedUnsupportedEncoding = 0;
     const counters = { skippedInaccessible: 0, stoppedByAbort: false };
 
     for await (const entry of guardedEntries(entries, pathGuard, options.signal, counters)) {
@@ -243,21 +252,29 @@ export async function searchContent(
 
       // Skip oversized files before reading to avoid unbounded memory use. Count
       // them: "no matches" for a reason other than the pattern must be visible.
+      let stats: Stats;
       try {
-        const stats = await fsStat(entry.path);
-        if (stats.size > maxFileSize) {
-          skippedTooLarge++;
-          continue;
-        }
+        stats = await fsStat(entry.path);
       } catch {
         counters.skippedInaccessible++;
         continue;
       }
 
-      filesScanned++;
+      if (stats.size > maxFileSize) {
+        filesScanned++;
+        skippedTooLarge++;
+        continue;
+      }
 
       try {
-        const content = await readFile(entry.path, { encoding: 'utf-8', signal: options.signal });
+        const { content } = await readFileWithStats(entry.path, entry.path, stats, {
+          kind: 'full',
+          ...(options.signal ? { signal: options.signal } : {}),
+        });
+        // Count every accessible file whose metadata or text classification was
+        // examined, including files assigned one of the skip reasons below.
+        // Read/access failures remain outside filesScanned.
+        filesScanned++;
         const lines = content.split('\n');
         // A trailing newline splits into a phantom empty last element; context
         // must not report it as a line the file has.
@@ -289,7 +306,7 @@ export async function searchContent(
           }
         }
         if (matchedFile) filesMatched++;
-      } catch {
+      } catch (error: unknown) {
         // A read failure while the signal is aborted IS the abort, not an
         // unreadable file — stop rather than spend another iteration and then
         // report a cut-short scan as complete.
@@ -297,7 +314,29 @@ export async function searchContent(
           counters.stoppedByAbort = true;
           break;
         }
-        // ignore read errors (e.g. binary files)
+        if (isFsError(error)) {
+          if (
+            error.code === ErrorCode.INVALID_INPUT &&
+            error.message.startsWith('Unsupported text encoding:')
+          ) {
+            filesScanned++;
+            skippedUnsupportedEncoding++;
+            continue;
+          }
+          if (error.code === ErrorCode.INVALID_INPUT && error.message === 'Binary file detected.') {
+            filesScanned++;
+            skippedBinary++;
+            continue;
+          }
+          // A file can grow after the stat above. Preserve TOO_LARGE as its
+          // single reason instead of reclassifying that race as inaccessible.
+          if (error.code === ErrorCode.TOO_LARGE) {
+            filesScanned++;
+            skippedTooLarge++;
+            continue;
+          }
+        }
+        counters.skippedInaccessible++;
       }
     }
 
@@ -317,6 +356,8 @@ export async function searchContent(
         truncated: stoppedReason !== undefined,
         skippedInaccessible: counters.skippedInaccessible,
         skippedTooLarge,
+        skippedBinary,
+        skippedUnsupportedEncoding,
         ...(stoppedReason ? { stoppedReason } : {}),
       },
     };

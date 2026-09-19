@@ -220,11 +220,11 @@ All tools are scoped to the configured roots. Call `list_roots` first to discove
 
 #### Inspect
 
-| Tool          | Description                                                                               |
-| :------------ | :---------------------------------------------------------------------------------------- |
-| `stat`        | Get file/directory metadata: size, modified time, permissions, MIME type, token estimate. |
-| `search_text` | Search file contents for text (grep-like). Returns matching lines with context.           |
-| `diff`        | Compare two files and return a unified diff with added/removed line counts.               |
+| Tool          | Description                                                                                     |
+| :------------ | :---------------------------------------------------------------------------------------------- |
+| `stat`        | Get file/directory metadata: size, modified time, permissions, MIME type, token estimate.       |
+| `search_text` | Search UTF-8 file contents (grep-like). Binary/unsupported encodings are skipped with counters. |
+| `diff`        | Compare two files and return a unified diff with added/removed line counts.                     |
 
 #### Read
 
@@ -245,11 +245,11 @@ All tools are scoped to the configured roots. Call `list_roots` first to discove
 
 ### Resources
 
-| URI                             | Description                                                                           |
-| :------------------------------ | :------------------------------------------------------------------------------------ |
-| `internal://instructions`       | Server navigation guide — tools overview, constraints, and error recovery.            |
-| `filesystem-mcp://file/{+path}` | Read a workspace file. Subscribe to receive push notifications on change.             |
-| `filesystem-mcp://result/{id}`  | Ephemeral cached tool output. Expires after ~60 seconds, eviction, or server restart. |
+| URI                             | Description                                                                                           |
+| :------------------------------ | :---------------------------------------------------------------------------------------------------- |
+| `internal://instructions`       | Server navigation guide — tools overview, constraints, and error recovery.                            |
+| `filesystem-mcp://file/{+path}` | Read a workspace file; binary and unsupported text encodings are returned byte-exact as base64 blobs. |
+| `filesystem-mcp://result/{id}`  | Ephemeral cached tool output. Expires after ~60 seconds, eviction, or server restart.                 |
 
 ### Prompts
 
@@ -300,6 +300,11 @@ workspace roots. They can add access after startup by calling a tool with a
 concrete path and approving the elicitation-backed grant. `list_roots` reports
 the roots already configured or accepted; it cannot discover an unknown
 workspace by itself.
+
+Tools with an optional `path` may omit it only when the configured root entries
+resolve to exactly one filesystem location. With roots at multiple locations,
+pass an explicit path; there is no implicit "first root" selection. Lexical,
+symlink or Windows 8.3 aliases of one location do not make that choice ambiguous.
 
 Over HTTP, 2025-era clients are served statelessly: tools, resources and
 prompts work. Confirmations (recursive delete, overwrite, access grants) need a

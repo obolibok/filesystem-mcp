@@ -60,11 +60,13 @@ interface SearchContentPageMetadata {
   readonly stoppedReason?: SearchOutput['stoppedReason'];
   readonly skippedInaccessible?: number;
   readonly skippedTooLarge?: number;
+  readonly skippedBinary?: number;
+  readonly skippedUnsupportedEncoding?: number;
 }
 
 const GrepInputSchema = z.strictObject({
   path: OptionalPath.describe(
-    'File to search, or directory to search under (default: the whole first allowed root). Naming a file searches that file alone: pattern is ignored and hidden/ignored filtering does not apply.',
+    'File to search, or directory to search under; omit only when allowed root entries resolve to exactly one filesystem location. With roots at multiple locations, provide an explicit path. Naming a file searches that file alone: pattern is ignored and hidden/ignored filtering does not apply.',
   ),
   pattern: SafeGlobPattern.optional().describe(
     'Glob to restrict search to specific file types (e.g. **/*.ts); default: all text files',
@@ -127,12 +129,20 @@ const GrepOutputSchema = z.strictObject({
     "Total matching lines, one per entry in matches (not per occurrence); see that entry's matchCount for occurrences on a line.",
   ),
   filesMatched: NonNegInt.optional().describe('Number of files containing at least one match'),
-  filesScanned: NonNegInt.optional().describe('Total number of files examined'),
+  filesScanned: NonNegInt.optional().describe(
+    'Accessible files whose metadata or text classification were examined, including files reported by a skip counter',
+  ),
   skippedInaccessible: NonNegInt.optional().describe(
     'Files skipped unread due to permission or access errors',
   ),
   skippedTooLarge: NonNegInt.optional().describe(
     'Files skipped unread because they exceed the text-file size limit; raise the limit or narrow pattern if a match was expected in one',
+  ),
+  skippedBinary: NonNegInt.optional().describe(
+    'Files skipped because their bytes are binary, regardless of filename extension',
+  ),
+  skippedUnsupportedEncoding: NonNegInt.optional().describe(
+    'Files skipped because their BOM declares an unsupported text encoding (currently UTF-16 LE or BE)',
   ),
   truncated: z
     .boolean()
@@ -201,6 +211,33 @@ function buildSearchMatchDetail(totalMatches: number, filesMatched: number): str
   return `${matchDetail} · ${formatCount(filesMatched, 'file', 'files')}`;
 }
 
+function skipSummary(output: SearchOutput): string {
+  const skipped: string[] = [];
+  if (output.skippedBinary) {
+    skipped.push(formatCount(output.skippedBinary, 'binary file', 'binary files'));
+  }
+  if (output.skippedUnsupportedEncoding) {
+    skipped.push(
+      formatCount(
+        output.skippedUnsupportedEncoding,
+        'file with unsupported text encoding',
+        'files with unsupported text encoding',
+      ),
+    );
+  }
+  if (output.skippedTooLarge) {
+    skipped.push(
+      formatCount(output.skippedTooLarge, 'file over the size limit', 'files over the size limit'),
+    );
+  }
+  if (output.skippedInaccessible) {
+    skipped.push(
+      formatCount(output.skippedInaccessible, 'inaccessible file', 'inaccessible files'),
+    );
+  }
+  return skipped.length > 0 ? `\n// Skipped ${skipped.join('; ')}.` : '';
+}
+
 function searchContentOutput(
   matches: readonly SearchMatchPayload[],
   metadata: SearchContentPageMetadata,
@@ -216,6 +253,10 @@ function searchContentOutput(
     ...(metadata.stoppedReason !== undefined ? { stoppedReason: metadata.stoppedReason } : {}),
     ...(metadata.skippedInaccessible ? { skippedInaccessible: metadata.skippedInaccessible } : {}),
     ...(metadata.skippedTooLarge ? { skippedTooLarge: metadata.skippedTooLarge } : {}),
+    ...(metadata.skippedBinary ? { skippedBinary: metadata.skippedBinary } : {}),
+    ...(metadata.skippedUnsupportedEncoding
+      ? { skippedUnsupportedEncoding: metadata.skippedUnsupportedEncoding }
+      : {}),
     ...(resourceUri !== undefined ? { resourceUri } : {}),
     ...(nextCursor !== undefined ? { nextCursor } : {}),
   };
@@ -273,7 +314,7 @@ async function resolveSearchScope(
   args: SearchInput,
   ctx: ToolCtx,
 ): Promise<{ basePath: string; args: SearchInput }> {
-  const requested = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
+  const requested = await ctx.fs.pathGuard.resolvePathOrRoot(args.path, ctx.signal);
   // One resolution, one stat: validateExistingDirectory would redo both.
   const resolved = await ctx.fs.pathGuard.validateExistingPath(requested);
   const stats = await stat(resolved);
@@ -301,7 +342,7 @@ async function handleSearchContent(
   total: number;
   link?: ReturnType<typeof putJsonResource>['link'];
 }> {
-  const requestedPath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
+  const requestedPath = await ctx.fs.pathGuard.resolvePathOrRoot(args.path, ctx.signal);
   const queryKey = pageQueryKey({
     method: 'search_text',
     path: requestedPath,
@@ -348,6 +389,10 @@ async function handleSearchContent(
           ...(result.summary.skippedTooLarge
             ? { skippedTooLarge: result.summary.skippedTooLarge }
             : {}),
+          ...(result.summary.skippedBinary ? { skippedBinary: result.summary.skippedBinary } : {}),
+          ...(result.summary.skippedUnsupportedEncoding
+            ? { skippedUnsupportedEncoding: result.summary.skippedUnsupportedEncoding }
+            : {}),
         },
         truncated: result.summary.truncated,
       };
@@ -383,6 +428,7 @@ export const SEARCH_TEXT = defineTool({
     '1-indexed line number and 0-indexed column offset. ' +
     'Set context=N to also return N lines either side of each match (grep -C). ' +
     'Scope to specific file types with pattern (e.g. **/*.ts). ' +
+    'Binary and unsupported-encoding files are skipped and counted in the response. ' +
     'Set includeHidden=true to include dotfiles. Use find_files to search by filename instead.',
   input: GrepInputSchema,
   output: GrepOutputSchema,
@@ -408,6 +454,7 @@ export const SEARCH_TEXT = defineTool({
     const body = rows.length > 0 ? rows.join('\n') : `No matches for '${args.searchPattern}'`;
     const text =
       body +
+      skipSummary(structured) +
       pageTrailer({
         offset,
         shown: rows.length,

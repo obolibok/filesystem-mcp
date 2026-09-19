@@ -11,6 +11,11 @@ export interface MimeInfo {
   kind: MimeKind;
 }
 
+export type TextSampleClassification =
+  | { kind: 'text' }
+  | { kind: 'binary' }
+  | { kind: 'unsupportedEncoding'; encoding: 'UTF-16 LE' | 'UTF-16 BE' };
+
 // ─── Extension Map ──────────────────────────────────────────────────────────
 // Maps file extensions to MIME types (80+ common extensions)
 
@@ -162,11 +167,11 @@ export function isKnownBinaryExtension(filePath: string): boolean {
   return KNOWN_BINARY_EXTENSIONS.has(ext);
 }
 
-function hasUtf16Bom(slice: Buffer): boolean {
-  return (
-    slice.length >= 2 &&
-    ((slice[0] === 0xff && slice[1] === 0xfe) || (slice[0] === 0xfe && slice[1] === 0xff))
-  );
+function detectUtf16Bom(slice: Buffer): 'UTF-16 LE' | 'UTF-16 BE' | undefined {
+  if (slice.length < 2) return undefined;
+  if (slice[0] === 0xff && slice[1] === 0xfe) return 'UTF-16 LE';
+  if (slice[0] === 0xfe && slice[1] === 0xff) return 'UTF-16 BE';
+  return undefined;
 }
 
 /**
@@ -183,30 +188,41 @@ function isUtf8Prefix(slice: Buffer): boolean {
   }
 }
 
-/** Single binary-vs-text verdict, shared by `detectMimeType` and the read path. */
-export function isBinarySample(slice: Buffer): boolean {
-  if (slice.length === 0) return false;
-  if (hasUtf16Bom(slice)) return false;
-  if (slice.includes(0)) return true;
-  return !isUtf8Prefix(slice);
+/**
+ * Classify bytes for text operations. UTF-16 with a BOM is kept distinct from
+ * binary so callers can explain why a text file was skipped instead of hiding
+ * it in a generic no-match result. Only UTF-8 is supported by the line-based
+ * read/search pipeline.
+ */
+export function classifyTextSample(slice: Buffer): TextSampleClassification {
+  if (slice.length === 0) return { kind: 'text' };
+  const encoding = detectUtf16Bom(slice);
+  if (encoding !== undefined) return { kind: 'unsupportedEncoding', encoding };
+  if (slice.includes(0) || !isUtf8Prefix(slice)) return { kind: 'binary' };
+  return { kind: 'text' };
 }
 
 export function detectMimeType(path: string, sample?: Buffer): MimeInfo {
   const lastDot = path.lastIndexOf('.');
   const ext = lastDot > -1 ? path.slice(lastDot + 1).toLowerCase() : '';
+  const extensionInfo = ext && Object.hasOwn(EXT_MAP, ext) ? EXT_MAP[ext] : undefined;
 
-  if (ext && Object.hasOwn(EXT_MAP, ext)) {
-    const entry = EXT_MAP[ext];
-    if (entry !== undefined) {
-      return entry;
+  if (sample) {
+    const classification = classifyTextSample(sample.subarray(0, MIME_SAMPLE_SIZE));
+    if (classification.kind !== 'text') {
+      // Preserve a known media/binary MIME, but never let a text-looking
+      // extension force arbitrary or unsupported bytes into a text response.
+      return extensionInfo !== undefined && extensionInfo.kind !== 'text'
+        ? extensionInfo
+        : { mimeType: 'application/octet-stream', kind: 'binary' };
     }
   }
 
+  if (extensionInfo !== undefined) return extensionInfo;
+
   // No known extension: fall back to a binary/text probe of the content.
   if (sample) {
-    return isBinarySample(sample.subarray(0, MIME_SAMPLE_SIZE))
-      ? { mimeType: 'application/octet-stream', kind: 'binary' }
-      : { mimeType: 'text/plain', kind: 'text' };
+    return { mimeType: 'text/plain', kind: 'text' };
   }
 
   return { mimeType: 'application/octet-stream', kind: 'binary' };

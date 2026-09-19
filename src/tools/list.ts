@@ -181,7 +181,9 @@ const DEFAULT_LIST_DEPTH = 1;
 const DEFAULT_LIST_ENTRIES = DEFAULT_TREE_ENTRIES;
 
 const ListInputSchema = z.strictObject({
-  path: OptionalPath.describe('Directory to list (default: first allowed root)'),
+  path: OptionalPath.describe(
+    'Directory to list; omit only when allowed root entries resolve to exactly one filesystem location. With roots at multiple locations, provide an explicit path.',
+  ),
   maxDepth: PositiveInt.max(MAX_TREE_DEPTH)
     .default(DEFAULT_LIST_DEPTH)
     .describe(
@@ -262,7 +264,7 @@ async function handleList(
   link?: ContentBlock;
 }> {
   const path = args.path;
-  const resolvedPath = ctx.fs.pathGuard.resolvePathOrRoot(path);
+  const resolvedPath = await ctx.fs.pathGuard.resolvePathOrRoot(path, ctx.signal);
   const queryKey = pageQueryKey({
     method: 'list',
     path: resolvedPath,

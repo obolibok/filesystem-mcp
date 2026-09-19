@@ -21,7 +21,12 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 
 import { withAbort } from './concurrency.js';
 import { ErrorCode, formatUnknownErrorMessage, FsError, isFsError, isNodeError } from './errors.js';
-import { detectMimeFromContent } from './mime.js';
+import {
+  classifyTextSample,
+  detectMimeFromContent,
+  isKnownBinaryExtension,
+  MIME_SAMPLE_SIZE,
+} from './mime.js';
 import { Logger } from './observability.js';
 import type { PathGuard } from './path.js';
 import type { EntryType as FileType } from './primitives.js';
@@ -390,10 +395,16 @@ export class GuardedFileSystem {
     }
     const content = await withAbort(fsReadFile(validPath), options?.signal);
     const mimeInfo = detectMimeFromContent(validPath, content);
+    const textClassification = classifyTextSample(content.subarray(0, MIME_SAMPLE_SIZE));
     return {
       content,
       mimeType: mimeInfo.mimeType,
-      isBinary: mimeInfo.kind !== 'text',
+      // MIME kind and wire representation are related but not identical: SVG
+      // is an image MIME whose bytes are searchable UTF-8 text, while a .txt
+      // file may contain binary or an unsupported UTF-16 encoding. Known
+      // binary/media extensions still win even when their leading bytes happen
+      // to be valid ASCII.
+      isBinary: isKnownBinaryExtension(validPath) || textClassification.kind !== 'text',
     };
   }
 
