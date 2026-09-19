@@ -6,6 +6,9 @@
 
 ## Overview
 
+For development in this fork, start with the [project documentation](docs/README.md):
+pilot scope, current tasks, Windows setup, and the workflow for parallel implementation chats.
+
 Filesystem-MCP is a [Model Context Protocol](https://modelcontextprotocol.io) server that lets AI assistants read and write files within explicitly allowed directories. Sensitive file patterns (`.env`, `*.pem`, `*id_rsa*`) are blocked by default. It exposes filesystem tools, resources, and prompts over stdio or Streamable HTTP transport.
 
 | Aspect       | Details                                        |

@@ -2,12 +2,17 @@
 
 How to set up, branch, and test.
 
+For this fork's project work, follow the [documentation map](docs/README.md),
+[parallel-work workflow](docs/development/parallel-work.md), and
+[Windows runbook](docs/development/windows.md). Those pages describe local
+implementation and integration; the workflow below describes contributing upstream.
+
 ## Setup
 
 1. Fork the repository
 2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/filesystem-mcp.git`
 3. Add upstream remote: `git remote add upstream https://github.com/j0hanz/filesystem-mcp.git`
-4. Install dependencies: `npm install`
+4. Install locked dependencies: `npm ci`
 
 ## Branch workflow
 
