@@ -28,7 +28,9 @@ import { defineTool, type ToolCtx } from './define.js';
 // ---------------------------------------------------------------------------
 
 const SearchFilesInputSchema = z.strictObject({
-  path: OptionalPath.describe('Base directory to search under (default: first allowed root)'),
+  path: OptionalPath.describe(
+    'Base directory to search under; omit only when exactly one allowed root is configured. With multiple roots, provide an explicit path.',
+  ),
   pattern: SafeGlobPattern.describe('Glob pattern to match file paths (e.g. **/*.ts, src/**/*.js)'),
   maxResults: z
     .uint32()

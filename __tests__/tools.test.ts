@@ -25,6 +25,14 @@ import {
   writeTestFile,
 } from './helpers.js';
 
+function utf16BomBytes(text: string): { le: Buffer; be: Buffer } {
+  const leBody = Buffer.from(text, 'utf16le');
+  return {
+    le: Buffer.concat([Buffer.from([0xff, 0xfe]), leBody]),
+    be: Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(leBody).swap16()]),
+  };
+}
+
 describe('P0 Functional Tests - Tools (MCP Client)', () => {
   let tmpDir: string;
   let harness: TestClientContext;
@@ -86,6 +94,40 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
 
     const structured = result._meta as { results?: { value?: { kind?: string } }[] } | undefined;
     assert.strictEqual(structured?.results?.[0]?.value?.kind, 'image');
+  });
+
+  it('keeps SVG readable as text and audio delivered as original media bytes', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><text>SVG_MARKER</text></svg>\n';
+    const svgPath = join(tmpDir, 'diagram.svg');
+    await writeFile(svgPath, svg, 'utf8');
+    const svgResult = await harness.client.callTool({
+      name: 'read',
+      arguments: { path: svgPath },
+    });
+    assert.notStrictEqual(svgResult.isError, true);
+    assert.strictEqual(firstTextBlock(svgResult).text, svg);
+    assert.strictEqual(
+      (svgResult.content as { type: string }[]).some((block) => block.type === 'image'),
+      false,
+    );
+
+    const wavBytes = Buffer.concat([
+      Buffer.from('RIFF', 'ascii'),
+      Buffer.from([4, 0, 0, 0]),
+      Buffer.from('WAVE', 'ascii'),
+    ]);
+    const wavPath = join(tmpDir, 'probe.wav');
+    await writeFile(wavPath, wavBytes);
+    const wavResult = await harness.client.callTool({
+      name: 'read',
+      arguments: { path: wavPath },
+    });
+    assert.notStrictEqual(wavResult.isError, true);
+    const audio = (wavResult.content as { type: string; data?: string; mimeType?: string }[]).find(
+      (block) => block.type === 'audio',
+    );
+    assert.strictEqual(audio?.mimeType, 'audio/wav');
+    assert.deepStrictEqual(Buffer.from(audio?.data ?? '', 'base64'), wavBytes);
   });
 
   it('TC-FUNC-007: Read path outside allowed root returns isError: true with ACCESS_DENIED', async () => {
@@ -777,6 +819,34 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     });
     assert.notStrictEqual(result.isError, true, 'one path really was read');
     assert.strictEqual(failedSummary(result)?.summary?.failed, 1);
+  });
+
+  it('batch read keeps UTF-8 success and reports UTF-16 errors per file', async () => {
+    const utf8 = join(tmpDir, 'batch-utf8.txt');
+    await writeFile(utf8, 'UTF8 batch success\n', 'utf8');
+    const utf16 = utf16BomBytes('UTF16 batch marker\r\n');
+    const le = join(tmpDir, 'batch-utf16-le.txt');
+    const be = join(tmpDir, 'batch-utf16-be.txt');
+    await writeFile(le, utf16.le);
+    await writeFile(be, utf16.be);
+
+    const result = await harness.client.callTool({
+      name: 'read',
+      arguments: { paths: [utf8, le, be] },
+    });
+    assert.notStrictEqual(result.isError, true, 'the UTF-8 file succeeded');
+    const metadata = result._meta as {
+      results?: { path: string; error?: { code?: string; message?: string } }[];
+      summary?: { total?: number; succeeded?: number; failed?: number };
+    };
+    assert.deepStrictEqual(metadata.summary, { total: 3, succeeded: 1, failed: 2 });
+    assert.strictEqual(metadata.results?.[0]?.error, undefined);
+    for (const entry of metadata.results?.slice(1) ?? []) {
+      assert.strictEqual(entry.error?.code, 'INVALID_INPUT');
+      assert.match(entry.error?.message ?? '', /Unsupported text encoding: UTF-16 (?:LE|BE)/u);
+      assert.match(entry.error?.message ?? '', /file resource/u);
+    }
+    assert.match(firstTextBlock(result).text ?? '', /UTF8 batch success/u);
   });
 
   it('TC-FUNC-052: List roots via MCP tool call', async () => {
@@ -1654,6 +1724,53 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.ok(sc.results?.some((r) => r.path.endsWith('findme.txt')));
   });
 
+  it('find_files and search_text require path with multiple roots and isolate explicit roots', async () => {
+    const first = join(tmpDir, 'multi-root-one');
+    const second = join(tmpDir, 'multi-root-two');
+    await mkdir(first, { recursive: true });
+    await mkdir(second, { recursive: true });
+    await writeFile(join(first, 'first.txt'), 'FIRST_ROOT_MARKER\n', 'utf8');
+    await writeFile(join(second, 'second.txt'), 'SECOND_ROOT_MARKER\n', 'utf8');
+    const multi = await createTestClientPair([first, second]);
+    try {
+      const findDefault = await multi.client.callTool({
+        name: 'find_files',
+        arguments: { pattern: '**/*.txt' },
+      });
+      assert.strictEqual(findDefault.isError, true);
+      assert.match(firstTextBlock(findDefault).text ?? '', /Multiple roots.*explicit path/u);
+
+      const searchDefault = await multi.client.callTool({
+        name: 'search_text',
+        arguments: { searchPattern: 'ROOT_MARKER' },
+      });
+      assert.strictEqual(searchDefault.isError, true);
+      assert.match(firstTextBlock(searchDefault).text ?? '', /Multiple roots.*explicit path/u);
+
+      const findFirst = await multi.client.callTool({
+        name: 'find_files',
+        arguments: { path: first, pattern: '**/*.txt' },
+      });
+      const found = (findFirst._meta as { results?: { path: string }[] }).results ?? [];
+      assert.deepStrictEqual(
+        found.map((entry) => entry.path),
+        ['first.txt'],
+      );
+
+      const searchSecond = await multi.client.callTool({
+        name: 'search_text',
+        arguments: { path: second, searchPattern: 'ROOT_MARKER' },
+      });
+      const matches = (searchSecond._meta as { matches?: { file: string }[] }).matches ?? [];
+      assert.deepStrictEqual(
+        matches.map((entry) => entry.file),
+        ['second.txt'],
+      );
+    } finally {
+      await multi.close();
+    }
+  });
+
   it('find_files pages are stable and reject cursor pattern replay', async () => {
     const dir = join(tmpDir, 'find_pages');
     await mkdir(dir, { recursive: true });
@@ -1777,6 +1894,104 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.strictEqual(structured.totalMatches, 1);
     assert.strictEqual(structured.matches?.[0]?.line, 2);
     assert.ok(structured.matches?.[0]?.content?.includes('NEEDLE_MARK'));
+  });
+
+  it('search_text excludes binary files for literal and regex explicit-file searches', async () => {
+    const binary = Buffer.concat([
+      Buffer.from([0, 1, 2, 3, 0xff, 0]),
+      Buffer.from('ASCII_MARKER_BINARY\n', 'ascii'),
+      Buffer.from([0, 0xff]),
+    ]);
+    for (const name of ['explicit-binary.bin', 'explicit-binary.txt', 'explicit-binary']) {
+      const file = join(tmpDir, name);
+      await writeFile(file, binary);
+      for (const isRegex of [false, true]) {
+        const result = await harness.client.callTool({
+          name: 'search_text',
+          arguments: {
+            path: file,
+            searchPattern: isRegex ? 'ASCII_MARKER_.*' : 'ASCII_MARKER_BINARY',
+            isRegex,
+          },
+        });
+        assert.notStrictEqual(result.isError, true);
+        const metadata = result._meta as {
+          totalMatches?: number;
+          filesScanned?: number;
+          skippedBinary?: number;
+          skippedUnsupportedEncoding?: number;
+        };
+        assert.strictEqual(metadata.totalMatches, 0, `${name} regex=${String(isRegex)}`);
+        assert.strictEqual(metadata.filesScanned, 1, `${name} regex=${String(isRegex)}`);
+        assert.strictEqual(metadata.skippedBinary, 1, `${name} regex=${String(isRegex)}`);
+        assert.strictEqual(metadata.skippedUnsupportedEncoding, undefined);
+        const text = firstTextBlock(result).text ?? '';
+        assert.match(text, /No matches/u);
+        assert.match(text, /Skipped 1 binary file/u);
+      }
+    }
+  });
+
+  it('search_text preserves skip counters across pages and externalized JSON', async () => {
+    const dir = join(tmpDir, 'search-skip-pages');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'hits.txt'), 'VISIBLE_MARKER one\nVISIBLE_MARKER two\n', 'utf8');
+    await writeFile(
+      join(dir, 'binary.txt'),
+      Buffer.concat([Buffer.from([0, 1, 2, 0]), Buffer.from('VISIBLE_MARKER', 'ascii')]),
+    );
+    const utf16 = utf16BomBytes('VISIBLE_MARKER\r\n');
+    await writeFile(join(dir, 'utf16-le.txt'), utf16.le);
+    await writeFile(join(dir, 'utf16-be.txt'), utf16.be);
+
+    const first = await harness.client.callTool({
+      name: 'search_text',
+      arguments: { path: dir, searchPattern: 'VISIBLE_MARKER', maxResults: 1 },
+    });
+    const firstMetadata = first._meta as {
+      totalMatches?: number;
+      filesScanned?: number;
+      skippedBinary?: number;
+      skippedUnsupportedEncoding?: number;
+      nextCursor?: string;
+      resourceUri?: string;
+    };
+    assert.strictEqual(firstMetadata.totalMatches, 2);
+    assert.strictEqual(firstMetadata.filesScanned, 4);
+    assert.strictEqual(firstMetadata.skippedBinary, 1);
+    assert.strictEqual(firstMetadata.skippedUnsupportedEncoding, 2);
+    assert.ok(firstMetadata.nextCursor);
+    assert.ok(firstMetadata.resourceUri);
+    assert.match(firstTextBlock(first).text ?? '', /Skipped 1 binary file/u);
+    assert.match(firstTextBlock(first).text ?? '', /2 files with unsupported text encoding/u);
+
+    const second = await harness.client.callTool({
+      name: 'search_text',
+      arguments: {
+        path: dir,
+        searchPattern: 'VISIBLE_MARKER',
+        maxResults: 1,
+        cursor: firstMetadata.nextCursor,
+      },
+    });
+    const secondMetadata = second._meta as {
+      skippedBinary?: number;
+      skippedUnsupportedEncoding?: number;
+    };
+    assert.strictEqual(secondMetadata.skippedBinary, 1);
+    assert.strictEqual(secondMetadata.skippedUnsupportedEncoding, 2);
+
+    const stored = await harness.client.readResource({ uri: firstMetadata.resourceUri ?? '' });
+    const storedContent = stored.contents[0];
+    assert.ok(storedContent && 'text' in storedContent);
+    const externalized = JSON.parse(storedContent.text) as {
+      skippedBinary?: number;
+      skippedUnsupportedEncoding?: number;
+      filesScanned?: number;
+    };
+    assert.strictEqual(externalized.skippedBinary, 1);
+    assert.strictEqual(externalized.skippedUnsupportedEncoding, 2);
+    assert.strictEqual(externalized.filesScanned, 4);
   });
 
   it('search_text pages are stable and reject cursor query replay', async () => {
@@ -2103,6 +2318,15 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         !JSON.stringify(tool.inputSchema).includes('and files'),
         `${name} must not advertise a files param it does not accept`,
       );
+    }
+
+    for (const name of ['find_files', 'list', 'replace_text', 'search_text']) {
+      const tool = tools.find((entry) => entry.name === name);
+      assert.ok(tool, `${name} must be registered`);
+      const path = tool.inputSchema.properties?.['path'] as { description?: string } | undefined;
+      assert.match(path?.description ?? '', /omit only when exactly one allowed root/iu);
+      assert.match(path?.description ?? '', /multiple roots.*explicit path/iu);
+      assert.doesNotMatch(path?.description ?? '', /first allowed root/iu);
     }
 
     const edit = tools.find((t) => t.name === 'edit');

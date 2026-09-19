@@ -6,7 +6,12 @@ import { StringDecoder } from 'node:string_decoder';
 
 import { withAbort } from './concurrency.js';
 import { ErrorCode, formatUnknownErrorMessage, FsError, isFsError } from './errors.js';
-import { isBinarySample, isKnownBinaryExtension, MIME_SAMPLE_SIZE } from './mime.js';
+import {
+  classifyTextSample,
+  isKnownBinaryExtension,
+  MIME_SAMPLE_SIZE,
+  type TextSampleClassification,
+} from './mime.js';
 import { Logger } from './observability.js';
 import { getMaxTextFileSize } from './util.js';
 
@@ -46,23 +51,23 @@ async function readProbe(handle: FileHandle, signal?: AbortSignal): Promise<Buff
   return buffer.subarray(0, bytesRead);
 }
 
-async function isProbablyBinary(
+async function classifyForTextRead(
   filePath: string,
   existingHandle?: FileHandle,
   signal?: AbortSignal,
-): Promise<boolean> {
+): Promise<TextSampleClassification> {
   if (isKnownBinaryExtension(filePath)) {
-    return true;
+    return { kind: 'binary' };
   }
 
   if (existingHandle) {
     const slice = await readProbe(existingHandle, signal);
-    return isBinarySample(slice);
+    return classifyTextSample(slice);
   }
 
   await using handle = await openReadableFileHandle(filePath, signal);
   const slice = await readProbe(handle, signal);
-  return isBinarySample(slice);
+  return classifyTextSample(slice);
 }
 
 export type ReadSpec =
@@ -476,8 +481,15 @@ async function assertNotBinary(
   normalized: NormalizedBase,
 ): Promise<void> {
   normalized.signal?.throwIfAborted();
-  const isBinary = await isProbablyBinary(validPath, handle, normalized.signal);
-  if (!isBinary) return;
+  const classification = await classifyForTextRead(validPath, handle, normalized.signal);
+  if (classification.kind === 'text') return;
+  if (classification.kind === 'unsupportedEncoding') {
+    throw new FsError(
+      ErrorCode.INVALID_INPUT,
+      `Unsupported text encoding: ${classification.encoding} with BOM. Text operations support UTF-8 only; use the file resource to retrieve the original bytes.`,
+      filePath,
+    );
+  }
   throw new FsError(ErrorCode.INVALID_INPUT, 'Binary file detected.', filePath);
 }
 

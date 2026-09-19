@@ -1,8 +1,8 @@
 # Архитектура, форматы и ограничения
 
-Описывает исходную version 2.3.0 (`4f2625bf`) и текущие границы пилота. Исполнитель
-задачи, меняющей поведение, обновляет этот reference. Исторические measurements
-остаются в [baseline](../testing/baseline-2026-09-19.md).
+Описывает текущую архитектуру и границы пилота; исходная version 2.3.0 была на
+`4f2625bf`. Исполнитель задачи, меняющей поведение, обновляет этот reference.
+Исторические measurements остаются в [baseline](../testing/baseline-2026-09-19.md).
 
 ## Владельцы кода
 
@@ -37,22 +37,24 @@ resources, `get-help`, progress, отмена, logs и подписки с proto
 
 Корни задаются явно CLI/env или поддерживаемым access grant; `list_roots` показывает
 уже доступные roots. Omitted path может выбрать единственный root; при нескольких
-нужен явный path. Baseline descriptions двух search tools обещают другое — задача 001.
+нужен явный path. Tool descriptions фиксируют то же правило.
 `includeIgnored` управляет фильтрами обхода, но не снимает запреты доступа PathGuard.
 
 ## Форматы
 
-| Данные                                  | Реальное поведение baseline                                                                |
-| --------------------------------------- | ------------------------------------------------------------------------------------------ |
-| UTF-8 TXT/Markdown/CSV/code             | Полное/частичное и batch чтение, literal/RE2 поиск; структурного парсинга CSV нет          |
-| Image/audio                             | Полный `read` может вернуть media content block                                            |
-| PDF/Office/ZIP/binary                   | Известные binary отклоняются текстовым `read`; file resource передаёт originals как base64 |
-| UTF-16 LE/BE с BOM                      | Признаётся текстом, затем ошибочно декодируется UTF-8; задача 001                          |
-| Binary со вводящим в заблуждение `.txt` | Расширение может ошибочно определить text resource; проверить/исправить в 001              |
+| Данные                                  | Текущее поведение                                                                                                                  |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| UTF-8 TXT/Markdown/CSV/code             | Полное/частичное и batch чтение, literal/RE2 поиск; структурного парсинга CSV нет                                                  |
+| SVG                                     | Доступен текстовому `read`, `search_text` и text resource с MIME `image/svg+xml`                                                   |
+| Image/audio                             | Полный `read` возвращает media content block; file resource передаёт исходные байты base64 blob                                    |
+| PDF/Office/ZIP/binary                   | Текстовые операции отклоняют; file resource передаёт originals как base64 blob с исходными байтам                                  |
+| UTF-16 LE/BE с BOM                      | `read` возвращает понятную encoding error; `search_text` считает `skippedUnsupportedEncoding`; resource возвращает byte-exact blob |
+| Binary со вводящим в заблуждение `.txt` | Определяется по sample: поиск пропускает с `skippedBinary`, resource возвращает `application/octet-stream` blob                    |
 
 MIME detection не означает PDF extraction, OCR, Office parser или анализ программ
-станков. `search_text` baseline читает файлы как UTF-8 без согласованного binary
-фильтра — это подтверждённый дефект, а не поддержка поиска внутри архивов.
+станков. `read` и `search_text` используют общую классификацию: известное binary-расширение
+или binary sample не попадают в UTF-8 pipeline; UTF-16 BOM выделен в отдельную причину.
+Это не поддержка поиска внутри архивов.
 
 Схема file resource: `filesystem-mcp://file/{+path}`. Encoder и decoder находятся
 в [file-uri.ts](../../src/core/file-uri.ts); использовать общий helper при построении
@@ -74,6 +76,10 @@ URI. Получение blob SDK-клиентом не доказывает ма
 
 Пагинация не отменяет cap/timeout первого обхода. Проверять `truncated`,
 `stoppedReason` и счётчики пропусков; пустая выдача не доказывает полноту поиска.
+`search_text.filesScanned` считает доступные файлы, для которых проверены metadata/классификация,
+включая `skippedBinary`, `skippedUnsupportedEncoding` и `skippedTooLarge`;
+`skippedInaccessible` в него не входит. Один файл получает одну причину пропуска; счётчики
+сохраняются на всех страницах и в externalized JSON.
 `read(includeHash)` хеширует возвращённый текст, включая фрагмент partial read;
 это не обязательно hash полного оригинала. `stat.tokenEstimate` — размер/4.
 

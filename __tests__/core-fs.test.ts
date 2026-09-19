@@ -19,6 +19,14 @@ import {
   writeTestFile,
 } from './helpers.js';
 
+function utf16BomBytes(text: string): { le: Buffer; be: Buffer } {
+  const leBody = Buffer.from(text, 'utf16le');
+  return {
+    le: Buffer.concat([Buffer.from([0xff, 0xfe]), leBody]),
+    be: Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(leBody).swap16()]),
+  };
+}
+
 describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
   let tmpDir: string;
   let ctx: FilesystemServerContext;
@@ -85,6 +93,68 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       assert.strictEqual(result.totalLines, 5);
       assert.strictEqual(result.hasMoreLines, false);
       assert.strictEqual(result.content, 'Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n');
+    });
+
+    it('rejects UTF-16 BOM text in every read mode and preserves the original bytes', async () => {
+      const bytes = utf16BomBytes('UTF16_MARKER Größe Антенна\r\nSecond line\r\n');
+      const specs = [
+        { kind: 'full' },
+        { kind: 'head', lines: 1 },
+        { kind: 'tail', lines: 1 },
+        { kind: 'range', start: 1, end: 1 },
+      ] as const;
+
+      for (const [byteOrder, content] of Object.entries(bytes)) {
+        const filePath = join(tmpDir, `utf16-${byteOrder}.txt`);
+        await writeFile(filePath, content);
+        for (const spec of specs) {
+          await assert.rejects(
+            fs.readFile(filePath, spec),
+            (error) =>
+              isFsError(error) &&
+              error.code === ErrorCode.INVALID_INPUT &&
+              error.message.includes('Unsupported text encoding: UTF-16') &&
+              error.message.includes('with BOM') &&
+              error.message.includes('file resource'),
+            `${byteOrder} ${spec.kind}`,
+          );
+        }
+
+        const raw = await fs.readRaw(filePath);
+        assert.strictEqual(raw.isBinary, true, byteOrder);
+        assert.strictEqual(raw.mimeType, 'application/octet-stream', byteOrder);
+        assert.deepStrictEqual(raw.content, content, byteOrder);
+      }
+    });
+
+    it('keeps UTF-8 CRLF, Unicode, partial-line, and empty-file behavior', async () => {
+      const text = 'Header\r\nUTF8_MARKER Größe Антенна\r\n';
+      const filePath = join(tmpDir, 'utf8-crlf-измерения-ä.txt');
+      await writeFile(filePath, Buffer.from(text, 'utf8'));
+      const emptyPath = join(tmpDir, 'utf8-empty.txt');
+      await writeFile(emptyPath, Buffer.alloc(0));
+
+      assert.strictEqual((await fs.readFile(filePath, { kind: 'full' })).content, text);
+      assert.strictEqual(
+        (await fs.readFile(filePath, { kind: 'head', lines: 1 })).content,
+        'Header',
+      );
+      assert.strictEqual(
+        (await fs.readFile(filePath, { kind: 'range', start: 2, end: 2 })).content,
+        'UTF8_MARKER Größe Антенна',
+      );
+      assert.strictEqual(
+        (await fs.readFile(filePath, { kind: 'tail', lines: 1 })).content,
+        'UTF8_MARKER Größe Антенна',
+      );
+      assert.deepStrictEqual(await fs.readFile(emptyPath, { kind: 'full' }), {
+        path: normalizePath(emptyPath),
+        content: '',
+        totalLines: 0,
+        readMode: 'full',
+        linesRead: 0,
+        hasMoreLines: false,
+      });
     });
   });
 
@@ -460,6 +530,86 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       assert.strictEqual(outcome.summary.matchingLines, 3);
       assert.strictEqual(outcome.matches.length, 3);
       assert.ok(outcome.matches.every((m) => m.content.includes('TARGET_LITERAL_STRING')));
+    });
+
+    it('searchContent skips binary and UTF-16 files with one visible reason per file', async () => {
+      const dir = join(tmpDir, 'search-classification');
+      await fs.mkdir(dir, { recursive: true });
+      const binary = Buffer.concat([
+        Buffer.from([0, 1, 2, 3, 0xff, 0]),
+        Buffer.from('ASCII_MARKER_BINARY\n', 'ascii'),
+        Buffer.from([0, 0xff]),
+      ]);
+      for (const name of ['binary.bin', 'binary.txt', 'binary-no-extension']) {
+        await writeFile(join(dir, name), binary);
+      }
+      const utf16 = utf16BomBytes('UTF16_MARKER\r\nSecond line\r\n');
+      await writeFile(join(dir, 'utf16-le.txt'), utf16.le);
+      await writeFile(join(dir, 'utf16-be.txt'), utf16.be);
+      await writeFile(
+        join(dir, 'utf8-измерения-ä.txt'),
+        Buffer.from('Header\r\nUTF8_MARKER Größe Антенна\r\n', 'utf8'),
+      );
+      await writeFile(join(dir, 'empty.txt'), Buffer.alloc(0));
+
+      for (const isRegex of [false, true]) {
+        const binarySearch = await searchContent(
+          dir,
+          isRegex ? 'ASCII_MARKER_.*' : 'ASCII_MARKER_BINARY',
+          { isRegex },
+          ctx.pathGuard,
+        );
+        assert.strictEqual(binarySearch.summary.matchingLines, 0);
+        assert.strictEqual(binarySearch.summary.filesScanned, 7);
+        assert.strictEqual(binarySearch.summary.skippedBinary, 3);
+        assert.strictEqual(binarySearch.summary.skippedUnsupportedEncoding, 2);
+        assert.strictEqual(binarySearch.summary.skippedTooLarge, 0);
+        assert.strictEqual(binarySearch.summary.skippedInaccessible, 0);
+      }
+
+      const utf16Search = await searchContent(
+        dir,
+        'UTF16_MARKER',
+        { isRegex: false },
+        ctx.pathGuard,
+      );
+      assert.strictEqual(utf16Search.summary.matchingLines, 0);
+      assert.strictEqual(utf16Search.summary.skippedBinary, 3);
+      assert.strictEqual(utf16Search.summary.skippedUnsupportedEncoding, 2);
+
+      const utf8Search = await searchContent(dir, 'UTF8_MARKER', { isRegex: false }, ctx.pathGuard);
+      assert.strictEqual(utf8Search.summary.matchingLines, 1);
+      assert.strictEqual(utf8Search.matches[0]?.line, 2);
+      assert.strictEqual(utf8Search.matches[0]?.content, 'UTF8_MARKER Größe Антенна\r');
+    });
+
+    it('searchContent preserves size-limit skips and the timeout stop reason', async () => {
+      const dir = join(tmpDir, 'search-limits');
+      await fs.mkdir(dir, { recursive: true });
+      const previous = process.env['FS_MAX_FILE_SIZE'];
+      process.env['FS_MAX_FILE_SIZE'] = String(1024 * 1024);
+      try {
+        await writeFile(join(dir, 'oversized.txt'), Buffer.alloc(1024 * 1024 + 1, 0x61));
+        const oversized = await searchContent(dir, 'needle', { isRegex: false }, ctx.pathGuard);
+        assert.strictEqual(oversized.summary.filesScanned, 1);
+        assert.strictEqual(oversized.summary.skippedTooLarge, 1);
+        assert.strictEqual(oversized.summary.skippedBinary, 0);
+        assert.strictEqual(oversized.summary.skippedUnsupportedEncoding, 0);
+
+        const controller = new AbortController();
+        controller.abort(new DOMException('test timeout', 'TimeoutError'));
+        const aborted = await searchContent(
+          dir,
+          'needle',
+          { isRegex: false, signal: controller.signal },
+          ctx.pathGuard,
+        );
+        assert.strictEqual(aborted.summary.truncated, true);
+        assert.strictEqual(aborted.summary.stoppedReason, 'timeout');
+      } finally {
+        if (previous === undefined) delete process.env['FS_MAX_FILE_SIZE'];
+        else process.env['FS_MAX_FILE_SIZE'] = previous;
+      }
     });
   });
 

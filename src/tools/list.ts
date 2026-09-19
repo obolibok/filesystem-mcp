@@ -181,7 +181,9 @@ const DEFAULT_LIST_DEPTH = 1;
 const DEFAULT_LIST_ENTRIES = DEFAULT_TREE_ENTRIES;
 
 const ListInputSchema = z.strictObject({
-  path: OptionalPath.describe('Directory to list (default: first allowed root)'),
+  path: OptionalPath.describe(
+    'Directory to list; omit only when exactly one allowed root is configured. With multiple roots, provide an explicit path.',
+  ),
   maxDepth: PositiveInt.max(MAX_TREE_DEPTH)
     .default(DEFAULT_LIST_DEPTH)
     .describe(
