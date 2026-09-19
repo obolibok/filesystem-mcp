@@ -72,6 +72,13 @@ POSIX-only и недоступные Windows file-symlink tests могут им�
 `git -c safe.directory=<проверенный-абсолютный-git-root> ...`. Сначала проверить
 реальный путь; не использовать `safe.directory=*` или глобальные изменения.
 
+Windows runner или `os.tmpdir()` может вернуть 8.3 spelling вроде
+`C:\Users\RUNNER~1`, тогда как `realpath` возвращает
+`C:\Users\runneradmin`. Это aliases одной filesystem location: тесты path identity
+сравнивают canonical real paths, а не raw strings. PathGuard намеренно сохраняет
+requested и real aliases для lexical/resolved containment checks; omitted `path`
+группирует их по canonical location и требует explicit path только для разных locations.
+
 ## Synthetic каталог и конфигурация
 
 Из корня своей рабочей копии создать маленький UTF-8 fixture:
@@ -89,8 +96,9 @@ node dist/index.js --read-only --root-boundary $fixturePath $fixturePath --print
 ```
 
 Ожидаются `transport: stdio`, `readOnly: true`, roots этого fixture, семь tools и
-лимит полного чтения 10 MiB. Если каталог имеет alias через junction/drive mapping,
-сервер может показать оба пути. Для запросов явно передавать нужный `path`.
+лимит полного чтения 10 MiB. Если каталог имеет alias через junction/drive mapping или
+Windows 8.3 name, сервер может показать оба пути. Они не делают omitted `path`
+неоднозначным, пока разрешаются в одну location.
 
 MCP-клиент должен запускать `node` с аргументами:
 

@@ -88,7 +88,10 @@ describe('MCP Resources', () => {
 
       assert.match(guidelines, /configured or accepted roots/i);
       assert.match(guidelines, /modern.*concrete path.*grant/i);
-      assert.match(guidelines, /omit path.*exactly one.*multiple roots.*explicit path/i);
+      assert.match(
+        guidelines,
+        /omit path.*exactly one filesystem location.*multiple locations.*explicit path/i,
+      );
       assert.match(constraints, /legacy.*roots\/list/i);
       assert.doesNotMatch(guidelines, /discover.*unknown workspace/i);
 

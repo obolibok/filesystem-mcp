@@ -48,7 +48,7 @@ import { defineTool, type ToolCtx } from './define.js';
 
 const SearchAndReplaceInputSchema = z.strictObject({
   path: OptionalPath.describe(
-    'File to rewrite, or directory to rewrite under. Omit only when exactly one allowed root is configured; with multiple roots, provide an explicit path. ' +
+    'File to rewrite, or directory to rewrite under. Omit only when allowed root entries resolve to exactly one filesystem location; with roots at multiple locations, provide an explicit path. ' +
       'When omitted, the ENTIRE single allowed root is targeted — scope it deliberately, and pair a wide scope with dryRun=true first',
   ),
   pattern: SafeGlobPattern.optional().describe(
@@ -416,9 +416,10 @@ function createReplaceSummary(root: string): ReplaceSummary {
 async function resolveSearchRoot(
   pathValue: string | undefined,
   fs: GuardedFileSystem,
+  signal?: AbortSignal,
 ): Promise<{ root: string; singleFile?: string }> {
   if (!pathValue) {
-    return { root: fs.pathGuard.resolvePathOrRoot(undefined) };
+    return { root: await fs.pathGuard.resolvePathOrRoot(undefined, signal) };
   }
   const resolvedPath = await fs.pathGuard.validateExistingPath(pathValue);
   const { stats: fileStats } = await fs.stat(resolvedPath);
@@ -490,7 +491,7 @@ async function handleSearchAndReplace(
   link?: ContentBlock;
 }> {
   const maxFileSize = getMaxTextFileSize();
-  const { root, singleFile } = await resolveSearchRoot(args.path, ctx.fs);
+  const { root, singleFile } = await resolveSearchRoot(args.path, ctx.fs, ctx.signal);
   const effectivePattern = args.pattern ?? '**/*';
 
   // An explicit single-file target bypasses baseNameMatch/exclude/hidden/

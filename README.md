@@ -301,9 +301,10 @@ concrete path and approving the elicitation-backed grant. `list_roots` reports
 the roots already configured or accepted; it cannot discover an unknown
 workspace by itself.
 
-Tools with an optional `path` may omit it only when exactly one root is
-configured. With multiple roots, pass an explicit path; there is no implicit
-"first root" selection.
+Tools with an optional `path` may omit it only when the configured root entries
+resolve to exactly one filesystem location. With roots at multiple locations,
+pass an explicit path; there is no implicit "first root" selection. Lexical,
+symlink or Windows 8.3 aliases of one location do not make that choice ambiguous.
 
 Over HTTP, 2025-era clients are served statelessly: tools, resources and
 prompts work. Confirmations (recursive delete, overwrite, access grants) need a

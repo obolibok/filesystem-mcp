@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { chmod, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { ErrorCode, isFsError } from '../src/core/errors.js';
 import { buildWrittenFileMeta } from '../src/core/file-uri.js';
 import { countFileLines, GuardedFileSystem } from '../src/core/fs.js';
-import { normalizePath } from '../src/core/path-utils.js';
+import { isSamePath, normalizePath } from '../src/core/path-utils.js';
 import { searchContent, searchFiles } from '../src/core/search.js';
 import { getDefaultReadManyMaxTotalSize } from '../src/core/util.js';
 import type { FilesystemServerContext } from '../src/server.js';
@@ -148,7 +148,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         'UTF8_MARKER Größe Антенна',
       );
       assert.deepStrictEqual(await fs.readFile(emptyPath, { kind: 'full' }), {
-        path: normalizePath(emptyPath),
+        path: normalizePath(await realpath(emptyPath)),
         content: '',
         totalLines: 0,
         readMode: 'full',
@@ -164,7 +164,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
       const result = await fs.readEditableText(filePath);
 
-      assert.strictEqual(result.validPath, normalizePath(filePath));
+      assert.strictEqual(result.validPath, normalizePath(await realpath(filePath)));
       assert.strictEqual(result.content, 'editable content');
       assert.strictEqual(result.stats.size, Buffer.byteLength('editable content'));
     });
@@ -434,23 +434,29 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
   });
 
   describe('Stat metadata (TC-FUNC-031–034)', () => {
-    it('TC-FUNC-031: statDetailed on a file returns stats and isSymlink=false', async () => {
+    it('TC-FUNC-031: statDetailed on a file reports requested-vs-real aliasing', async () => {
       const filePath = await writeTestFile(tmpDir, 'stat_file.txt', 'stat metadata test');
       const detail = await fs.statDetailed(filePath);
+      const normalizedRequested = normalizePath(filePath);
+      const normalizedReal = normalizePath(await realpath(filePath));
 
-      assert.strictEqual(detail.isSymlink, false);
+      assert.strictEqual(detail.requestedPath, normalizedRequested);
+      assert.strictEqual(detail.isSymlink, !isSamePath(normalizedRequested, normalizedReal));
       assert.strictEqual(detail.stats.isFile(), true);
       assert.strictEqual(detail.stats.isDirectory(), false);
       assert.strictEqual(detail.stats.size, Buffer.byteLength('stat metadata test'));
     });
 
-    it('TC-FUNC-032: statDetailed on a dir returns stats.isDirectory()=true', async () => {
+    it('TC-FUNC-032: statDetailed on a dir reports requested-vs-real aliasing', async () => {
       const dirPath = join(tmpDir, 'stat_test_directory');
       await fs.mkdir(dirPath);
 
       const detail = await fs.statDetailed(dirPath);
+      const normalizedRequested = normalizePath(dirPath);
+      const normalizedReal = normalizePath(await realpath(dirPath));
 
-      assert.strictEqual(detail.isSymlink, false);
+      assert.strictEqual(detail.requestedPath, normalizedRequested);
+      assert.strictEqual(detail.isSymlink, !isSamePath(normalizedRequested, normalizedReal));
       assert.strictEqual(detail.stats.isDirectory(), true);
       assert.strictEqual(detail.stats.isFile(), false);
     });

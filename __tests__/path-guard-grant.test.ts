@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, parse } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { ErrorCode, isFsError } from '../src/core/errors.js';
-import { isSamePath } from '../src/core/path-utils.js';
+import { isSamePath, normalizePath } from '../src/core/path-utils.js';
 import { PathGuard } from '../src/core/path.js';
 import {
   cleanupTestRoot,
@@ -53,6 +53,44 @@ describe('PathGuard grant round-trip', () => {
     const grants = await guard.precheckAccess([inside]);
 
     assert.deepStrictEqual(grants, []);
+  });
+
+  it('TC-PG-001b: omitted path treats requested and real root aliases as one location', async () => {
+    const guard = await makeGuard([root]);
+    const aliases = guard.getAllowedDirectories();
+
+    const selected = await guard.resolvePathOrRoot(undefined);
+    const selectedReal = normalizePath(await realpath(selected));
+
+    assert.ok(aliases.includes(selected), 'the representative must remain an allowed spelling');
+    for (const alias of aliases) {
+      assert.ok(
+        isSamePath(normalizePath(await realpath(alias)), selectedReal),
+        `${alias} must resolve to the selected logical root`,
+      );
+    }
+
+    const reason = new Error('root selection aborted');
+    const controller = new AbortController();
+    controller.abort(reason);
+    await assert.rejects(
+      guard.resolvePathOrRoot(undefined, controller.signal),
+      (error) => error === reason,
+    );
+  });
+
+  it('TC-PG-001c: a configured symlink root remains one omitted-path location', async (t) => {
+    const target = await mkDir(createdDirs, 'fsmcp-pg001c-target-');
+    const holder = await mkDir(createdDirs, 'fsmcp-pg001c-holder-');
+    const alias = join(holder, 'workspace-alias');
+    if (!(await trySymlink(target, alias, () => t.skip('symlink creation not permitted')))) return;
+
+    const guard = await makeGuard([alias]);
+    assert.ok(
+      guard.getAllowedDirectories().length > 1,
+      'the access set should retain lexical and real aliases',
+    );
+    assert.strictEqual(await guard.resolvePathOrRoot(undefined), normalizePath(alias));
   });
 
   it('TC-PG-002: within FS_ROOT_BOUNDARY, precheckAccess offers the ancestor and applyGrant extends access', async () => {

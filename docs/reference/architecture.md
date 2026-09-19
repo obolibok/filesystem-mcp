@@ -37,7 +37,9 @@ resources, `get-help`, progress, отмена, logs и подписки с proto
 
 Корни задаются явно CLI/env или поддерживаемым access grant; `list_roots` показывает
 уже доступные roots. Omitted path может выбрать единственный root; при нескольких
-нужен явный path. Tool descriptions фиксируют то же правило.
+нужен явный path. Lexical и real path одного root остаются отдельными внутренними
+aliases для проверок PathGuard, но при omitted path считаются одной canonical location.
+Tool descriptions фиксируют то же правило.
 `includeIgnored` управляет фильтрами обхода, но не снимает запреты доступа PathGuard.
 
 ## Форматы

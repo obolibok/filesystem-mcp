@@ -66,7 +66,7 @@ interface SearchContentPageMetadata {
 
 const GrepInputSchema = z.strictObject({
   path: OptionalPath.describe(
-    'File to search, or directory to search under; omit only when exactly one allowed root is configured. With multiple roots, provide an explicit path. Naming a file searches that file alone: pattern is ignored and hidden/ignored filtering does not apply.',
+    'File to search, or directory to search under; omit only when allowed root entries resolve to exactly one filesystem location. With roots at multiple locations, provide an explicit path. Naming a file searches that file alone: pattern is ignored and hidden/ignored filtering does not apply.',
   ),
   pattern: SafeGlobPattern.optional().describe(
     'Glob to restrict search to specific file types (e.g. **/*.ts); default: all text files',
@@ -314,7 +314,7 @@ async function resolveSearchScope(
   args: SearchInput,
   ctx: ToolCtx,
 ): Promise<{ basePath: string; args: SearchInput }> {
-  const requested = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
+  const requested = await ctx.fs.pathGuard.resolvePathOrRoot(args.path, ctx.signal);
   // One resolution, one stat: validateExistingDirectory would redo both.
   const resolved = await ctx.fs.pathGuard.validateExistingPath(requested);
   const stats = await stat(resolved);
@@ -342,7 +342,7 @@ async function handleSearchContent(
   total: number;
   link?: ReturnType<typeof putJsonResource>['link'];
 }> {
-  const requestedPath = ctx.fs.pathGuard.resolvePathOrRoot(args.path);
+  const requestedPath = await ctx.fs.pathGuard.resolvePathOrRoot(args.path, ctx.signal);
   const queryKey = pageQueryKey({
     method: 'search_text',
     path: requestedPath,

@@ -572,7 +572,7 @@ export class PathGuard {
     return details.resolvedPath;
   }
 
-  resolvePathOrRoot(pathValue: string | undefined): string {
+  async resolvePathOrRoot(pathValue: string | undefined, signal?: AbortSignal): Promise<string> {
     if (pathValue && pathValue.trim().length > 0) {
       return pathValue;
     }
@@ -583,7 +583,21 @@ export class PathGuard {
         'No roots configured. Use the roots tool or --allow-cwd.',
       );
     }
-    if (roots.length > 1) {
+    // The access set deliberately contains both a requested root and its real
+    // path so lexical and resolved containment checks can both fail closed.
+    // Those are aliases of one logical workspace root, not two roots that make
+    // an omitted path ambiguous. Missing roots have no real path yet, so their
+    // normalized requested spelling remains their identity.
+    const canonicalRoots = await Promise.all(
+      roots.map(async (root) => (await resolveRealPath(root, signal)) ?? normalizePath(root)),
+    );
+    const uniqueCanonicalRoots: string[] = [];
+    for (const canonical of canonicalRoots) {
+      if (!uniqueCanonicalRoots.some((existing) => isSamePath(existing, canonical))) {
+        uniqueCanonicalRoots.push(canonical);
+      }
+    }
+    if (uniqueCanonicalRoots.length > 1) {
       throw new FsError(
         ErrorCode.INVALID_INPUT,
         'Multiple roots configured. Provide an explicit path.',

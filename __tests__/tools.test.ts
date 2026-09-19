@@ -2,11 +2,12 @@ import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
-import { access, chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
+import { isSamePath } from '../src/core/path-utils.js';
 import { MAX_SEARCH_RESULTS } from '../src/core/util.js';
 import { createServer } from '../src/server.js';
 import { ALL_TOOLS, MUTATING_TOOL_NAMES, registeredTools } from '../src/tools/index.js';
@@ -1515,6 +1516,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       const dir = join(tmpDir, 'del_skip_dir');
       await mkdir(join(dir, 'sub'), { recursive: true });
       await writeFile(join(dir, 'sub', 'f.txt'), 'x');
+      const canonicalDir = await realpath(dir);
       const result = await eh.client.callTool({
         name: 'delete',
         arguments: { paths: [dir], recursive: true },
@@ -1528,7 +1530,8 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       // Skip is a successful outcome with `deleted: false`, not a failure.
       assert.ok(
         s.results?.some(
-          (r) => r.path?.toLowerCase() === dir.toLowerCase() && r.value?.deleted === false,
+          (r) =>
+            r.path !== undefined && isSamePath(r.path, canonicalDir) && r.value?.deleted === false,
         ),
       );
       await access(dir); // still exists
@@ -1546,6 +1549,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       const dir = join(tmpDir, 'del_choice_dir');
       await mkdir(join(dir, 'sub'), { recursive: true });
       await writeFile(join(dir, 'sub', 'f.txt'), 'x');
+      const canonicalDir = await realpath(dir);
       const result = await eh.client.callTool({
         name: 'delete',
         arguments: { paths: [dir], recursive: true },
@@ -1556,7 +1560,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
         summary?: { failed?: number };
       };
       assert.strictEqual(s.summary?.failed, 0);
-      assert.strictEqual(s.results?.[0]?.path?.toLowerCase(), dir.toLowerCase());
+      assert.ok(s.results?.[0]?.path !== undefined && isSamePath(s.results[0].path, canonicalDir));
       assert.strictEqual(s.results?.[0]?.value?.deleted, true);
       await assert.rejects(() => access(dir));
     } finally {
@@ -2389,8 +2393,8 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       const tool = tools.find((entry) => entry.name === name);
       assert.ok(tool, `${name} must be registered`);
       const path = tool.inputSchema.properties?.['path'] as { description?: string } | undefined;
-      assert.match(path?.description ?? '', /omit only when exactly one allowed root/iu);
-      assert.match(path?.description ?? '', /multiple roots.*explicit path/iu);
+      assert.match(path?.description ?? '', /resolve to exactly one filesystem location/iu);
+      assert.match(path?.description ?? '', /multiple locations.*explicit path/iu);
       assert.doesNotMatch(path?.description ?? '', /first allowed root/iu);
     }
 
