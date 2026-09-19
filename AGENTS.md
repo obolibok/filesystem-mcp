@@ -64,11 +64,11 @@ npm test             # Node test runner; pass native flags after --
 Tests run on Node's built-in test runner; `npm test --
 --test-name-pattern="resources"` filters like the old wrapper did.
 
-The [2026-09-19 baseline](docs/testing/baseline-2026-09-19.md) records existing
-Windows EOL failures and confirmed encoding/search defects. Re-check current
-behavior rather than treating historical results as current test evidence.
-Do not run repository-wide `npm run fix` during unrelated work: it can rewrite
-the entire Windows checkout while the EOL issue remains unresolved.
+The [2026-09-19 baseline](docs/testing/baseline-2026-09-19.md) records pre-fix
+Windows EOL failures and encoding/search defects. See the project status for
+accepted fixes and current verification; historical results are not current evidence.
+Use the repository LF policy. Do not run repository-wide `npm run fix` during
+unrelated work; format only the files needed for the assigned task.
 
 ## Releases
 
