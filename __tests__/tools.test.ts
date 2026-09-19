@@ -130,6 +130,71 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.deepStrictEqual(Buffer.from(audio?.data ?? '', 'base64'), wavBytes);
   });
 
+  it('rejects UTF-16 BOM SVG consistently for full, batch, and partial reads', async () => {
+    const svgText = '<svg xmlns="http://www.w3.org/2000/svg"><text>UTF16_SVG</text></svg>\r\n';
+    const utf16 = utf16BomBytes(svgText);
+    const utf8Path = join(tmpDir, 'utf8-batch.svg');
+    const lePath = join(tmpDir, 'utf16-le.svg');
+    const bePath = join(tmpDir, 'utf16-be.svg');
+    await writeFile(utf8Path, '<svg><text>UTF8_SVG</text></svg>\n', 'utf8');
+    await writeFile(lePath, utf16.le);
+    await writeFile(bePath, utf16.be);
+
+    const assertEncodingError = (
+      result: Awaited<ReturnType<typeof harness.client.callTool>>,
+      expectedOrder: 'LE' | 'BE',
+    ): void => {
+      assert.strictEqual(result.isError, true);
+      assert.strictEqual(
+        (result.content as { type: string }[]).some((block) => block.type === 'image'),
+        false,
+      );
+      const metadata = result._meta as {
+        results?: { error?: { code?: string; message?: string } }[];
+        summary?: { total?: number; succeeded?: number; failed?: number };
+      };
+      assert.deepStrictEqual(metadata.summary, { total: 1, succeeded: 0, failed: 1 });
+      assert.strictEqual(metadata.results?.[0]?.error?.code, 'INVALID_INPUT');
+      assert.match(
+        metadata.results?.[0]?.error?.message ?? '',
+        new RegExp(`Unsupported text encoding: UTF-16 ${expectedOrder}`),
+      );
+    };
+
+    for (const [path, byteOrder] of [
+      [lePath, 'LE'],
+      [bePath, 'BE'],
+    ] as const) {
+      assertEncodingError(
+        await harness.client.callTool({ name: 'read', arguments: { path } }),
+        byteOrder,
+      );
+      assertEncodingError(
+        await harness.client.callTool({ name: 'read', arguments: { path, head: 1 } }),
+        byteOrder,
+      );
+    }
+
+    const batch = await harness.client.callTool({
+      name: 'read',
+      arguments: { paths: [utf8Path, lePath, bePath] },
+    });
+    assert.notStrictEqual(batch.isError, true, 'the UTF-8 SVG succeeded');
+    assert.strictEqual(
+      (batch.content as { type: string }[]).some((block) => block.type === 'image'),
+      false,
+    );
+    const metadata = batch._meta as {
+      results?: { error?: { code?: string; message?: string } }[];
+      summary?: { total?: number; succeeded?: number; failed?: number };
+    };
+    assert.deepStrictEqual(metadata.summary, { total: 3, succeeded: 1, failed: 2 });
+    assert.strictEqual(metadata.results?.[0]?.error, undefined);
+    assert.match(metadata.results?.[1]?.error?.message ?? '', /UTF-16 LE/u);
+    assert.match(metadata.results?.[2]?.error?.message ?? '', /UTF-16 BE/u);
+    assert.match(firstTextBlock(batch).text ?? '', /UTF8_SVG/u);
+  });
+
   it('TC-FUNC-007: Read path outside allowed root returns isError: true with ACCESS_DENIED', async () => {
     const outsideFile = join(tmpdir(), 'outside_test.txt');
     await writeFile(outsideFile, 'secret');

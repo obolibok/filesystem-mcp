@@ -352,29 +352,32 @@ describe('MCP Resources', () => {
       assert.ok(!('text' in binaryResource));
     });
 
-    it('returns misleading binary and both UTF-16 byte orders as byte-exact blobs', async () => {
+    it('returns misleading binary and UTF-16 files as byte-exact blobs regardless of extension', async () => {
       const misleadingBinary = Buffer.concat([
         Buffer.from([0, 1, 2, 3, 0xff, 0]),
         Buffer.from('ASCII_MARKER_BINARY\n', 'ascii'),
         Buffer.from([0, 0xff]),
       ]);
       const utf16 = utf16BomBytes('UTF16_MARKER Größe Антенна\r\n');
+      const utf16Svg = utf16BomBytes('<svg><text>UTF16_SVG</text></svg>\r\n');
       const fixtures = [
-        ['misleading-binary.txt', misleadingBinary],
-        ['utf16-le.txt', utf16.le],
-        ['utf16-be.txt', utf16.be],
+        ['misleading-binary.txt', misleadingBinary, 'application/octet-stream'],
+        ['utf16-le.txt', utf16.le, 'application/octet-stream'],
+        ['utf16-be.txt', utf16.be, 'application/octet-stream'],
+        ['utf16-le.svg', utf16Svg.le, 'image/svg+xml'],
+        ['utf16-be.svg', utf16Svg.be, 'image/svg+xml'],
       ] as const;
       const contracts = getResourceContracts({ resourceStore: store, pathGuard, readOnly: true });
       const fileContract = contracts.find((contract) => contract.name === 'filesystem-mcp-file');
       assert.ok(fileContract);
 
-      for (const [name, bytes] of fixtures) {
+      for (const [name, bytes, mimeType] of fixtures) {
         const filePath = join(tmpDir, name);
         await writeFile(filePath, bytes);
         const uri = new URL(buildFileResourceUri(filePath));
         const result = await fileContract.read(uri, { path: filePath }, dummyContext);
         const content = firstResourceContent(result);
-        assert.strictEqual(content.mimeType, 'application/octet-stream', name);
+        assert.strictEqual(content.mimeType, mimeType, name);
         assert.ok('blob' in content, name);
         assert.deepStrictEqual(Buffer.from(content.blob, 'base64'), bytes, name);
         assert.ok(!('text' in content), name);

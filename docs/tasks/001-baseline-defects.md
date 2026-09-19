@@ -274,15 +274,20 @@ diff. Если commit не создан, написать об этом. Сос�
   страницах, в externalized JSON и в текстовом summary. `filesScanned` включает доступные
   проверенные файлы с этими skip reasons, но не `skippedInaccessible`. Optional path можно
   опускать только при одном root.
+- Review follow-up: устранён media fast-path для `.svg`, из-за которого UTF-16 SVG при
+  full/batch read мог вернуться успешным image block, хотя partial read уже отклонялся.
+  Теперь любой SVG проходит общую text/encoding classification; UTF-8 SVG остаётся text,
+  UTF-16 LE/BE SVG получает тот же `INVALID_INPUT`, а file resource сохраняет исходный blob.
+  Regression покрывает оба byte order для single full, mixed batch, partial и raw resource.
 - Проверки: Windows 10 `10.0.19045`, Node `v24.15.0`, npm `11.12.1`; исходный и
-  исправленный synthetic stdio repro выполнены на локальном `dist`; `npm test` — 347 tests,
-  340 pass, 0 fail, 7 skip. Skips: два POSIX-only сценария и пять сценариев с недоступным
-  Windows file symlink. `npm run check` — pass на финальной версии.
+  исправленный synthetic stdio repro выполнены на локальном `dist`; после review follow-up
+  `npm test` — 348 tests, 341 pass, 0 fail, 7 skip. Skips: два POSIX-only сценария и пять
+  сценариев с недоступным Windows file symlink. `npm run check` — pass на финальной версии.
   Sandbox-only test launch не загрузил suites из-за `tsx` / `uv_os_get_passwd ENOMEM`; та же
   команда в разрешённом Windows-процессе прошла.
 - Windows/Ubuntu CI: workflow содержит одинаковый full check на `ubuntu-latest` и
   `windows-latest`; remote CI не запускался.
-- Checkpoint: локальный commit создан; итоговый SHA — в handoff сообщении.
+- Checkpoint: первичный commit `0266effd`; исправленный итоговый SHA — в handoff сообщении.
 - Риски, ограничения и предложения для planning chat: UTF-16 без BOM и прочие legacy
   encodings не угадываются; binary/content detection использует первые 512 bytes, как и до
   задачи. `.gitignore`, `.prettierignore` и `Dockerfile` изменены только EOL; версии и dependencies не
