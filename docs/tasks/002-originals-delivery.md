@@ -146,7 +146,10 @@ source roots ради опыта; для подключения извне ис�
   точный SHA передаётся в review handoff.
 - Целевой клиент, режим, transport и дата опыта: выбран ChatGPT Work on the web,
   новый Work chat, personal plugin в Developer mode, Secure MCP Tunnel до локального
-  stdio server; workspace/tunnel association без добавления OAuth/секретов в repo.
+  stdio server. Кроме workspace/tunnel association, для tunnel-client нужен runtime API key
+  (`CONTROL_PLANE_API_KEY`) и Platform Tunnels Read + Use; создание туннеля требует
+  Read + Manage. Это отдельно от Developer mode; OAuth сервера не добавлялся,
+  секреты в repo не сохраняются.
   Локальный опыт выполнен 2026-09-19; целевой опыт не запущен из-за отсутствия
   аутентифицированного ChatGPT Work/Developer mode и tunnel identity.
 - Что изменилось и почему: добавлены pinned experiment-only requirements, генератор
@@ -172,7 +175,10 @@ source roots ради опыта; для подключения извне ис�
 - Выполненные/оставшиеся acceptance и внешние зависимости: переносимый протокол, fixtures,
   server byte equality, local limits/access/lifecycle и честная target classification готовы.
   Для target completion нужны workspace с Developer mode, связанный Secure MCP Tunnel,
-  установленный personal plugin и файл, реально материализованный в Work analysis runtime.
+  Platform tunnel permissions, локальная настройка runtime API key, проверенный запуск
+  tunnel-client на выбранном Windows host, установленный personal plugin и файл, реально
+  материализованный в Work analysis runtime. Наличие совместимого Windows package и его
+  запуск в этом опыте не проверены; prerequisites и источник setup описаны в протоколе.
   Target limits и expiry временных URL проверяются там; отсутствие доступа не считается
   ограничением платформы.
 - Решение для 003/004, риски и состояние handoff: 003/004 пока не продолжать. Сначала
@@ -180,3 +186,23 @@ source roots ради опыта; для подключения извне ис�
   материализуется, зафиксировать `FAIL` этого маршрута и отдельно согласовать минимальный
   bounded tool file-reference adapter. Не начинать snapshot/bundle, OAuth, постоянное
   artifact storage или server-side XLS parser. Готово к review; push/merge/release не делались.
+
+### Integration review, 2026-09-19
+
+- Исправлены три дефекта стенда: повторные чтения теперь обходят SDK cache;
+  отрицательные контроли принимают только ожидаемый protocol code/reason;
+  delivery directory проверяется по canonical path, включая children и Windows aliases.
+  CLI entry также проверен через alias `D:`. Runtime сервера не менялся.
+- Добавлены три regression tests: фактические обращения к MCP при свежем кэше,
+  ложноположительные ошибки/успешные ответы в отрицательных контролях и source
+  children/junction до создания output. Уточнены credentials/permissions туннеля
+  и непроверенная совместимость Windows deployment.
+- Независимый повтор в review checkout: manifests двух генераций идентичны,
+  некешированная stdio-доставка ZIP/XLS и Python verifier — PASS, исходные hashes
+  сохранены, все ZIP entries и семь XLS cells совпали. Полный `npm run check` —
+  PASS: 353 tests, 346 pass, 0 fail, 7 skips (два POSIX-only и пять недоступных
+  file-symlink cases). Первая итерация новой cache-регрессии требовала явного TTL
+  для in-memory SDK; окончательная проверка сначала доказывает cache hit, затем bypass.
+- Целевой опыт в ChatGPT остаётся незавершённым. Пользователь запросил отдельный
+  пошаговый прогон Windows/ChatGPT до продолжения 003/004; интеграцию стенда и
+  назначение этого продолжения фиксирует планирование на центральной доске.

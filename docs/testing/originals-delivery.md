@@ -28,8 +28,12 @@ ChatGPT Work cloud analysis runtime
   -> file bytes materialized inside the analysis runtime
 ```
 
-Authentication is the ChatGPT workspace/tunnel association; no source credential, OAuth
-implementation, or filesystem API key is added by this experiment. One-time connection
+ChatGPT must have access to the associated workspace/tunnel, and `tunnel-client` separately
+authenticates to OpenAI with a runtime API key (`CONTROL_PLANE_API_KEY`). Creating a tunnel
+requires Platform Tunnels Read + Manage; running the client or selecting a tunnel requires
+Tunnels Read + Use. These permissions are separate from ChatGPT Developer mode. This
+experiment adds no source credential, OAuth implementation, or filesystem-server API key.
+Keep the tunnel key out of Git, transcripts, and diagnostic output. One-time connection
 setup is distinct from per-file work. After setup, a passing run permits no manual download,
 upload, base64 paste, or shared-disk read for either original.
 
@@ -55,6 +59,9 @@ Checked on 2026-09-19:
 - [Connect and test your plugin](https://developers.openai.com/plugins/deploy/connect-chatgpt)
   documents ChatGPT Developer mode and says a private MCP server can be reached with Secure
   MCP Tunnel; the tunnel may reach configured stdio or HTTP MCP.
+- [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+  documents the runtime API key, Platform tunnel permissions, workspace association,
+  outbound HTTPS connectivity, and `init` / `doctor` / `run` setup sequence.
 - [Plugins quickstart](https://developers.openai.com/plugins/quickstart) identifies ChatGPT
   Work on the web as the surface for invoking a personal MCP-backed plugin.
 - [Plugin reference: File APIs](https://developers.openai.com/plugins/reference#file-apis)
@@ -64,6 +71,27 @@ Checked on 2026-09-19:
 
 Documentation describes a supported connection mechanism, not the outcome of this task's
 byte-delivery path. Actual client evidence is kept separate below.
+
+### Windows preflight for the target trial
+
+Use the [Windows runbook](../development/windows.md) and the commands below to build this
+checkout with Node.js >=24 and generate the synthetic files with Python >=3.12. Use absolute
+paths for the Node executable, built entry point, and synthetic root in the tunnel profile;
+its working directory need not be the repository root.
+
+Before giving Windows tunnel commands, inspect the download offered by Platform tunnel
+settings or the latest release linked from the official tunnel guide. Verify that the
+selected package runs on the intended Windows architecture, then check its
+`help quickstart` output and actual command-line quoting. Native Windows package support
+and execution were not verified in this experiment; a Linux shell example is not evidence
+that the same command works in PowerShell. If a compatible package is unavailable, record
+the deployment blocker before choosing an alternative host or connection route.
+
+Confirm Developer-mode access, Platform tunnel permissions, the runtime API key, and the
+target workspace association independently. The client needs outbound HTTPS to
+`api.openai.com:443` (or the configured mTLS endpoint) and access to the synthetic root.
+Keep `tunnel-client` running and verify its `doctor`/readiness result before registering the
+plugin. Do not expose a public listener or use production source roots for this trial.
 
 ## Reproducible synthetic fixtures
 
@@ -132,7 +160,11 @@ node scripts/originals-delivery/local-mcp-check.mjs `
 `local-mcp-check.mjs` starts the built server over real stdio with `--read-only`, an explicit
 `--root-boundary`, and a 1 MiB file limit. It calls `resources/read`, decodes the returned blob,
 writes only the received bytes to the delivery directory, then calculates source/delivered/repeat
-hashes in Node. `verify_delivered.py` receives only the source manifest and delivery directory;
+hashes in Node. All reads explicitly bypass the SDK resource cache. Negative controls accept
+only the expected protocol error code and reason; a missing fixture, transport failure, or
+successful text response cannot pass as a size/access rejection. The destination is checked
+against the canonical source path, including Windows aliases, before creating output.
+`verify_delivered.py` receives only the source manifest and delivery directory;
 it calculates the delivered hashes again in Python and opens the delivered ZIP/XLS.
 
 ## Observed local result
@@ -145,14 +177,18 @@ modern protocol era. The read-only tool inventory contained the expected seven t
 | ---------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | ZIP source -> stdio resource -> delivered copy | `PASS`                      | 703 B at both ends; Node source, delivered and repeated hashes all `4e729b…fe02`; Python delivered hash matched; ZIP CRC and all three entries opened and matched. |
 | XLS source -> stdio resource -> delivered copy | `PASS`                      | 5,632 B at both ends; Node source, delivered and repeated hashes all `db5c5c…fc91`; Python delivered hash matched; `xlrd` read all seven control cells.            |
-| Exact 1 MiB resource                           | `PASS`                      | 1,048,576 bytes returned and hash matched; observed read 20.0 ms.                                                                                                  |
+| Exact 1 MiB resource                           | `PASS`                      | 1,048,576 bytes returned and hash matched; reviewed uncached read 22.2 ms.                                                                                         |
 | 1 MiB + 1 byte resource                        | `PASS` (expected rejection) | MCP `ProtocolError`, code `-32602`: `File exceeds size limit (1048577 > 1048576 bytes)`.                                                                           |
 | File outside synthetic root                    | `PASS` (expected rejection) | MCP `ProtocolError`, code `-32602`: outside allowed directories.                                                                                                   |
 | Repeat originals                               | `PASS`                      | A second independent `resources/read` of both formats produced the same SHA-256.                                                                                   |
 
-Across two observed runs, the first ZIP read took 8.0-8.7 ms and its repeat 0.0-0.1 ms;
-the first XLS read took 2.3 ms and its repeat rounded to 0.0 ms; the 1 MiB boundary read took
-16.4-20.0 ms. These are smoke timings, not performance claims.
+Review found that the original immediate repeats could use the SDK cache. Those repeat
+timings do not prove a second server transfer. After adding `cacheMode: 'bypass'`, an
+independent Windows rerun produced ZIP reads of 7.5/5.0 ms, XLS reads of 2.3/2.3 ms, and
+a 1 MiB read of 22.2 ms. Hashes, ZIP entries and all seven XLS cells matched again.
+These are smoke timings, not performance claims. Regression coverage counts actual
+server resource calls despite a fresh cache hint, rejects false-positive negative
+controls, and rejects source children/aliases before creating a delivery directory.
 
 The file resource has a 5-second cache hint but no expiring file URL and no server-side
 resource TTL. Lifecycle expiry is therefore `N/A` for the local route. Cached JSON tool results
@@ -161,7 +197,8 @@ have a separate lifetime and are not the originals-delivery mechanism tested her
 ## Target result matrix
 
 No authenticated ChatGPT Work page, Developer-mode plugin connection, tunnel identity, or
-analysis-runtime file handle was available in this task environment. The only browser surface
+analysis-runtime file handle was available in this task environment. Platform tunnel permissions,
+runtime-key setup, and a working Windows tunnel client were also not verified. The only browser surface
 exposed to the task was an empty Codex in-app browser. No endpoint was published and no
 synthetic bytes were transmitted to a third party.
 
@@ -176,8 +213,10 @@ local SDK result must not be relabelled as a target `PASS`.
 
 ## Exact target trial to run after access is supplied
 
-1. Associate a Secure MCP Tunnel with the intended ChatGPT workspace and configure it to run
-   the stdio command shown above against only `.tmp/originals-delivery/source`.
+1. Complete the Windows preflight, associate a Secure MCP Tunnel with the intended ChatGPT
+   workspace, and configure its runtime API key locally without disclosing the value. Set up
+   a stdio profile for the command shown above using absolute paths to this checkout and only
+   `.tmp/originals-delivery/source`; run the client and confirm `doctor`/readiness.
 2. In ChatGPT, enable Developer mode, register the MCP connection through that tunnel, install
    the personal plugin, start a new **Work** chat and select the plugin.
 3. Ask it to find the two originals and obtain them through the connector. Record the tool and
@@ -196,7 +235,8 @@ local SDK result must not be relabelled as a target `PASS`.
 
 Planning should keep 003/004 waiting. To finish 002, provide access to the intended ChatGPT
 workspace with Developer mode and either an existing Secure MCP Tunnel association or authority
-to configure one for this synthetic-only root. If the existing resource contract is observed to
+to configure one for this synthetic-only root, plus the required Platform permissions,
+runtime-key setup, and a verified tunnel client deployment. If the existing resource contract is observed to
 fail, record that `FAIL` and decide separately whether to prototype a bounded tool file-reference
 adapter. No snapshot, bundle, OAuth, persistent artifact storage, or server-side XLS parser is
 justified by the current evidence.
