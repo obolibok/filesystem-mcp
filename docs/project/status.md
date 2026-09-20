@@ -11,7 +11,7 @@
 | 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)         | done     | 001           | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live                     |
 | 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)   | done     | 002           | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3                          |
 | 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)           | done     | 002, 002-live | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                                           |
-| 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md) | review   | 002-tool      | `003 - compressed snapshot`; `codex/003-compressed-snapshot`; `9ff20792`; review/smoke/main PASS; upper pending |
+| 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md) | review   | 002-tool      | `003 - compressed snapshot`; `codex/003-compressed-snapshot`; `9ff20792`; code review + live PASS; ready for integration |
 | 004      | Bundle выбранных originals на основе jobs/artifacts                    | proposed | 003           | Последовательно после 003; общий механизм повторно не реализуется                                         |
 | 005      | Контролируемое повторение предметного исследования                     | proposed | 004           | Планирование + пользователь                                                                               |
 
@@ -31,22 +31,26 @@
 380 tests, 373 pass, 0 fail, 7 прежних Windows skips.
 
 Пользователь разрешил synthetic live ChatGPT опыт: [текущий протокол](../testing/003-live-2026-09-20.md).
-Малый smoke и большой main в ChatGPT — PASS по подтверждению пользователя и
-предоставленному отчёту. Main: 21011 уникальных путей, 103801018 B CSV,
-три ZIP около 5,53 / 5,53 / 1,11 MB; все части материализованы, SHA-256/CRC/CSV
-и независимый эталон совпали, повторная доставка большой части побайтово идентична.
-Submit около 2,660 s, серверное выполнение 40,982 s; reuse/conflict подтверждены.
-Планирование сверило live job и hashes фактических серверных артефактов с отчётом.
-Следующий шаг — отдельный upper: 13852 файла, один ZIP около 7,80 MB;
-fixture и локальная проверка готовы. Затем итоговая приёмка и интеграция 003.
-Границы evidence и точные измерения — в текущем протоколе. Опыт не проверяет
-обход миллионов файлов или job длительностью 20–30 минут.
+Функциональный live опыт — **PASS: smoke, main и upper**.
+Main: 21011 уникальных путей, 103801018 B CSV, три ZIP около 5,53 / 5,53 / 1,11 MB.
+Upper: 13852 уникальных пути, 47183919 B CSV, один ZIP 7802264 B.
+Все manifest/ZIP материализованы; SHA-256/CRC/CSV и полные эталоны совпали;
+повторная доставка больших частей побайтово идентична. Main подтвердил reuse/conflict.
+Планирование проверило пользовательские отчёты и upper Python/JSON, сверило live jobs
+и hashes серверных файлов, независимо повторило строгий разбор upper.
+Источники evidence, timings и ограничения — в текущем протоколе.
+
+Следующий шаг — интеграция `codex/003-compressed-snapshot` на проверенном head,
+затем назначение 004 от принятого main. Максимальный проверенный ZIP — 7802264 B;
+это не предел ChatGPT. Реальный обход миллионов файлов в течение 20–30 минут
+не проверялся; отдельный pipeline benchmark описан в локальном review.
 Исполнитель: `003 - compressed snapshot`, task
 `01a0be9c-0f01-7c42-8abb-a6ff550e1532`.
 
-Полная целевая приёмка остаётся pending до upper и завершения протокола. 003 ещё
-не интегрирована в main, поэтому общий статус остаётся review. Push/PR/merge
-не выполнялись. 004 остаётся proposed до целевой проверки и приёмки 003.
+003 готова к интеграции; общий статус остаётся review до merge. Push/PR/merge
+не выполнялись. Три live jobs завершены; пользовательский foreground tunnel
+пока остаётся запущенным, остановка Ctrl+C ещё не подтверждена. Synthetic
+материалы сохранены локально. 004 остаётся proposed до интеграции и назначения.
 
 ## Запуск 003, 2026-09-20
 
