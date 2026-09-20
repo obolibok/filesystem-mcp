@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
-import { MIB, parseEnvInt } from './util.js';
+import { getMaxTextFileSize, MIB, parseEnvInt } from './util.js';
 
 export interface SnapshotConfig {
   readonly scratchDirectory: string;
@@ -10,6 +10,8 @@ export interface SnapshotConfig {
   readonly maxRawPartBytes: number;
   readonly maxZipBytes: number;
   readonly maxDeliveryBytes: number;
+  /** General file cap captured when this endpoint/process manager is created. */
+  readonly maxFileSizeBytes: number;
   readonly maxJobRawBytes: number;
   readonly maxJobArtifactBytes: number;
   readonly maxParts: number;
@@ -39,6 +41,7 @@ export function getSnapshotConfig(): SnapshotConfig {
     maxRawPartBytes: parseEnvInt('FS_SNAPSHOT_MAX_RAW_PART_BYTES', 45 * MIB, 64 * 1024, 512 * MIB),
     maxZipBytes: parseEnvInt('FS_SNAPSHOT_MAX_ZIP_BYTES', 8 * MIB, 64 * 1024, 100 * MIB),
     maxDeliveryBytes: parseEnvInt('FS_SNAPSHOT_MAX_DELIVERY_BYTES', 8 * MIB, 64 * 1024, 100 * MIB),
+    maxFileSizeBytes: getMaxTextFileSize(),
     maxJobRawBytes: parseEnvInt('FS_SNAPSHOT_MAX_JOB_RAW_BYTES', 512 * MIB, MIB, 16 * 1024 * MIB),
     maxJobArtifactBytes: parseEnvInt(
       'FS_SNAPSHOT_MAX_JOB_ARTIFACT_BYTES',

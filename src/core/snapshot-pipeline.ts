@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 import type { Dirent } from 'node:fs';
+import { createReadStream } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { extname, join } from 'node:path';
+import type { Readable } from 'node:stream';
 
 import ignore from 'ignore';
 import type { Ignore } from 'ignore';
@@ -12,6 +14,7 @@ import type { GuardedFileSystem } from './fs.js';
 import type { JobRunContext } from './job-manager.js';
 import type { StoredArtifact } from './job-types.js';
 import { toPosixRelative } from './path.js';
+import { getMaxTextFileSize } from './util.js';
 
 export const SNAPSHOT_CSV_HEADER = 'RootId,RelativePath,Name,Extension,Length,LastWriteTime\r\n';
 
@@ -31,8 +34,15 @@ export interface SnapshotWalkOptions {
 
 interface IgnoreRule {
   readonly base: string;
-  readonly matcher: Ignore;
+  matcher: Ignore;
+  testsSinceRefresh: number;
 }
+
+export interface SnapshotPipelineHooks {
+  readonly beforeCompress?: (rawPath: string) => Promise<void>;
+}
+
+const IGNORE_CACHE_REFRESH_TESTS = 256;
 
 const DEFAULT_IGNORED_DIRECTORIES = new Set([
   'node_modules',
@@ -99,6 +109,14 @@ function ignoredByRules(
     if (relative === undefined || relative === '') continue;
     const candidate = isDirectory ? `${relative}/` : relative;
     const result = rule.matcher.test(candidate);
+    rule.testsSinceRefresh += 1;
+    if (rule.testsSinceRefresh >= IGNORE_CACHE_REFRESH_TESTS) {
+      // `ignore` memoizes every tested path. Re-wrap the already-compiled rules
+      // through its public API so a long walk keeps only a bounded cache while
+      // preserving exact nested/negation semantics.
+      rule.matcher = ignore().add(rule.matcher);
+      rule.testsSinceRefresh = 0;
+    }
     if (result.ignored) ignored = true;
     if (result.unignored) ignored = false;
   }
@@ -111,7 +129,18 @@ function isDefaultIgnored(entry: Dirent): boolean {
     : DEFAULT_IGNORED_FILES.has(entry.name);
 }
 
+function isRecoverableWalkError(error: unknown): boolean {
+  if (error instanceof FsError) {
+    return error.code === ErrorCode.NOT_FOUND || error.code === ErrorCode.ACCESS_DENIED;
+  }
+  return (
+    isNodeError(error) &&
+    ['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM', 'EBUSY'].includes(error.code ?? '')
+  );
+}
+
 function classifyWalkError(ctx: JobRunContext, error: unknown, path: string): void {
+  if (!isRecoverableWalkError(error)) throw error;
   const code = error instanceof FsError ? error.code : isNodeError(error) ? error.code : undefined;
   if (code === ErrorCode.NOT_FOUND || code === 'ENOENT') {
     ctx.job.counters.disappearedSkipped += 1;
@@ -133,7 +162,11 @@ async function loadLocalIgnore(
       signal: ctx.signal,
       tool: 'snapshot',
     });
-    return { base: relativeDirectory, matcher: ignore().add(content) };
+    return {
+      base: relativeDirectory,
+      matcher: ignore().add(content),
+      testsSinceRefresh: 0,
+    };
   } catch (error) {
     if (
       (isFsError(error) && error.code === ErrorCode.NOT_FOUND) ||
@@ -290,29 +323,50 @@ async function openPart(number: number, ctx: JobRunContext): Promise<OpenPart> {
   return part;
 }
 
-async function finalizePart(part: OpenPart, ctx: JobRunContext): Promise<StoredArtifact> {
+async function finalizePart(
+  part: OpenPart,
+  ctx: JobRunContext,
+  hooks: SnapshotPipelineHooks,
+): Promise<StoredArtifact> {
   await part.handle.close();
   part.closed = true;
   await ctx.setPhase('compressing');
+  await hooks.beforeCompress?.(part.rawPath);
   const zipPath = ctx.tempPath(`snapshot-${String(part.number).padStart(5, '0')}.zip`);
   const zipHandle = await open(zipPath, 'wx', 0o600);
   const hash = createHash('sha256');
   let zipBytes = 0;
   const zip = new ZipFile();
-  zip.addFile(part.rawPath, `snapshot-${String(part.number).padStart(5, '0')}.csv`, {
+  const source = createReadStream(part.rawPath);
+  const output = zip.outputStream as Readable;
+  const onZipError = (error: Error): void => {
+    output.destroy(error);
+  };
+  const onSourceError = (error: Error): void => {
+    zip.emit('error', error);
+  };
+  zip.on('error', onZipError);
+  source.on('error', onSourceError);
+  zip.addReadStream(source, `snapshot-${String(part.number).padStart(5, '0')}.csv`, {
     mtime: new Date('1980-01-01T00:00:00.000Z'),
     mode: 0o600,
     compressionLevel: 6,
+    size: part.rawBytes,
   });
   zip.end();
+  const closedZipLimit = Math.min(
+    ctx.config.maxZipBytes,
+    ctx.config.maxDeliveryBytes,
+    ctx.config.maxFileSizeBytes,
+  );
   try {
-    for await (const rawChunk of zip.outputStream as AsyncIterable<Buffer | Uint8Array>) {
+    for await (const rawChunk of output as AsyncIterable<Buffer | Uint8Array>) {
       ctx.signal.throwIfAborted();
       const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
-      if (zipBytes + chunk.length > ctx.config.maxZipBytes) {
+      if (zipBytes + chunk.length > closedZipLimit) {
         throw new FsError(
           ErrorCode.TOO_LARGE,
-          `Closed ZIP part would exceed configured cap ${String(ctx.config.maxZipBytes)} bytes`,
+          `Closed ZIP part would exceed effective deliverable cap ${String(closedZipLimit)} bytes`,
         );
       }
       ctx.reserveDisk(chunk.length);
@@ -331,6 +385,8 @@ async function finalizePart(part: OpenPart, ctx: JobRunContext): Promise<StoredA
       zipBytes += chunk.length;
     }
   } finally {
+    source.destroy();
+    output.destroy();
     await zipHandle.close();
   }
   const artifact = await ctx.commitArtifact(zipPath, {
@@ -352,6 +408,7 @@ export async function writeSnapshotFromRecords(
   records: AsyncIterable<SnapshotRecord>,
   ctx: JobRunContext,
   options: SnapshotWalkOptions,
+  hooks: SnapshotPipelineHooks = {},
 ): Promise<string> {
   const startedAt = ctx.job.startedAt ?? new Date().toISOString();
   const parts: StoredArtifact[] = [];
@@ -372,7 +429,7 @@ export async function writeSnapshotFromRecords(
         throw new FsError(ErrorCode.TOO_LARGE, 'CSV record cannot fit in an empty snapshot part');
       }
       if (part.rawBytes + row.length > ctx.config.maxRawPartBytes && part.rows > 0) {
-        parts.push(await finalizePart(part, ctx));
+        parts.push(await finalizePart(part, ctx, hooks));
         part = await openPart(part.number + 1, ctx);
         await ctx.setPhase('walking');
       }
@@ -384,7 +441,7 @@ export async function writeSnapshotFromRecords(
       ctx.job.counters.filesWritten += 1;
       if (ctx.job.counters.filesWritten % 10_000 === 0) await ctx.checkpoint();
     }
-    parts.push(await finalizePart(part, ctx));
+    parts.push(await finalizePart(part, ctx, hooks));
   } finally {
     if (!part.closed) await part.handle.close().catch(() => undefined);
   }
@@ -413,6 +470,12 @@ export async function writeSnapshotFromRecords(
       maxRawPartBytes: ctx.config.maxRawPartBytes,
       maxZipBytes: ctx.config.maxZipBytes,
       maxDeliveryBytes: ctx.config.maxDeliveryBytes,
+      maxFileSizeBytes: ctx.config.maxFileSizeBytes,
+      effectiveZipDeliveryBytes: Math.min(
+        ctx.config.maxZipBytes,
+        ctx.config.maxDeliveryBytes,
+        ctx.config.maxFileSizeBytes,
+      ),
       maxJobRawBytes: ctx.config.maxJobRawBytes,
       maxJobArtifactBytes: ctx.config.maxJobArtifactBytes,
       maxParts: ctx.config.maxParts,
@@ -433,7 +496,15 @@ export async function writeSnapshotFromRecords(
     })),
   };
   const bytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-  if (bytes.length > Math.min(ctx.config.maxDeliveryBytes, ctx.config.maxZipBytes)) {
+  if (
+    bytes.length >
+    Math.min(
+      ctx.config.maxDeliveryBytes,
+      ctx.config.maxZipBytes,
+      ctx.config.maxFileSizeBytes,
+      getMaxTextFileSize(),
+    )
+  ) {
     throw new FsError(ErrorCode.TOO_LARGE, 'Snapshot manifest exceeds delivery limit');
   }
   const manifestPath = ctx.tempPath('manifest.json');

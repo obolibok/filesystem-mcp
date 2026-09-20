@@ -29,6 +29,8 @@ const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a
 const MAX_ERROR_SAMPLES = 20;
 const MAX_ERROR_MESSAGE = 512;
 const METADATA_RENAME_ATTEMPTS = 8;
+const OWNED_ARTIFACT_FILE_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(?:json|zip)$/u;
 
 export interface SubmitJobInput {
   readonly kind: string;
@@ -52,6 +54,14 @@ interface RuntimeJob {
   readonly abortController: AbortController;
   worker?: Promise<void>;
   tempBytes: number;
+}
+
+interface ArtifactJobManagerDeps {
+  readonly readArtifact?: (path: string) => Promise<Buffer>;
+  readonly unlinkFile?: (path: string) => Promise<void>;
+  /** Test seams for exercising cancellation on both sides of the atomic rename. */
+  readonly beforeArtifactRename?: (job: StoredJob) => Promise<void>;
+  readonly afterArtifactRename?: (job: StoredJob) => Promise<void>;
 }
 
 function isTerminal(job: StoredJob): boolean {
@@ -164,10 +174,17 @@ export class JobRunContext {
 export class ArtifactJobManager {
   readonly config: SnapshotConfig;
   readonly #readArtifact: (path: string) => Promise<Buffer>;
+  readonly #unlinkFile: (path: string) => Promise<void>;
+  readonly #beforeArtifactRename: ((job: StoredJob) => Promise<void>) | undefined;
+  readonly #afterArtifactRename: ((job: StoredJob) => Promise<void>) | undefined;
   readonly #jobs = new Map<string, RuntimeJob>();
   readonly #idempotency = new Map<string, string>();
   readonly #artifactJobs = new Map<string, string>();
+  readonly #artifactBytes = new Map<string, number>();
+  readonly #orphanBytes = new Map<string, number>();
   readonly #persistChains = new Map<string, Promise<void>>();
+  readonly #artifactRemovalChains = new Map<string, Promise<void>>();
+  readonly #lifecycleChains = new Map<string, Promise<void>>();
   readonly #activeReads = new Map<string, number>();
   readonly #metadataBytes = new Map<string, number>();
   #initialized?: Promise<void>;
@@ -179,12 +196,12 @@ export class ArtifactJobManager {
   readonly #readWaiters: (() => void)[] = [];
   #submitChain: Promise<void> = Promise.resolve();
 
-  constructor(
-    config: SnapshotConfig = getSnapshotConfig(),
-    deps: { readArtifact?: (path: string) => Promise<Buffer> } = {},
-  ) {
+  constructor(config: SnapshotConfig = getSnapshotConfig(), deps: ArtifactJobManagerDeps = {}) {
     this.config = config;
     this.#readArtifact = deps.readArtifact ?? (async (path) => readFile(path));
+    this.#unlinkFile = deps.unlinkFile ?? unlink;
+    this.#beforeArtifactRename = deps.beforeArtifactRename;
+    this.#afterArtifactRename = deps.afterArtifactRename;
   }
 
   async initialize(): Promise<void> {
@@ -255,7 +272,11 @@ export class ArtifactJobManager {
         continue;
       }
       this.#artifactJobs.set(artifact.artifactId, jobId);
-      this.#usedBytes += artifact.size;
+      const actualSize =
+        (await stat(this.#artifactPath(jobId, artifact)).catch(() => undefined))?.size ?? 0;
+      const chargedBytes = Math.max(artifact.size, actualSize);
+      this.#artifactBytes.set(artifact.artifactId, chargedBytes);
+      this.#usedBytes += chargedBytes;
     }
     if (job.state === 'queued' || job.state === 'running') {
       job.state = 'interrupted';
@@ -263,19 +284,37 @@ export class ArtifactJobManager {
       job.complete = false;
       job.stopReason = 'server-restarted';
       job.finishedAt = new Date().toISOString();
-      await this.#removeArtifacts(runtime);
+      await this.persist(job);
+    }
+    if (job.state !== 'completed' && job.artifacts.length > 0) {
+      await this.#removeArtifacts(runtime).catch((error: unknown) => {
+        Logger.warn(
+          `Could not remove stale artifacts for snapshot job ${jobId}: ${formatUnknownErrorMessage(error)}`,
+        );
+      });
       await this.persist(job);
     }
     const leftovers = await readdir(directory, { withFileTypes: true });
+    const referencedFiles = new Set(job.artifacts.map((artifact) => artifact.fileName));
     for (const leftover of leftovers) {
-      if (
-        !leftover.isFile() ||
-        (!leftover.name.endsWith('.partial') && !leftover.name.endsWith('.metadata-tmp'))
-      ) {
-        continue;
-      }
+      if (!leftover.isFile() || referencedFiles.has(leftover.name)) continue;
+      const ownedLeftover =
+        leftover.name.endsWith('.partial') ||
+        leftover.name.endsWith('.metadata-tmp') ||
+        OWNED_ARTIFACT_FILE_RE.test(leftover.name);
+      if (!ownedLeftover) continue;
       const path = join(directory, leftover.name);
-      await unlink(path).catch(() => undefined);
+      const size = (await stat(path).catch(() => undefined))?.size ?? 0;
+      try {
+        await this.#deleteOwnedFile(path);
+      } catch (error) {
+        // Keep failed deletion charged until a later restart can reconcile it.
+        this.#usedBytes += size;
+        this.#orphanBytes.set(jobId, (this.#orphanBytes.get(jobId) ?? 0) + size);
+        Logger.warn(
+          `Could not remove orphan snapshot file ${leftover.name}: ${formatUnknownErrorMessage(error)}`,
+        );
+      }
     }
   }
 
@@ -502,9 +541,7 @@ export class ArtifactJobManager {
 
   async removeTemp(runtime: RuntimeJob, path: string, accountedBytes: number): Promise<void> {
     this.#assertOwnedPath(runtime.job.jobId, path);
-    await unlink(path).catch((error: unknown) => {
-      if (!isNodeError(error) || error.code !== 'ENOENT') throw error;
-    });
+    await this.#deleteOwnedFile(path);
     this.releaseTemp(runtime, accountedBytes);
   }
 
@@ -525,16 +562,24 @@ export class ArtifactJobManager {
     const extension = artifactInput.kind === 'manifest' ? 'json' : 'zip';
     const fileName = `${artifactId}.${extension}`;
     const finalPath = join(this.jobDirectory(runtime.job.jobId), fileName);
+    await this.#beforeArtifactRename?.(runtime.job);
     await rename(partialPath, finalPath);
-    if (!isJobRunning(runtime.job)) {
-      await unlink(finalPath).catch(() => undefined);
-      this.releaseTemp(runtime, artifactInput.size);
-      throw new Error('Job stopped while committing artifact');
-    }
     runtime.tempBytes = Math.max(0, runtime.tempBytes - artifactInput.size);
     const artifact: StoredArtifact = { artifactId, fileName, ...artifactInput };
     runtime.job.artifacts.push(artifact);
     this.#artifactJobs.set(artifactId, runtime.job.jobId);
+    this.#artifactBytes.set(artifactId, artifactInput.size);
+    try {
+      await this.#afterArtifactRename?.(runtime.job);
+      if (!isJobRunning(runtime.job)) throw new Error('Job stopped while committing artifact');
+    } catch (error) {
+      await this.#removeArtifacts(runtime).catch((cleanupError: unknown) => {
+        Logger.warn(
+          `Could not roll back artifact ${artifactId}: ${formatUnknownErrorMessage(cleanupError)}`,
+        );
+      });
+      throw error;
+    }
     await this.persist(runtime.job);
     return artifact;
   }
@@ -564,7 +609,12 @@ export class ArtifactJobManager {
     try {
       await replaceMetadataFile(temp, path);
     } finally {
-      await unlink(temp).catch(() => undefined);
+      await this.#deleteOwnedFile(temp).catch(async (error: unknown) => {
+        const size = (await stat(temp).catch(() => undefined))?.size ?? 0;
+        this.#usedBytes += size;
+        this.#orphanBytes.set(job.jobId, (this.#orphanBytes.get(job.jobId) ?? 0) + size);
+        Logger.warn(`Could not remove snapshot metadata temp: ${formatUnknownErrorMessage(error)}`);
+      });
     }
     this.#usedBytes += bytes.length - previousBytes;
     this.#metadataBytes.set(job.jobId, bytes.length);
@@ -587,28 +637,87 @@ export class ArtifactJobManager {
     }
   }
 
+  async #deleteOwnedFile(path: string): Promise<void> {
+    try {
+      await this.#unlinkFile(path);
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== 'ENOENT') throw error;
+    }
+  }
+
   async #removePartials(runtime: RuntimeJob): Promise<void> {
     const entries = await readdir(this.jobDirectory(runtime.job.jobId), {
       withFileTypes: true,
     }).catch(() => []);
+    let removedBytes = 0;
+    let deletionFailed = false;
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.partial')) continue;
-      await unlink(join(this.jobDirectory(runtime.job.jobId), entry.name)).catch(() => undefined);
+      const path = join(this.jobDirectory(runtime.job.jobId), entry.name);
+      const size = (await stat(path).catch(() => undefined))?.size ?? 0;
+      try {
+        await this.#deleteOwnedFile(path);
+        removedBytes += size;
+      } catch (error) {
+        deletionFailed = true;
+        Logger.warn(
+          `Could not remove partial snapshot file ${entry.name}: ${formatUnknownErrorMessage(error)}`,
+        );
+      }
     }
-    this.releaseTemp(runtime, runtime.tempBytes);
+    this.releaseTemp(runtime, deletionFailed ? removedBytes : runtime.tempBytes);
   }
 
   async #removeArtifacts(runtime: RuntimeJob): Promise<void> {
-    for (const artifact of runtime.job.artifacts) {
-      await unlink(this.#artifactPath(runtime.job.jobId, artifact)).catch(() => undefined);
-      this.#usedBytes = Math.max(0, this.#usedBytes - artifact.size);
-      this.#artifactJobs.delete(artifact.artifactId);
-    }
-    runtime.job.artifacts = [];
-    delete runtime.job.manifestArtifactId;
+    const jobId = runtime.job.jobId;
+    const previous = this.#artifactRemovalChains.get(jobId) ?? Promise.resolve();
+    const next = previous.then(async () => {
+      const retained: StoredArtifact[] = [];
+      let firstError: unknown;
+      for (const artifact of runtime.job.artifacts) {
+        try {
+          await this.#deleteOwnedFile(this.#artifactPath(jobId, artifact));
+          const chargedBytes = this.#artifactBytes.get(artifact.artifactId) ?? artifact.size;
+          this.#usedBytes = Math.max(0, this.#usedBytes - chargedBytes);
+          this.#artifactBytes.delete(artifact.artifactId);
+          this.#artifactJobs.delete(artifact.artifactId);
+        } catch (error) {
+          retained.push(artifact);
+          firstError ??= error;
+        }
+      }
+      runtime.job.artifacts = retained;
+      if (
+        runtime.job.manifestArtifactId &&
+        !retained.some((artifact) => artifact.artifactId === runtime.job.manifestArtifactId)
+      ) {
+        delete runtime.job.manifestArtifactId;
+      }
+      if (firstError) {
+        throw firstError instanceof Error
+          ? firstError
+          : new Error(formatUnknownErrorMessage(firstError));
+      }
+    });
+    this.#artifactRemovalChains.set(
+      jobId,
+      next.catch(() => undefined),
+    );
+    await next;
   }
 
   async #expireIfNeeded(runtime: RuntimeJob): Promise<void> {
+    const jobId = runtime.job.jobId;
+    const previous = this.#lifecycleChains.get(jobId) ?? Promise.resolve();
+    const next = previous.then(() => this.#expireIfNeededNow(runtime));
+    this.#lifecycleChains.set(
+      jobId,
+      next.catch(() => undefined),
+    );
+    await next;
+  }
+
+  async #expireIfNeededNow(runtime: RuntimeJob): Promise<void> {
     const expiry = runtime.job.resultExpiresAt
       ? Date.parse(runtime.job.resultExpiresAt)
       : Number.POSITIVE_INFINITY;
@@ -623,25 +732,50 @@ export class ArtifactJobManager {
   async cleanupExpired(): Promise<void> {
     await this.initialize();
     for (const runtime of this.#jobs.values()) {
-      await this.#expireIfNeeded(runtime);
-      const finished = runtime.job.finishedAt ? Date.parse(runtime.job.finishedAt) : undefined;
-      if (
-        (runtime.job.resultExpired ||
-          (runtime.job.state !== 'completed' && isTerminal(runtime.job))) &&
-        finished !== undefined &&
-        Date.now() - finished > this.config.resultTtlMs * 2 &&
-        (this.#activeReads.get(runtime.job.jobId) ?? 0) === 0
-      ) {
-        this.#jobs.delete(runtime.job.jobId);
-        this.#idempotency.delete(runtime.job.idempotencyKey);
-        this.#usedBytes = Math.max(
-          0,
-          this.#usedBytes - (this.#metadataBytes.get(runtime.job.jobId) ?? 0),
-        );
-        this.#metadataBytes.delete(runtime.job.jobId);
-        this.#persistChains.delete(runtime.job.jobId);
-        await rm(this.jobDirectory(runtime.job.jobId), { recursive: true, force: true });
-      }
+      const jobId = runtime.job.jobId;
+      const previous = this.#lifecycleChains.get(jobId) ?? Promise.resolve();
+      const next = previous.then(async () => {
+        if (!this.#jobs.has(jobId)) return;
+        await this.#expireIfNeededNow(runtime);
+        const finished = runtime.job.finishedAt ? Date.parse(runtime.job.finishedAt) : undefined;
+        if (
+          (runtime.job.resultExpired ||
+            (runtime.job.state !== 'completed' && isTerminal(runtime.job))) &&
+          finished !== undefined &&
+          Date.now() - finished > this.config.resultTtlMs * 2 &&
+          (this.#activeReads.get(jobId) ?? 0) === 0
+        ) {
+          await rm(this.jobDirectory(jobId), { recursive: true, force: true });
+          const artifactBytes = runtime.job.artifacts.reduce(
+            (sum, artifact) =>
+              sum + (this.#artifactBytes.get(artifact.artifactId) ?? artifact.size),
+            0,
+          );
+          for (const artifact of runtime.job.artifacts) {
+            this.#artifactBytes.delete(artifact.artifactId);
+            this.#artifactJobs.delete(artifact.artifactId);
+          }
+          this.#jobs.delete(jobId);
+          this.#idempotency.delete(runtime.job.idempotencyKey);
+          this.#usedBytes = Math.max(
+            0,
+            this.#usedBytes -
+              (this.#metadataBytes.get(jobId) ?? 0) -
+              artifactBytes -
+              (this.#orphanBytes.get(jobId) ?? 0) -
+              runtime.tempBytes,
+          );
+          this.#metadataBytes.delete(jobId);
+          this.#orphanBytes.delete(jobId);
+          this.#persistChains.delete(jobId);
+          this.#artifactRemovalChains.delete(jobId);
+        }
+      });
+      this.#lifecycleChains.set(
+        jobId,
+        next.catch(() => undefined),
+      );
+      await next;
     }
   }
 
