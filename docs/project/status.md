@@ -30,7 +30,8 @@
 Независимый `npm run check` на точном head с исходными зависимостями:
 380 tests, 373 pass, 0 fail, 7 прежних Windows skips.
 
-Следующий шаг — synthetic live ChatGPT прогон с пользователем на проверенной
+Пользователь разрешил synthetic live ChatGPT опыт: [текущий протокол](../testing/003-live-2026-09-20.md).
+Локальный preflight готов; следующий шаг — запуск туннеля пользователем и прогон на проверенной
 ветке по `docs/testing/snapshot-live.md`: материализация manifest и ZIP-частей,
 независимые hashes/CRC/CSV counts, повторная выдача и size ladder около 5,53 MB.
 Исполнитель: `003 - compressed snapshot`, task
