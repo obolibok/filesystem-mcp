@@ -4,16 +4,16 @@
 Это единая доска интеграционного статуса. Coding-чаты записывают свою работу в
 карточках задач, а планирование обновляет эту таблицу после review/интеграции.
 
-| ID       | Работа                                                                 | Статус   | Зависит от    | Назначение                                                                                                                        |
-| -------- | ---------------------------------------------------------------------- | -------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| 000      | Подготовка контекста и правил работы                                   | done     | —             | Планирующий чат; docs checkpoint                                                                                                  |
-| 001      | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)         | done     | 000           | `001 - baseline defects fix`; `codex/001-baseline-defects`                                                                        |
-| 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)         | done     | 001           | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live                                             |
-| 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)   | done     | 002           | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3                                                  |
-| 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)           | done     | 002, 002-live | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                                                                   |
-| 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md) | done     | 002-tool      | `003 - compressed snapshot`; принят через [PR #4](https://github.com/obolibok/filesystem-mcp/pull/4); code review, live и CI PASS |
-| 004      | Bundle выбранных originals на основе jobs/artifacts                    | proposed | 003           | Последовательно после 003; общий механизм повторно не реализуется                                                                 |
-| 005      | Контролируемое повторение предметного исследования                     | proposed | 004           | Планирование + пользователь                                                                                                       |
+| ID       | Работа                                                                  | Статус   | Зависит от    | Назначение                                                                                                                               |
+| -------- | ----------------------------------------------------------------------- | -------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| 000      | Подготовка контекста и правил работы                                    | done     | —             | Планирующий чат; docs checkpoint                                                                                                         |
+| 001      | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)          | done     | 000           | `001 - baseline defects fix`; `codex/001-baseline-defects`                                                                               |
+| 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)          | done     | 001           | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live                                                    |
+| 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)    | done     | 002           | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3                                                         |
+| 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)            | done     | 002, 002-live | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                                                                          |
+| 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md)  | done     | 002-tool      | `003 - compressed snapshot`; принят через [PR #4](https://github.com/obolibok/filesystem-mcp/pull/4); code review, live и CI PASS        |
+| 004      | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md) | ready    | 003           | Пользователь разрешил реализацию; `004 - selected originals bundle`, `codex/004-selected-originals-bundle`; запуск после docs checkpoint |
+| 005      | Контролируемое повторение предметного исследования                      | proposed | 004           | Планирование + пользователь                                                                                                              |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
 готовы; `active` — назначен исполнитель; `review` — есть проверяемый результат;
@@ -23,10 +23,16 @@
 
 ## Текущий следующий шаг
 
-003 принята и интегрирована в `main`. Следующий шаг — уточнить scope и acceptance
-004 (bundle выбранных originals), затем назначить реализацию от принятого `main`.
-004 остаётся `proposed`; общие jobs/artifacts, TTL, quotas и delivery уже реализованы
-в 003 и должны использоваться повторно. Новая рабочая задача ещё не запущена.
+Пользователь разрешил подготовить и запустить 004. [Карточка](../tasks/004-selected-originals-bundle.md)
+готова: ИИ передаёт явный набор файлов из подпапок одного guarded root; producer
+собирает целые originals в независимые ZIP-части, manifest фиксирует provenance,
+per-file hashes и пропуски. Используется общий jobs/artifacts lifecycle из 003.
+
+Планирование сохраняет карточку в main и запускает отдельную рабочую задачу
+`004 - selected originals bundle`, модель `gpt-5.6-sol`, effort `xhigh`, ветка
+`codex/004-selected-originals-bundle`. Точный task ID и base будут записаны после
+фактического создания. Исполнитель готовит код, локальные проверки и live runbook;
+целевой ChatGPT опыт и интеграция следуют после code review.
 
 ## Приёмка задачи 003, 2026-09-20
 
