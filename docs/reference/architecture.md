@@ -110,6 +110,10 @@ idempotencyKey; `job_status` опрашивается отдельными вы�
 embedded resource + matching resource_link. HTTP endpoint владеет одним manager для
 всех per-request McpServer; закрытие запроса его не очищает. После process restart
 queued/running становятся `interrupted`, completed bytes остаются immutable до TTL.
+Startup удаляет только manager-owned partial/metadata-temp и UUID-named ZIP/JSON.
+Unreferenced final после crash между rename и metadata commit удаляется; ошибка
+удаления остаётся учтённой в scratch quota до успешного cleanup/restart. Expiry,
+artifact removal и terminal directory cleanup сериализованы для каждой job.
 
 CSV v1 — UTF-8 без BOM, CRLF, RFC 4180, одинаковый header в каждой части:
 `RootId,RelativePath,Name,Extension,Length,LastWriteTime`. RelativePath использует
@@ -118,14 +122,19 @@ symlink/junction не разыменовываются. Manifest v1 фиксир
 policy, counters/errors/completeness и SHA-256/rows/raw/ZIP/base64 sizes частей.
 Snapshot не является атомарным filesystem snapshot: исчезновение/недоступность
 делает `complete=false`, но не скрывается как пустой успех.
+Кэш уникальных путей внутри `ignore` ограничен периодическим созданием нового matcher
+из уже скомпилированных rules; nested patterns и negation сохраняются. Walk depth —
+жёсткий policy cap и приводит к `failed`, а не к partial completed результату.
 
 Source I/O остаётся в PathGuard/GuardedFileSystem. Scratch не становится source root,
 caller не выбирает output path, а status/cancel/fetch каждый раз проверяют текущий
 доступ к canonical source root. Одна HTTP credential остаётся одним endpoint scope;
 multi-user isolation этим не заявляется. Один scratch каталог имеет одного владельца-
 процесс; параллельным экземплярам нужны разные каталоги. Metadata сохраняется atomic
-rename; quota учитывает spool, готовые artifacts и job metadata. Cleanup защищает
-активное чтение.
+rename; quota учитывает spool, готовые artifacts и job metadata. ZIP producer применяет
+минимум ZIP/delivery/captured general-file caps, а fetch повторно проверяет текущий
+`FS_MAX_FILE_SIZE`. Cleanup защищает активное чтение и освобождает quota только после
+фактического удаления bytes.
 
 HTTP baseline имеет один auth context: общий ключ, guard/grants, resource/page
 stores для endpoint. OAuth spike не обеспечивает production изоляцию principal.

@@ -158,9 +158,13 @@ OS может очищать temp, поэтому это только локал
 node --test --import tsx __tests__/snapshot.test.ts
 node --import tsx scripts/snapshot-benchmark/run.mts --mode pipeline --records 3000000
 node --import tsx scripts/snapshot-benchmark/run.mts --mode walk --walk-files 21000 --records 1
+node --import tsx scripts/snapshot-benchmark/run.mts --mode walk --walk-files 60000 --records 1
 ```
 
-Benchmark 3 млн не входит в обычный CI. Перед live опытом следовать
+Два walk-масштаба используют одинаковые caps и `.gitignore`: сравнивать peak RSS/heap,
+а не только row count, чтобы regression в path cache был виден. Benchmark verifier
+должен пройти до конца каждого ZIP, проверить единственный CSV entry, CRC-32, SHA-256
+и strict CSV parse. Benchmark 3 млн не входит в обычный CI. Перед live опытом следовать
 [snapshot protocol](../testing/snapshot-live.md); локальный PASS не доказывает
 материализацию большой embedded resource в ChatGPT.
 

@@ -167,7 +167,7 @@ job, ограниченная очередь, время job до 60 минут,
 - [x] Disk/size/job quotas, ENOSPC, compression failure, cancel/complete races,
       TTL/cleanup concurrent with read, restart и сужение доступа воспроизводимо проверены.
       Нет утечки partial artifacts и выдачи неавторизованных bytes.
-- [ ] Полный npm run check, relevant HTTP/stdio tests, reference, runbook и
+- [x] Полный npm run check, relevant HTTP/stdio tests, reference, runbook и
       воспроизводимый benchmark/protocol обновлены. Skips и их причины указаны.
 - [ ] После локальной готовности — synthetic live ChatGPT прогон с пользователем:
       start/status/получение manifest и нескольких частей, независимые hashes,
@@ -254,3 +254,53 @@ Push, PR и merge оставить планированию до отдельн�
 - Ограничения и handoff: source snapshot не атомарен; v1 не читает и не хеширует
   содержимое originals, не разыменовывает symlink/junction, не возобновляет job после
   restart и не заявляет multi-user isolation.
+
+### Доработка после review `bc6724fb`, 2026-09-20
+
+- В ветку обычным merge включён точный локальный `main` commit `bc6724fb`; merge
+  commit `ec6cf8a9`. Центральная доска вручную не менялась.
+- R1: cache уникальных путей внутри активных `ignore` matcher ограничен 256 tests;
+  matcher пересоздаётся из скомпилированных rules публичным API. Regression сохраняет
+  nested ignore/negation после нескольких refresh. Настоящие walk-21k/walk-60k с
+  `.gitignore` и одинаковой instrumentation дали 2,86× files при 1,17× peak RSS и
+  1,28× peak heap.
+- R2: ZIP теперь получает явно управляемый source stream; ошибки source/producer
+  передаются output consumer, все streams/handle закрываются. Fault injection удаляет
+  raw spool перед compression: job становится `failed`, ready/partial artifacts нет,
+  следующий job в том же manager завершается успешно.
+- R3/R4: artifact removal и expiry/terminal cleanup сериализованы per job. Quota
+  освобождается после фактического удаления; failed deletion остаётся charged.
+  Startup удаляет только manager-owned partial/metadata-temp и UUID ZIP/JSON,
+  распознаёт orphan final после rename-before-metadata и повторяет cleanup на restart.
+  Concurrent cleanup, quota-vs-disk, injected delete failure, второй restart и
+  сохранение чужого файла покрыты regression tests.
+- R5: walker относит только ожидаемые NOT_FOUND/access ошибки к partial completeness;
+  превышение depth и остальные hard failures завершают job как `failed` без manifest.
+- R6: общий benchmark verifier требует один CSV, полный конец ZIP, strict independent
+  CSV parse и собственный CRC-32 распакованных bytes. Extra entry, bad CRC, truncation
+  и corrupt compressed bytes отклоняются. Small/large benchmark повторён этим verifier.
+- R7: producer применяет минимум snapshot ZIP/delivery/captured general-file caps и
+  записывает его в manifest policy; manifest учитывает также текущий file cap. Fetch
+  сохраняет повторную проверку текущего `FS_MAX_FILE_SIZE`. Оба более строгих cap дают
+  bounded failure без manifest/ready artifacts.
+- Acceptance gaps закрыты отдельными сценариями: HTTP response loss после принятого
+  submit с recovery тем же idempotency key; cancel до и после artifact rename;
+  independent CSV round-trip через принудительные part boundaries; cancel/fetch при
+  суженном доступе до и после restart; poor-compression runner утверждает отсутствие
+  manifest, ready и partial artifacts.
+- Проверки: targeted snapshot suite — 20/20 pass. Полный `npm run check` — 378 tests,
+  371 pass, 0 fail, 7 прежних Windows skips (POSIX inode/mode, POSIX 0222 и пять
+  symlink-permission сценариев). На перегруженном desktop host `tsx` до запуска tests
+  получил системный `uv_os_get_passwd ENOMEM`; полный check повторён с локальным
+  untracked fallback только для имени temp-cache `tsx`, после проверки dependency
+  восстановлена. Код/fixtures и результаты тестов workaround не менял.
+- Повторный benchmark: 100 000 rows — 15 788 947 raw B, 1 698 026 ZIP B, 4,041 s,
+  peak RSS 138 436 608 B; 3 000 000 rows — 478 889 517 raw B, 50 373 149 ZIP B,
+  11 parts, 173,841 s, peak RSS 238 374 912 B, heap 76 753 088 B, scratch
+  96 829 298 B. High-entropy 300k boundedly отказал без artifacts. Полные числа и
+  команды — в [benchmark report](../testing/snapshot-benchmark-2026-09-20.md).
+- Локальные follow-up commits: `009744ee` (runtime hardening), `16021c0c`
+  (regressions и verifier); documentation/handoff фиксируется отдельным commit.
+- Live ChatGPT остаётся `pending` до повторного review и совместного запуска по
+  [protocol](../testing/snapshot-live.md). Локальные результаты не объявляются live PASS.
+- Состояние локального handoff: `ready for review`; push, PR и merge не выполнялись.
