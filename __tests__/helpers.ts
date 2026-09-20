@@ -294,12 +294,22 @@ export async function createTestHttpHarness(
 
 export const TEST_API_KEY = 'x-test-key-0123456789';
 
+type HttpResponseFilter = (
+  response: Response,
+  url: string | URL | Request,
+  init: RequestInit | undefined,
+) => Promise<Response>;
+
 export interface HttpTestContext {
   port: number;
   /** The `/mcp` endpoint of the booted server. */
   base: URL;
   /** Connect a bearer-authenticated client; `onElicit` opts it into form elicitation. */
-  makeClient: (name: string, onElicit?: ElicitHandler) => Promise<Client>;
+  makeClient: (
+    name: string,
+    onElicit?: ElicitHandler,
+    responseFilter?: HttpResponseFilter,
+  ) => Promise<Client>;
   close: () => Promise<void>;
 }
 
@@ -335,12 +345,13 @@ export async function bootHttpTest(
   return {
     port,
     base,
-    async makeClient(name, onElicit) {
+    async makeClient(name, onElicit, responseFilter) {
       const transport = new StreamableHTTPClientTransport(base, {
-        fetch: (url, init) => {
+        fetch: async (url, init) => {
           const headers = new Headers(init?.headers);
           headers.set('Authorization', `Bearer ${TEST_API_KEY}`);
-          return fetch(url, { ...init, headers });
+          const response = await fetch(url, { ...init, headers });
+          return responseFilter ? responseFilter(response, url, init) : response;
         },
       });
       const client = new Client(

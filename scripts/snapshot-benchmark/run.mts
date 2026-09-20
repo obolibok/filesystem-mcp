@@ -6,15 +6,13 @@ import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { parse } from 'csv-parse';
-import yauzl from 'yauzl';
-
 import { GuardedFileSystem } from '../../src/core/fs.js';
 import { ArtifactJobManager, fingerprintJobInput } from '../../src/core/job-manager.js';
 import { PathGuard, resolveAllowedDirectoriesState } from '../../src/core/path.js';
 import { getSnapshotConfig } from '../../src/core/snapshot-config.js';
 import type { SnapshotRecord } from '../../src/core/snapshot-pipeline.js';
 import { runSnapshotPipeline, writeSnapshotFromRecords } from '../../src/core/snapshot-pipeline.js';
+import { verifySnapshotZip } from './verify.mjs';
 
 interface Args {
   mode: 'pipeline' | 'walk';
@@ -65,60 +63,6 @@ async function waitForTerminal(manager: ArtifactJobManager, jobId: string, guard
     if (['completed', 'failed', 'cancelled', 'interrupted'].includes(job.state)) return job;
     await delay(25);
   }
-}
-
-async function parseZipCsv(
-  bytes: Buffer,
-  collectPaths: boolean,
-): Promise<{ rows: number; paths: Set<string> }> {
-  return new Promise((resolve, reject) => {
-    yauzl.fromBuffer(bytes, { lazyEntries: true, validateEntrySizes: true }, (openError, zip) => {
-      if (openError || !zip) {
-        reject(openError ?? new Error('ZIP did not open'));
-        return;
-      }
-      let entries = 0;
-      zip.once('error', reject);
-      zip.on('entry', (entry) => {
-        entries += 1;
-        if (entries !== 1) {
-          reject(new Error('Snapshot ZIP must contain exactly one CSV entry'));
-          zip.close();
-          return;
-        }
-        zip.openReadStream(entry, (streamError, stream) => {
-          if (streamError || !stream) {
-            reject(streamError ?? new Error('CSV entry did not open'));
-            return;
-          }
-          const parser = parse({ bom: false, columns: true, relax_column_count: false });
-          let rows = 0;
-          const paths = new Set<string>();
-          parser.on('readable', () => {
-            let record: Record<string, string> | null;
-            while ((record = parser.read() as Record<string, string> | null) !== null) {
-              assert.deepEqual(Object.keys(record), [
-                'RootId',
-                'RelativePath',
-                'Name',
-                'Extension',
-                'Length',
-                'LastWriteTime',
-              ]);
-              assert(Number.isSafeInteger(Number(record['Length'])));
-              assert(!Number.isNaN(Date.parse(record['LastWriteTime'] ?? '')));
-              rows += 1;
-              if (collectPaths) paths.add(record['RelativePath'] ?? '');
-            }
-          });
-          parser.once('error', reject);
-          parser.once('end', () => resolve({ rows, paths }));
-          stream.pipe(parser);
-        });
-      });
-      zip.readEntry();
-    });
-  });
 }
 
 function pipelineRecords(count: number, entropy: Args['entropy']): AsyncIterable<SnapshotRecord> {
@@ -231,6 +175,10 @@ async function run(): Promise<void> {
     if (args.expectFailure) {
       assert.equal(job.state, 'failed');
       assert.match(job.stopReason ?? '', /ZIP part|quota|limit/u);
+      assert.deepEqual(job.artifacts, []);
+      assert.equal(job.manifestArtifactId, undefined);
+      const jobFiles = await readdir(manager.jobDirectory(job.jobId));
+      assert.deepEqual(jobFiles, ['job.json']);
       await sample();
       process.stdout.write(
         `${JSON.stringify(
@@ -274,7 +222,7 @@ async function run(): Promise<void> {
       const payload = await manager.getArtifact(part.artifactId, guard);
       assert.equal(payload.bytes.length, part.zipBytes);
       assert.equal(createHash('sha256').update(payload.bytes).digest('hex'), part.sha256);
-      const parsed = await parseZipCsv(payload.bytes, expectedPaths !== undefined);
+      const parsed = await verifySnapshotZip(payload.bytes, expectedPaths !== undefined);
       assert.equal(parsed.rows, part.rows);
       verifiedRows += parsed.rows;
       base64Bytes += 4 * Math.ceil(payload.bytes.length / 3);
