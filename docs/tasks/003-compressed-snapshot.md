@@ -301,7 +301,8 @@ Push, PR и merge оставить планированию до отдельн�
   команды — в [benchmark report](../testing/snapshot-benchmark-2026-09-20.md).
 - Локальные follow-up commits: `009744ee` (runtime hardening), `16021c0c`
   (regressions и verifier), `6af551fa` (documentation/evidence), `9dc36647`
-  (старый byte-extraction helper также пропущен через строгий verifier).
+  (старый byte-extraction helper также пропущен через строгий verifier), `8a2bd089`
+  (assertion ожидает завершения asynchronous partial cleanup).
 - Live ChatGPT остаётся `pending` до повторного review и совместного запуска по
   [protocol](../testing/snapshot-live.md). Локальные результаты не объявляются live PASS.
 - Состояние локального handoff: `ready for review`; push, PR и merge не выполнялись.
