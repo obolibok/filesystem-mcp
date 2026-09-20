@@ -4,16 +4,16 @@
 Это единая доска интеграционного статуса. Coding-чаты записывают свою работу в
 карточках задач, а планирование обновляет эту таблицу после review/интеграции.
 
-| ID       | Работа                                                                 | Статус   | Зависит от    | Назначение                                                                                                |
-| -------- | ---------------------------------------------------------------------- | -------- | ------------- | --------------------------------------------------------------------------------------------------------- |
-| 000      | Подготовка контекста и правил работы                                   | done     | —             | Планирующий чат; docs checkpoint                                                                          |
-| 001      | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)         | done     | 000           | `001 - baseline defects fix`; `codex/001-baseline-defects`                                                |
-| 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)         | done     | 001           | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live                     |
-| 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)   | done     | 002           | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3                          |
-| 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)           | done     | 002, 002-live | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                                           |
+| ID       | Работа                                                                 | Статус   | Зависит от    | Назначение                                                                                                               |
+| -------- | ---------------------------------------------------------------------- | -------- | ------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| 000      | Подготовка контекста и правил работы                                   | done     | —             | Планирующий чат; docs checkpoint                                                                                         |
+| 001      | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)         | done     | 000           | `001 - baseline defects fix`; `codex/001-baseline-defects`                                                               |
+| 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)         | done     | 001           | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live                                    |
+| 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)   | done     | 002           | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3                                         |
+| 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)           | done     | 002, 002-live | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                                                          |
 | 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md) | review   | 002-tool      | `003 - compressed snapshot`; `codex/003-compressed-snapshot`; `9ff20792`; code review + live PASS; ready for integration |
-| 004      | Bundle выбранных originals на основе jobs/artifacts                    | proposed | 003           | Последовательно после 003; общий механизм повторно не реализуется                                         |
-| 005      | Контролируемое повторение предметного исследования                     | proposed | 004           | Планирование + пользователь                                                                               |
+| 004      | Bundle выбранных originals на основе jobs/artifacts                    | proposed | 003           | Последовательно после 003; общий механизм повторно не реализуется                                                        |
+| 005      | Контролируемое повторение предметного исследования                     | proposed | 004           | Планирование + пользователь                                                                                              |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
 готовы; `active` — назначен исполнитель; `review` — есть проверяемый результат;
@@ -175,7 +175,7 @@ Pending ID выше сохраняется только как история з
 
 - Сначала восстановить надёжность чтения/поиска и воспроизводимую проверку Windows.
 - Delivery проверять отдельным опытом до реализации больших архивов.
-- `snapshot`/`bundle` — будущие tools, не текущие capabilities.
+- `snapshot` и общий jobs/artifacts lifecycle реализованы в 003; `bundle` — задача 004.
 - OAuth/multi-user, постоянный индекс и серверные парсеры сейчас не назначены.
 
 После каждой интеграции сохранять ссылку на принятый commit/PR, итог acceptance,

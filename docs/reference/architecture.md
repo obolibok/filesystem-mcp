@@ -101,7 +101,7 @@ blob SDK-клиентом само по себе не доказывает ма�
 Текстовые tools сохраняют metadata в `_meta`; outputs без собственного текста
 могут использовать `structuredContent`. `define.ts` не публикует `outputSchema`.
 Перед изменением этого контракта изучить compatibility comments и tests, не
-добавлять schema механически. Новые artifact/job ответы потребуют отдельной оценки.
+добавлять schema механически. Изменения artifact/job ответов требуют проверки совместимости.
 
 Snapshot jobs имеют отдельный disk-backed lifecycle и не используют 60-секундные
 ResourceStore/PageSnapshotStore. `snapshot` быстро регистрирует job с обязательным
@@ -140,13 +140,16 @@ HTTP baseline имеет один auth context: общий ключ, guard/grant
 stores для endpoint. OAuth spike не обеспечивает production изоляцию principal.
 Watcher даёт сигнал изменения, не durable journal с checkpoint для индекса.
 
+На [проверенном стенде ChatGPT](../testing/003-live-2026-09-20.md) доставлен
+и повторно получен ZIP 7802264 B; верхний предел принимающего host не установлен.
+
 ## Ещё не реализовано
 
 `bundle` выбранных originals. `get_file` доставляет ровно один guarded и
 size-limited оригинал; snapshot artifact service хранит только metadata CSV/ZIP и
 не является bundle service.
-Persistent corpus index, vector search, domain parsers и multi-user OAuth не
-входят в первую coding-задачу.
+Persistent corpus index, vector search, domain parsers и multi-user OAuth остаются
+вне принятого scope пилота.
 
 Snapshot artifact service разделяет read-only источники и создание служебных
 результатов. Кэш tool output на 60 секунд не используется для долгой выдачи CSV/ZIP.

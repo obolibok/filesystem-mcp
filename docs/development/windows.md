@@ -166,7 +166,8 @@ node --import tsx scripts/snapshot-benchmark/run.mts --mode walk --walk-files 60
 должен пройти до конца каждого ZIP, проверить единственный CSV entry, CRC-32, SHA-256
 и strict CSV parse. Benchmark 3 млн не входит в обычный CI. Перед live опытом следовать
 [snapshot protocol](../testing/snapshot-live.md); локальный PASS не доказывает
-материализацию большой embedded resource в ChatGPT.
+материализацию большой embedded resource в ChatGPT. Результаты проверенного
+стенда: [smoke/main/upper](../testing/003-live-2026-09-20.md).
 
 JSON-конфиги зависят от клиента: README содержит отдельный VS Code пример с
 `servers` и другие варианты с `mcpServers`. Не копировать оболочку между клиентами.

@@ -28,9 +28,10 @@
   исторический отрицательный опыт с `resources/read`.
 - [Snapshot benchmark](testing/snapshot-benchmark-2026-09-20.md): 3 млн metadata
   records и отдельный настоящий walk; [live protocol](testing/snapshot-live.md) —
-  пошаговая целевая проверка manifest/ZIP в ChatGPT.
+  пошаговая целевая проверка manifest/ZIP в ChatGPT;
+  [live results](testing/003-live-2026-09-20.md) — результаты smoke/main/upper.
 - [Архитектура, форматы и лимиты](reference/architecture.md): карта владельцев кода
-  и ограничения исходной версии.
+  и текущие возможности и ограничения.
 - [Baseline от 19 сентября](testing/baseline-2026-09-19.md): проверенные наблюдения,
   отделённые от планируемых исправлений.
 - [Шаблон задачи](tasks/TEMPLATE.md): минимальный контракт для следующего чата.
