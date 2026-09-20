@@ -4,16 +4,16 @@
 Это единая доска интеграционного статуса. Coding-чаты записывают свою работу в
 карточках задач, а планирование обновляет эту таблицу после review/интеграции.
 
-| ID       | Работа                                                               | Статус   | Зависит от    | Назначение                                                                                                |
-| -------- | -------------------------------------------------------------------- | -------- | ------------- | --------------------------------------------------------------------------------------------------------- |
-| 000      | Подготовка контекста и правил работы                                 | done     | —             | Планирующий чат; docs checkpoint                                                                          |
-| 001      | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)       | done     | 000           | `001 - baseline defects fix`; `codex/001-baseline-defects`                                                |
-| 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)       | done     | 001           | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live                     |
-| 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md) | review   | 002           | `002-live - Windows and ChatGPT validation`; старый маршрут ZIP FAIL; продолжение в 002-tool              |
-| 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)         | review   | 002, 002-live | `002 - originals delivery experiment`; `codex/002-tool-delivery`; локальное review PASS; не интегрирована |
-| 003      | Потоковый snapshot каталога                                          | proposed | 002-tool      | Ожидает интеграцию 002-tool и постановку задачи                                                           |
-| 004      | Bundle и manifest                                                    | proposed | 002-tool, 003 | Ожидает подтверждённую доставку и snapshot                                                                |
-| 005      | Контролируемое повторение предметного исследования                   | proposed | 004           | Планирование + пользователь                                                                               |
+| ID       | Работа                                                               | Статус   | Зависит от    | Назначение                                                                            |
+| -------- | -------------------------------------------------------------------- | -------- | ------------- | ------------------------------------------------------------------------------------- |
+| 000      | Подготовка контекста и правил работы                                 | done     | —             | Планирующий чат; docs checkpoint                                                      |
+| 001      | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)       | done     | 000           | `001 - baseline defects fix`; `codex/001-baseline-defects`                            |
+| 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)       | done     | 001           | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live |
+| 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md) | done     | 002           | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3      |
+| 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)         | done     | 002, 002-live | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                       |
+| 003      | Потоковый snapshot каталога                                          | proposed | 002-tool      | Ожидает отдельную постановку и разрешение                                             |
+| 004      | Bundle и manifest                                                    | proposed | 002-tool, 003 | Ожидает подтверждённую доставку и snapshot                                            |
+| 005      | Контролируемое повторение предметного исследования                   | proposed | 004           | Планирование + пользователь                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
 готовы; `active` — назначен исполнитель; `review` — есть проверяемый результат;
@@ -23,17 +23,18 @@
 
 ## Текущий следующий шаг
 
-002-tool прошла локальное review. Следующий шаг — публикация ветки, проверка CI
-и интеграция после отдельной команды: исполнителю было задано не делать push/merge.
-После интеграции можно готовить scope 003; успех малых fixtures не определяет
-допустимый размер будущих bundle.
+002-tool интегрирована. Следующий шаг планирования — подготовить scope и acceptance
+для 003; реализация snapshot этим не разрешена. Успех малых fixtures не определяет
+допустимый размер будущих snapshot/bundle или lifecycle артефактов.
 
-## Review задачи 002-tool, 2026-09-20
+## Приёмка задачи 002-tool, 2026-09-20
 
 Исполнитель — `002 - originals delivery experiment`, task
 `01a0b975-35f7-73f1-b94c-caf22ab46fa9`; ветка `codex/002-tool-delivery`.
 Проверен commit `881f94d684b513f460491bae701b7292e402e072` относительно базы
 `84eb8221ab405d2201208dcfe4e771bdab994100`.
+[PR #3](https://github.com/obolibok/filesystem-mcp/pull/3) принят и слит в `main`:
+[merge `fc279005`](https://github.com/obolibok/filesystem-mcp/commit/fc279005174be35c642ad042c7fcdfe2483c9c7b).
 
 - Добавлен read-only `get_file`: исходные bytes в стандартном MCP embedded
   resource и согласованный `resource_link` в результате tools/call. Сохранены
@@ -55,8 +56,11 @@
 - Размеры выше этих малых fixtures в ChatGPT, остальные форматы и lifecycle
   не проверены. Локальные size-limit тесты не заменяют ограничения принимающего host.
   По handoff tunnel остановлен; профиль, backup и synthetic стенд сохранены локально.
-- Push, PR, CI этого commit и merge не выполнялись. До интеграции статус остаётся
-  `review`; `snapshot`, `bundle`, OAuth и публичный файловый сервис не реализованы.
+- [CI PR #3](https://github.com/obolibok/filesystem-mcp/actions/runs/35505903279):
+  Windows и Ubuntu jobs выполнили полный repository check со статусом `success`.
+  Review follow-up пометил прежний `resources/read` протокол историческим и сослался
+  на текущий `get_file` протокол. `snapshot`, `bundle`, OAuth и публичный файловый
+  сервис не реализованы.
 
 ## Результат 002-live, 2026-09-20
 
@@ -75,8 +79,8 @@
 
 002-live остаётся историей отрицательного результата маршрута resources/read;
 доставку через get_file и состояние teardown уточнил следующий опыт 002-tool выше.
-Статус done у 002 означает принятие локального стенда. 003/004 не начинать до
-интеграции 002-tool и назначения следующей задачи планированием.
+Оба результата приняты при интеграции PR #3. 003/004 не начинать до назначения
+следующей задачи планированием.
 
 ## Приёмка задачи 002
 

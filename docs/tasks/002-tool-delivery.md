@@ -153,5 +153,6 @@ URI, blob/base64 в сообщении модели, hash от сервера и
   ключа, tunnel ID, абсолютных пользовательских путей, бинарных fixtures или live
   screenshots. Profile и backup остаются в ignored `.tmp` исходного worktree;
   daemon остановлен пользователем после проверки. Target limit выше малых ZIP/XLS,
-  остальные форматы и lifecycle не проверялись. Итоговый commit — commit с этой
-  записью; hash передаётся в handoff, push/merge не выполняются.
+  остальные форматы и lifecycle не проверялись. Реализация — `881f94d6`, review
+  follow-up — `f48599ad`; [PR #3](https://github.com/obolibok/filesystem-mcp/pull/3)
+  прошёл Windows/Ubuntu CI и слит в `main` как `fc279005`. Release не выполнялся.
