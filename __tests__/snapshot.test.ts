@@ -207,8 +207,64 @@ describe('snapshot jobs and artifacts', () => {
         arguments: lostResponseArgs,
       });
       assert.equal(meta(recovered).reused, true);
-      assert(meta(recovered).job?.jobId);
+      const recoveredJobId = meta(recovered).job?.jobId;
+      assert(recoveredJobId);
+      const recoveredDeadline = Date.now() + 10_000;
+      for (;;) {
+        const status = await recoveryClient.callTool({
+          name: 'job_status',
+          arguments: { jobId: recoveredJobId },
+        });
+        if (meta(status).state === 'completed') break;
+        assert.notEqual(meta(status).state, 'failed', firstTextBlock(status).text);
+        assert(Date.now() < recoveredDeadline, 'response-loss recovery did not finish');
+        await delay(10);
+      }
       await recoveryClient.close();
+
+      const timeoutArgs = {
+        path: root,
+        idempotencyKey: `http-client-timeout-${randomUUID()}`,
+      };
+      let delaySnapshotResponse = true;
+      const timeoutClient = await http.makeClient(
+        'snapshot-http-timeout',
+        undefined,
+        async (response, _url, init) => {
+          const body = typeof init?.body === 'string' ? init.body : '';
+          if (delaySnapshotResponse && body.includes('"name":"snapshot"')) {
+            delaySnapshotResponse = false;
+            await delay(100);
+          }
+          return response;
+        },
+      );
+      await assert.rejects(
+        timeoutClient.callTool({ name: 'snapshot', arguments: timeoutArgs }, { timeout: 10 }),
+        /timeout|timed out/u,
+      );
+      await timeoutClient.close().catch(() => undefined);
+
+      const timeoutRecoveryClient = await http.makeClient('snapshot-http-timeout-recovery');
+      const timeoutRecovered = await timeoutRecoveryClient.callTool({
+        name: 'snapshot',
+        arguments: timeoutArgs,
+      });
+      assert.equal(meta(timeoutRecovered).reused, true);
+      const timeoutJobId = meta(timeoutRecovered).job?.jobId;
+      assert(timeoutJobId);
+      const timeoutDeadline = Date.now() + 10_000;
+      for (;;) {
+        const status = await timeoutRecoveryClient.callTool({
+          name: 'job_status',
+          arguments: { jobId: timeoutJobId },
+        });
+        if (meta(status).state === 'completed') break;
+        assert.notEqual(meta(status).state, 'failed', firstTextBlock(status).text);
+        assert(Date.now() < timeoutDeadline, 'client-timeout recovery did not finish');
+        await delay(10);
+      }
+      await timeoutRecoveryClient.close();
     } finally {
       await http.close();
     }
@@ -996,6 +1052,160 @@ describe('snapshot jobs and artifacts', () => {
     }
   });
 
+  it('keeps startup available when expired artifact deletion is temporarily blocked', async () => {
+    for (const code of ['EACCES', 'EPERM'] as const) {
+      const root = await createTestRoot();
+      const scratch = await createTestRoot();
+      const guard = await makeGuard([root]);
+      const quota = 256 * 1024;
+      const artifactBytes = Buffer.alloc(64 * 1024, 0x64);
+      const jobId = randomUUID();
+      const artifactId = randomUUID();
+      const fileName = `${artifactId}.zip`;
+      const directory = join(scratch, jobId);
+      const artifactPath = join(directory, fileName);
+      await mkdir(directory);
+      await writeFile(artifactPath, artifactBytes);
+      await writeFile(
+        join(directory, 'job.json'),
+        `${JSON.stringify(
+          storedJob(jobId, root, {
+            idempotencyKey: `startup-expiry-${code}`,
+            finishedAt: new Date().toISOString(),
+            resultExpiresAt: new Date(0).toISOString(),
+            artifacts: [
+              {
+                artifactId,
+                kind: 'snapshot-part',
+                name: 'expired.zip',
+                mimeType: 'application/zip',
+                fileName,
+                size: artifactBytes.length,
+                sha256: createHash('sha256').update(artifactBytes).digest('hex'),
+              },
+            ],
+          }),
+        )}\n`,
+      );
+      let artifactDeleteAttempts = 0;
+      const manager = new ArtifactJobManager(
+        {
+          ...getSnapshotConfig(),
+          scratchDirectory: scratch,
+          ephemeralScratch: false,
+          scratchQuotaBytes: quota,
+          resultTtlMs: 60_000,
+          cleanupIntervalMs: 60_000,
+        },
+        {
+          unlinkFile: async (path) => {
+            if (path === artifactPath) {
+              artifactDeleteAttempts += 1;
+              if (artifactDeleteAttempts === 1) {
+                throw Object.assign(new Error(`synthetic ${code} startup lock`), { code });
+              }
+            }
+            await unlink(path);
+          },
+        },
+      );
+      try {
+        await manager.initialize();
+        await manager.initialize();
+        assert.equal(artifactDeleteAttempts, 1);
+        assert.equal((await stat(artifactPath)).size, artifactBytes.length);
+        await assert.rejects(manager.getArtifact(artifactId, guard), /expired/u);
+        assert.equal(artifactDeleteAttempts, 1);
+
+        const ordinary = await manager.submit({
+          kind: 'snapshot',
+          idempotencyKey: `startup-available-${code}`,
+          fingerprint: fingerprintJobInput(`startup-available-${code}`),
+          sourceRoot: root,
+          sourceRootId: 'root-test',
+          input: {},
+          run: async (ctx) => {
+            ctx.reserveDisk(4096);
+            ctx.releaseDisk(4096);
+            return randomUUID();
+          },
+        });
+        assert.equal(
+          (await waitForTerminal(() => manager.getJob(ordinary.job.jobId, guard))).state,
+          'completed',
+        );
+
+        const onDiskBeforeProbe = await directoryBytes(scratch);
+        const reservation = quota - onDiskBeforeProbe + 4096;
+        const blocked = await manager.submit({
+          kind: 'snapshot',
+          idempotencyKey: `startup-quota-blocked-${code}`,
+          fingerprint: fingerprintJobInput(`startup-quota-blocked-${code}`),
+          sourceRoot: root,
+          sourceRootId: 'root-test',
+          input: {},
+          run: async (ctx) => {
+            ctx.reserveDisk(reservation);
+            ctx.releaseDisk(reservation);
+            return randomUUID();
+          },
+        });
+        const failed = await waitForTerminal(() => manager.getJob(blocked.job.jobId, guard));
+        assert.equal(failed.state, 'failed');
+        assert.match(failed.stopReason ?? '', /scratch quota/u);
+        assert.equal(artifactDeleteAttempts, 1);
+
+        await manager.cleanupExpired();
+        assert.equal(artifactDeleteAttempts, 2);
+        await assert.rejects(stat(artifactPath), /ENOENT/u);
+        await assert.rejects(manager.getArtifact(artifactId, guard), /expired|not found/u);
+
+        const admitted = await manager.submit({
+          kind: 'snapshot',
+          idempotencyKey: `startup-quota-recovered-${code}`,
+          fingerprint: fingerprintJobInput(`startup-quota-recovered-${code}`),
+          sourceRoot: root,
+          sourceRootId: 'root-test',
+          input: {},
+          run: async (ctx) => {
+            ctx.reserveDisk(reservation);
+            ctx.releaseDisk(reservation);
+            return randomUUID();
+          },
+        });
+        assert.equal(
+          (await waitForTerminal(() => manager.getJob(admitted.job.jobId, guard))).state,
+          'completed',
+        );
+        await manager.cleanupExpired();
+        assert.equal(artifactDeleteAttempts, 2);
+      } finally {
+        await manager.close();
+        await rm(scratch, { recursive: true, force: true });
+        await cleanupTestRoot(root);
+      }
+    }
+  });
+
+  it('keeps scratch initialization failures fatal', async () => {
+    const root = await createTestRoot();
+    const scratchFile = join(root, 'not-a-directory');
+    await writeFile(scratchFile, 'file');
+    const manager = new ArtifactJobManager({
+      ...getSnapshotConfig(),
+      scratchDirectory: scratchFile,
+      ephemeralScratch: false,
+    });
+    try {
+      await assert.rejects(manager.initialize(), (error: NodeJS.ErrnoException) => {
+        assert.equal(error.code, 'EEXIST');
+        return true;
+      });
+    } finally {
+      await cleanupTestRoot(root);
+    }
+  });
+
   it('fails boundedly on ZIP cap, scratch quota, and synthetic ENOSPC', async () => {
     const root = await createTestRoot();
     const scratch = await createTestRoot();
@@ -1298,6 +1508,13 @@ describe('snapshot jobs and artifacts', () => {
     const validCsv = `${SNAPSHOT_CSV_HEADER}root,a.txt,a.txt,.txt,1,2026-09-20T00:00:00.000Z\r\n`;
     const valid = await makeZip([['snapshot-00001.csv', validCsv]]);
     assert.equal((await verifySnapshotZip(valid, true)).rows, 1);
+
+    const empty = await makeZip([['snapshot-00001.csv', SNAPSHOT_CSV_HEADER]]);
+    assert.equal((await verifySnapshotZip(empty, false)).rows, 0);
+    const wrongEmptyHeader = await makeZip([
+      ['snapshot-00001.csv', 'Wrong,RelativePath,Name,Extension,Length,LastWriteTime\r\n'],
+    ]);
+    await assert.rejects(verifySnapshotZip(wrongEmptyHeader, false));
 
     const extraEntry = await makeZip([
       ['snapshot-00001.csv', validCsv],

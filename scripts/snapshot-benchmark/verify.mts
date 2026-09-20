@@ -11,6 +11,15 @@ export interface VerifiedSnapshotCsv {
   readonly paths: Set<string>;
 }
 
+const SNAPSHOT_COLUMNS = [
+  'RootId',
+  'RelativePath',
+  'Name',
+  'Extension',
+  'Length',
+  'LastWriteTime',
+] as const;
+
 export async function verifySnapshotZip(
   bytes: Buffer,
   collectPaths: boolean,
@@ -52,7 +61,14 @@ export async function verifySnapshotZip(
             return;
           }
           void (async () => {
-            const parser = parse({ bom: false, columns: true, relax_column_count: false });
+            const parser = parse({
+              bom: false,
+              columns: (header) => {
+                assert.deepEqual(header, SNAPSHOT_COLUMNS);
+                return header;
+              },
+              relax_column_count: false,
+            });
             let checksum = 0;
             let rows = 0;
             const paths = new Set<string>();
@@ -62,14 +78,7 @@ export async function verifySnapshotZip(
             const parsed = (async () => {
               for await (const value of parser) {
                 const record = value as Record<string, string>;
-                assert.deepEqual(Object.keys(record), [
-                  'RootId',
-                  'RelativePath',
-                  'Name',
-                  'Extension',
-                  'Length',
-                  'LastWriteTime',
-                ]);
+                assert.deepEqual(Object.keys(record), SNAPSHOT_COLUMNS);
                 assert(Number.isSafeInteger(Number(record['Length'])));
                 assert(!Number.isNaN(Date.parse(record['LastWriteTime'] ?? '')));
                 rows += 1;

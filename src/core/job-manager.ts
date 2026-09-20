@@ -240,7 +240,13 @@ export class ArtifactJobManager {
       });
     }, this.config.cleanupIntervalMs);
     this.#cleanupTimer.unref();
-    for (const runtime of this.#jobs.values()) await this.#expireIfNeeded(runtime);
+    for (const runtime of this.#jobs.values()) {
+      await this.#expireIfNeeded(runtime).catch((error: unknown) => {
+        Logger.warn(
+          `Could not expire snapshot job ${runtime.job.jobId} during startup: ${formatUnknownErrorMessage(error)}`,
+        );
+      });
+    }
   }
 
   async #loadJob(jobId: string): Promise<void> {
@@ -486,13 +492,19 @@ export class ArtifactJobManager {
     const runtime = this.#jobs.get(jobId);
     if (!runtime) throw new FsError(ErrorCode.NOT_FOUND, 'Artifact not found or expired');
     await guard.validateExistingDirectory(runtime.job.sourceRoot);
+    const initialExpiry = runtime.job.resultExpiresAt
+      ? Date.parse(runtime.job.resultExpiresAt)
+      : Number.POSITIVE_INFINITY;
+    if (runtime.job.resultExpired || Date.now() >= initialExpiry) {
+      throw new FsError(ErrorCode.NOT_FOUND, 'Artifact has expired');
+    }
     await this.#acquireReadSlot();
     this.#activeReads.set(jobId, (this.#activeReads.get(jobId) ?? 0) + 1);
     try {
       const expiry = runtime.job.resultExpiresAt
         ? Date.parse(runtime.job.resultExpiresAt)
         : Number.POSITIVE_INFINITY;
-      if (runtime.job.resultExpired || Date.now() >= expiry) {
+      if (Date.now() >= expiry) {
         throw new FsError(ErrorCode.NOT_FOUND, 'Artifact has expired');
       }
       const artifact = runtime.job.artifacts.find(
