@@ -11,7 +11,7 @@
 | 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)       | done     | 001           | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live |
 | 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md) | done     | 002           | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3      |
 | 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)         | done     | 002, 002-live | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                       |
-| 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md) | ready | 002-tool | Реализация разрешена 2026-09-20; рабочая задача создаётся |
+| 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md) | ready | 002-tool | Запуск передан приложению; worktree создан; ожидается task ID |
 | 004      | Bundle выбранных originals на основе jobs/artifacts | proposed | 003 | Последовательно после 003; общий механизм повторно не реализуется |
 | 005      | Контролируемое повторение предметного исследования                   | proposed | 004           | Планирование + пользователь                                                           |
 
@@ -32,6 +32,17 @@
 Сначала самостоятельная локальная реализация и benchmark, затем synthetic live
 ChatGPT прогон с пользователем. Целевой PASS не подменять локальными проверками.
 004 остаётся proposed и использует принятую в 003 основу для выбранных originals.
+
+## Запуск 003, 2026-09-20
+
+Запрошена рабочая задача с названием `003 - compressed snapshot`, модель
+`gpt-5.6-sol`, effort `xhigh`. Приложение вернуло pending creation ID
+`client-new-thread:92fb736a-49d0-4763-90af-61911445f7c0`; это ещё не task ID.
+Новый worktree создан на базе `ce4f22b4f9ca453d915100c3206363d96dc6d208`,
+карточка и измерения в нём присутствуют. В prompt передана ветка
+`codex/003-compressed-snapshot` и поручение начать локальную реализацию.
+После завершения app setup заменить pending ID фактическим task ID и статусом active;
+повторную задачу не создавать. Push/PR/merge исполнителю не поручены.
 
 ## Приёмка задачи 002-tool, 2026-09-20
 
