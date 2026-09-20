@@ -415,6 +415,16 @@ export class PathGuard {
     return result;
   }
 
+  /**
+   * Re-check current lexical root and sensitive-path policy without requiring
+   * the target to still exist. Durable artifacts use this after originals have
+   * been removed or changed: access may narrow, but fetch must not re-read the
+   * source merely to authorize already captured immutable bytes.
+   */
+  assertPathAllowed(requestedPath: string): void {
+    this.validateAccessAndSensitivity(requestedPath);
+  }
+
   // Synchronous since the access-grant round-trip moved to the executor's
   // pre-check: validateAccess only does lexical containment math and throws,
   // no async I/O remains. Callers still `await` it for uniform control-flow;

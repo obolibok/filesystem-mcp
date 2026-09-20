@@ -6,17 +6,18 @@
 
 ## Владельцы кода
 
-| Область        | Файлы                                                       | Ответственность                                       |
-| -------------- | ----------------------------------------------------------- | ----------------------------------------------------- |
-| CLI/entry      | `src/index.ts`, `src/cli.ts`, `src/core/config.ts`          | Аргументы, startup config, выбор транспорта           |
-| Hosting        | `src/transport/`, `src/transport.ts`                        | stdio/HTTP и публичный facade export                  |
-| Composition    | `src/server.ts`                                             | PathGuard, stores, registrars, lifecycle              |
-| MCP tools      | `src/tools/index.ts`, `define.ts`, отдельные tools          | Inventory, read-only gate, schemas, dispatch/response |
-| Guarded I/O    | `src/core/path.ts`, `path-utils.ts`, `fs.ts`                | Root policy, resolution, файловые операции            |
-| Text/discovery | `src/core/read.ts`, `search.ts`, `mime.ts`, `glob.ts`       | Чтение, поиск, классификация, ignore                  |
-| Resources      | `src/resources.ts`, `src/core/file-uri.ts`                  | URI, text/blob delivery, subscriptions                |
-| State          | `src/core/store.ts`, `page-store.ts`, `watcher-registry.ts` | Кэш результатов, страницы, уведомления                |
-| Validation     | `__tests__/`, `.github/workflows/ci.yml`                    | Unit/integration/stdio/HTTP tests и CI                |
+| Область        | Файлы                                                          | Ответственность                                       |
+| -------------- | -------------------------------------------------------------- | ----------------------------------------------------- |
+| CLI/entry      | `src/index.ts`, `src/cli.ts`, `src/core/config.ts`             | Аргументы, startup config, выбор транспорта           |
+| Hosting        | `src/transport/`, `src/transport.ts`                           | stdio/HTTP и публичный facade export                  |
+| Composition    | `src/server.ts`                                                | PathGuard, stores, registrars, lifecycle              |
+| MCP tools      | `src/tools/index.ts`, `define.ts`, отдельные tools             | Inventory, read-only gate, schemas, dispatch/response |
+| Guarded I/O    | `src/core/path.ts`, `path-utils.ts`, `fs.ts`                   | Root policy, resolution, файловые операции            |
+| Text/discovery | `src/core/read.ts`, `search.ts`, `mime.ts`, `glob.ts`          | Чтение, поиск, классификация, ignore                  |
+| Resources      | `src/resources.ts`, `src/core/file-uri.ts`                     | URI, text/blob delivery, subscriptions                |
+| State          | `src/core/store.ts`, `page-store.ts`, `watcher-registry.ts`    | Кэш результатов, страницы, уведомления                |
+| Durable jobs   | `job-manager.ts`, `snapshot-pipeline.ts`, `bundle-pipeline.ts` | Общий lifecycle и producers                           |
+| Validation     | `__tests__/`, `.github/workflows/ci.yml`                       | Unit/integration/stdio/HTTP tests и CI                |
 
 Сначала искать существующего владельца поведения. Не обходить guard прямым
 доступом к файлам в новом tool и не менять публичный transport export ради
@@ -24,17 +25,17 @@
 
 ## Возможности
 
-| Группа                      | Tools                                                       |
-| --------------------------- | ----------------------------------------------------------- |
-| Навигация                   | `list_roots`, `list`, `find_files`                          |
-| Чтение и metadata           | `read`, `get_file`, `stat`                                  |
-| Snapshot jobs               | `snapshot`, `job_status`, `cancel_job`, `get_artifact`      |
-| Текстовый поиск и сравнение | `search_text`, `diff`                                       |
-| Изменение                   | `create`, `edit`, `move`, `delete`, `patch`, `replace_text` |
+| Группа                      | Tools                                                            |
+| --------------------------- | ---------------------------------------------------------------- |
+| Навигация                   | `list_roots`, `list`, `find_files`                               |
+| Чтение и metadata           | `read`, `get_file`, `stat`                                       |
+| Durable jobs                | `snapshot`, `bundle`, `job_status`, `cancel_job`, `get_artifact` |
+| Текстовый поиск и сравнение | `search_text`, `diff`                                            |
+| Изменение                   | `create`, `edit`, `move`, `delete`, `patch`, `replace_text`      |
 
-18 tools; `--read-only` публикует двенадцать, включая snapshot jobs, и исключает
-последние шесть source-mutating tools. `snapshot` и `cancel_job` меняют служебное
-состояние и поэтому честно имеют `readOnlyHint: false`, но не изменяют источники. Источник
+19 tools; `--read-only` публикует тринадцать, включая durable jobs, и исключает
+последние шесть source-mutating tools. `snapshot`, `bundle` и `cancel_job` меняют
+служебное состояние и поэтому честно имеют `readOnlyHint: false`, но не изменяют источники. Источник
 inventory — [tools/index.ts](../../src/tools/index.ts). Есть stdio, Streamable HTTP,
 resources, `get-help`, progress, отмена, logs и подписки с protocol-era ограничениями.
 
@@ -88,6 +89,9 @@ blob SDK-клиентом само по себе не доказывает ма�
 | Snapshot job raw / ready artifacts    | 512 MiB / 512 MiB; до 128 частей                                                  | `core/snapshot-config.ts`       |
 | Snapshot concurrency / queue / time   | 1 running / 4 queued / 60 минут                                                   | `core/job-manager.ts`           |
 | Snapshot scratch / result TTL         | 1 GiB / 24 часа от completed                                                      | `core/job-manager.ts`           |
+| Bundle selection                      | 1000 paths / 256 KiB metadata; schema ceiling 10000                               | `core/snapshot-config.ts`       |
+| Bundle original / raw ZIP candidate   | 64 MiB / 64 MiB                                                                   | `core/snapshot-config.ts`       |
+| Bundle raw job / external manifest    | 512 MiB / 4 MiB                                                                   | `core/snapshot-config.ts`       |
 
 Пагинация не отменяет cap/timeout первого обхода. Проверять `truncated`,
 `stoppedReason` и счётчики пропусков; пустая выдача не доказывает полноту поиска.
@@ -103,9 +107,10 @@ blob SDK-клиентом само по себе не доказывает ма�
 Перед изменением этого контракта изучить compatibility comments и tests, не
 добавлять schema механически. Изменения artifact/job ответов требуют проверки совместимости.
 
-Snapshot jobs имеют отдельный disk-backed lifecycle и не используют 60-секундные
+Snapshot и bundle имеют единый disk-backed lifecycle и не используют 60-секундные
 ResourceStore/PageSnapshotStore. `snapshot` быстро регистрирует job с обязательным
-idempotencyKey; `job_status` опрашивается отдельными вызовами, `cancel_job` отменяет
+idempotencyKey; `bundle` делает то же для отсортированного явного набора и optional
+`expected { size, lastWriteTime }`. `job_status` опрашивается отдельными вызовами, `cancel_job` отменяет
 собственный AbortController job, `get_artifact` выдаёт ровно один manifest/ZIP как
 embedded resource + matching resource_link. HTTP endpoint владеет одним manager для
 всех per-request McpServer; закрытие запроса его не очищает. После process restart
@@ -126,19 +131,47 @@ Snapshot не является атомарным filesystem snapshot: исче�
 из уже скомпилированных rules; nested patterns и negation сохраняются. Walk depth —
 жёсткий policy cap и приводит к `failed`, а не к partial completed результату.
 
+Bundle принимает только portable `/`-relative regular-file paths без globbing,
+absolute/drive/UNC/device/ADS/traversal и extraction collisions. Порядок выбора
+не влияет на fingerprint; изменение paths или preconditions при том же key даёт
+conflict. Explicit selection не применяет discovery ignore rules. Guard проверяет
+root и каждый выбранный путь; symlink/junction в selector не разыменовывается.
+Worker потоково копирует bytes через `GuardedFileSystem` в manager-owned scratch,
+сверяет identity/size/mtime и optional expected metadata, затем упаковывает целые
+originals под `files/<relativePath>`. Один original не режется между частями.
+Закрытый ZIP проверяется против общего ZIP/delivery/`FS_MAX_FILE_SIZE` cap; группа
+при необходимости делится, а одиночный непомещающийся original получает `too_large`.
+
+Bundle manifest v1 (`filesystem-mcp.bundle-manifest`) — отдельный JSON artifact без
+абсолютных source paths. Он содержит root ID, interval/caveat, limits, `complete`,
+bundle counters, outcome каждого selector, expected/observed metadata, size/SHA-256
+включённых bytes и archive/part provenance, а также hashes/sizes частей. Outcomes
+`missing`, `inaccessible`, `changed`, `special`, `too_large` дают completed job с
+`complete=false`; all-skipped публикует manifest без пустого ZIP. Policy denial,
+unsafe selector, storage/compression/quota/deadline — fatal, incomplete artifacts
+удаляются. Metadata checks не являются atomic filesystem snapshot и не обнаружат
+запись, восстановившую прежние size/mtime; content precondition v1 отсутствует.
+
 Scratch и его ancestors не могут быть symlink/junction; проверка выполняется
 до создания storage. Windows 8.3 spelling разрешён, после проверки manager
 использует canonical scratch для I/O, cleanup и исключения из source traversal.
 
 Source I/O остаётся в PathGuard/GuardedFileSystem. Scratch не становится source root,
 caller не выбирает output path, а status/cancel/fetch каждый раз проверяют текущий
-доступ к canonical source root. Одна HTTP credential остаётся одним endpoint scope;
+доступ к canonical source root и всем bundle selectors. Удаление/изменение отдельного
+original после completed не требует повторного source read и не меняет сохранённые
+bytes; удаление root или сужение policy закрывает доступ. Одна HTTP credential остаётся одним endpoint scope;
 multi-user isolation этим не заявляется. Один scratch каталог имеет одного владельца-
 процесс; параллельным экземплярам нужны разные каталоги. Metadata сохраняется atomic
 rename; quota учитывает spool, готовые artifacts и job metadata. ZIP producer применяет
 минимум ZIP/delivery/captured general-file caps, а fetch повторно проверяет текущий
 `FS_MAX_FILE_SIZE`. Cleanup защищает активное чтение и освобождает quota только после
 фактического удаления bytes.
+
+Stored job `schemaVersion: 1` сохранён: bundle добавляет новые kind/counters и
+optional authorization paths, а прежние snapshot job JSON читаются без миграции.
+Общие `FS_SNAPSHOT_*` lifecycle/ZIP/delivery/quota/TTL настройки не переименованы;
+`FS_BUNDLE_*` ограничивают только selection/capture/manifest.
 
 HTTP baseline имеет один auth context: общий ключ, guard/grants, resource/page
 stores для endpoint. OAuth spike не обеспечивает production изоляцию principal.
@@ -149,13 +182,13 @@ Watcher даёт сигнал изменения, не durable journal с checkp
 
 ## Ещё не реализовано
 
-`bundle` выбранных originals. `get_file` доставляет ровно один guarded и
-size-limited оригинал; snapshot artifact service хранит только metadata CSV/ZIP и
-не является bundle service.
+Автоматический semantic selection, glob/folder bundle, несколько source roots в
+одном bundle, parser/OCR service и content-hash precondition. `get_file` остаётся
+отдельным быстрым маршрутом одного size-limited original.
 Persistent corpus index, vector search, domain parsers и multi-user OAuth остаются
 вне принятого scope пилота.
 
-Snapshot artifact service разделяет read-only источники и создание служебных
+Durable artifact service разделяет read-only источники и создание служебных
 результатов. Кэш tool output на 60 секунд не используется для долгой выдачи CSV/ZIP.
 Перечисление миллионов записей выполняет отдельный потоковый обход, а не снятие cap
 с `find_files`.

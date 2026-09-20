@@ -4,6 +4,7 @@ import {
   MAX_SEARCH_RESULTS,
 } from './core/util.js';
 import {
+  BUNDLE,
   CANCEL_JOB,
   FIND_FILES,
   GET_ARTIFACT,
@@ -23,7 +24,7 @@ function buildToolsOverview(readOnly: boolean): string {
     ['Navigate', [LIST_ROOTS.name, LIST.name, FIND_FILES.name]],
     ['Inspect', [STAT.name, SEARCH_TEXT.name]],
     ['Read', [READ.name, GET_FILE.name]],
-    ['Snapshot', [SNAPSHOT.name, JOB_STATUS.name, CANCEL_JOB.name, GET_ARTIFACT.name]],
+    ['Jobs', [SNAPSHOT.name, BUNDLE.name, JOB_STATUS.name, CANCEL_JOB.name, GET_ARTIFACT.name]],
   ];
 
   // Under --read-only the mutating tools are never registered, so advertising
@@ -76,6 +77,7 @@ export function buildSectionsRecord(readOnly: boolean): Record<string, string> {
       `enforced_limits: max file size ${maxFileMb} MB, file search cap ${MAX_SEARCH_RESULTS} results, content search cap ${DEFAULT_SEARCH_CONTENT_RESULTS} matches.`,
       `${GET_FILE.name}: Returns one byte-exact, size-limited file as an MCP embedded resource plus a resource_link; the receiving host decides whether to materialize it as a file.`,
       `${SNAPSHOT.name}: Submits a durable metadata-only job. Poll ${JOB_STATUS.name}; after completion fetch its manifest and each independent ZIP part with ${GET_ARTIFACT.name}. Reusing the same idempotencyKey never repeats the walk.`,
+      `${BUNDLE.name}: Submits a durable job for an explicit bounded set of relative file paths under one guarded directory. Fetch the external manifest and every independent ZIP part; skipped or changed originals make complete=false.`,
       `ephemeral_results: When a result carries only a resource_link or resourceUri (in structuredContent or _meta), call resources/read immediately — cached results are ephemeral and expire after ~60 seconds, eviction, or restart. ${GET_FILE.name} already embeds the file bytes in its tool result and needs no resources/read follow-up.`,
       'pagination: nextCursor appears in the result text and in _meta, backed by a snapshot on the same ~60s clock. Page through promptly; if a cursor is rejected, start again without one. resourceUri appears on the first page only.',
       '```',

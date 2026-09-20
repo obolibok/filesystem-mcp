@@ -95,7 +95,7 @@ New-Item -ItemType Directory -Path $fixturePath | Out-Null
 node dist/index.js --read-only --root-boundary $fixturePath $fixturePath --print-config --json
 ```
 
-Ожидаются `transport: stdio`, `readOnly: true`, roots этого fixture, двенадцать tools и
+Ожидаются `transport: stdio`, `readOnly: true`, roots этого fixture, тринадцать tools и
 лимит полного чтения 10 MiB. Если каталог имеет alias через junction/drive mapping или
 Windows 8.3 name, сервер может показать оба пути. Они не делают omitted `path`
 неоднозначным, пока разрешаются в одну location.
@@ -168,6 +168,41 @@ node --import tsx scripts/snapshot-benchmark/run.mts --mode walk --walk-files 60
 [snapshot protocol](../testing/snapshot-live.md); локальный PASS не доказывает
 материализацию большой embedded resource в ChatGPT. Результаты проверенного
 стенда: [smoke/main/upper](../testing/003-live-2026-09-20.md).
+
+## Bundle выбранных originals
+
+`bundle` использует тот же `FS_SNAPSHOT_DIR`, queue, deadline, quota, TTL,
+ZIP/delivery caps и `job_status`/`cancel_job`/`get_artifact`. Отдельные настройки
+`FS_BUNDLE_*` ограничивают file count/selection metadata, raw original, raw bytes
+ZIP candidate/job и внешний manifest; точные defaults перечислены в README.
+`FS_MAX_FILE_SIZE` продолжает ограничивать каждый готовый artifact при создании и fetch.
+
+Быстрый runtime suite, настоящий stdio MCP и independent verifier:
+
+```powershell
+node --test --import tsx __tests__/bundle.test.ts
+npm run build
+python -m venv .tmp/bundle-venv
+.tmp\bundle-venv\Scripts\python.exe -m pip install -r scripts\originals-delivery\requirements.txt
+.tmp\bundle-venv\Scripts\python.exe scripts\originals-delivery\generate_fixtures.py --output <source>
+node scripts\bundle-check\local-mcp-check.mjs --fixture-root <source> --delivery-dir <delivered> --scratch-dir <scratch>
+.tmp\bundle-venv\Scripts\python.exe -X utf8 scripts\bundle-check\verify_bundle.py --fixture-manifest <source>\manifest.json --bundle-manifest <delivered>\bundle-manifest.json --artifacts-dir <delivered> --delivery-dir <extracted> --output <report.json>
+node --import tsx scripts\bundle-check\volume.mts --output .tmp\bundle-volume.json
+```
+
+`source`, `delivered`, `scratch` и `extracted` должны быть разными synthetic
+каталогами; последние три находятся вне source. Verifier проверяет точный entry set,
+ZIP CRC, SHA-256 и bytes originals, затем открывает вложенный ZIP и семь XLS cells.
+Volume default создаёт 7 MiB плохо сжимаемых originals при 2 MiB raw-part/ZIP caps,
+проверяет все распакованные bytes и повторный fetch, записывает timings, peak RSS и
+peak scratch. Это LOCAL_ONLY; целевой ChatGPT опыт выполняется по
+[bundle live protocol](../testing/bundle-live.md) только после code review.
+
+Для настоящего Windows 8.3 TEMP создать каталог с длинным именем, получить
+`Scripting.FileSystemObject.GetFolder(...).ShortPath` и задать его только процессу
+test runner в `TEMP`/`TMP`. Bundle suite также передаёт short spelling source root и
+проверяет настоящий junction fail-closed; одинаковый long path вместо `~1` не
+считается 8.3 evidence.
 
 JSON-конфиги зависят от клиента: README содержит отдельный VS Code пример с
 `servers` и другие варианты с `mcpServers`. Не копировать оболочку между клиентами.

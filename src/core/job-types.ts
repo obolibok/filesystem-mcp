@@ -26,6 +26,23 @@ export interface SnapshotCounters {
   parts: number;
 }
 
+export interface BundleCounters {
+  requested: number;
+  included: number;
+  skipped: number;
+  missing: number;
+  inaccessible: number;
+  changed: number;
+  special: number;
+  tooLarge: number;
+  sourceBytes: number;
+  zipBytes: number;
+  parts: number;
+  errors: number;
+}
+
+export type JobCounters = SnapshotCounters | BundleCounters;
+
 export interface JobErrorSample {
   readonly code: string;
   readonly path?: string;
@@ -34,7 +51,7 @@ export interface JobErrorSample {
 
 export interface StoredArtifact {
   readonly artifactId: string;
-  readonly kind: 'manifest' | 'snapshot-part';
+  readonly kind: 'manifest' | 'snapshot-part' | 'bundle-part';
   readonly name: string;
   readonly mimeType: string;
   readonly fileName: string;
@@ -44,7 +61,7 @@ export interface StoredArtifact {
   readonly rawBytes?: number;
 }
 
-export interface StoredJob {
+export interface StoredJob<Counters extends JobCounters = SnapshotCounters> {
   readonly schemaVersion: 1;
   readonly jobId: string;
   readonly kind: string;
@@ -53,6 +70,8 @@ export interface StoredJob {
   readonly sourceRoot: string;
   readonly sourceRootId: string;
   readonly input: Record<string, unknown>;
+  /** Paths whose current policy access is required to inspect or fetch this job. */
+  readonly authorizationPaths?: readonly string[];
   state: JobState;
   phase: string;
   readonly createdAt: string;
@@ -62,7 +81,7 @@ export interface StoredJob {
   resultExpired?: boolean;
   stopReason?: string;
   complete: boolean;
-  counters: SnapshotCounters;
+  counters: Counters;
   errors: JobErrorSample[];
   artifacts: StoredArtifact[];
   manifestArtifactId?: string;
@@ -84,5 +103,22 @@ export function emptySnapshotCounters(): SnapshotCounters {
     rawCsvBytes: 0,
     zipBytes: 0,
     parts: 0,
+  };
+}
+
+export function emptyBundleCounters(requested: number): BundleCounters {
+  return {
+    requested,
+    included: 0,
+    skipped: 0,
+    missing: 0,
+    inaccessible: 0,
+    changed: 0,
+    special: 0,
+    tooLarge: 0,
+    sourceBytes: 0,
+    zipBytes: 0,
+    parts: 0,
+    errors: 0,
   };
 }

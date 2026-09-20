@@ -17,7 +17,13 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import { ErrorCode, formatUnknownErrorMessage, FsError, isNodeError } from './errors.js';
 import type { GuardedFileSystem } from './fs.js';
-import type { JobErrorSample, StoredArtifact, StoredJob } from './job-types.js';
+import type {
+  JobCounters,
+  JobErrorSample,
+  SnapshotCounters,
+  StoredArtifact,
+  StoredJob,
+} from './job-types.js';
 import { emptySnapshotCounters } from './job-types.js';
 import { Logger } from './observability.js';
 import { isPathInsideDirectory, isSamePath } from './path-utils.js';
@@ -33,24 +39,26 @@ const METADATA_RENAME_ATTEMPTS = 8;
 const OWNED_ARTIFACT_FILE_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(?:json|zip)$/u;
 
-export interface SubmitJobInput {
+export interface SubmitJobInput<Counters extends JobCounters = SnapshotCounters> {
   readonly kind: string;
   readonly idempotencyKey: string;
   readonly fingerprint: string;
   readonly sourceRoot: string;
   readonly sourceRootId: string;
   readonly input: Record<string, unknown>;
-  readonly run: (ctx: JobRunContext) => Promise<string>;
+  readonly authorizationPaths?: readonly string[];
+  readonly counters?: Counters;
+  readonly run: (ctx: JobRunContext<Counters>) => Promise<string>;
 }
 
 export interface ArtifactPayload {
   readonly artifact: StoredArtifact;
   readonly bytes: Buffer;
-  readonly job: StoredJob;
+  readonly job: StoredJob<JobCounters>;
 }
 
 interface RuntimeJob {
-  readonly job: StoredJob;
+  readonly job: StoredJob<JobCounters>;
   readonly run?: (ctx: JobRunContext) => Promise<string>;
   readonly abortController: AbortController;
   worker?: Promise<void>;
@@ -61,15 +69,15 @@ interface ArtifactJobManagerDeps {
   readonly readArtifact?: (path: string) => Promise<Buffer>;
   readonly unlinkFile?: (path: string) => Promise<void>;
   /** Test seams for exercising cancellation on both sides of the atomic rename. */
-  readonly beforeArtifactRename?: (job: StoredJob) => Promise<void>;
-  readonly afterArtifactRename?: (job: StoredJob) => Promise<void>;
+  readonly beforeArtifactRename?: (job: StoredJob<JobCounters>) => Promise<void>;
+  readonly afterArtifactRename?: (job: StoredJob<JobCounters>) => Promise<void>;
 }
 
-function isTerminal(job: StoredJob): boolean {
+function isTerminal(job: StoredJob<JobCounters>): boolean {
   return ['completed', 'failed', 'cancelled', 'interrupted'].includes(job.state);
 }
 
-function isJobRunning(job: StoredJob): boolean {
+function isJobRunning(job: StoredJob<JobCounters>): boolean {
   return job.state === 'running';
 }
 
@@ -124,7 +132,7 @@ export function fingerprintJobInput(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
-export class JobRunContext {
+export class JobRunContext<Counters extends JobCounters = JobCounters> {
   private readonly manager: ArtifactJobManager;
   readonly runtime: RuntimeJob;
   readonly signal: AbortSignal;
@@ -139,8 +147,8 @@ export class JobRunContext {
     return this.manager.config;
   }
 
-  get job(): StoredJob {
-    return this.runtime.job;
+  get job(): StoredJob<Counters> {
+    return this.runtime.job as StoredJob<Counters>;
   }
 
   async setPhase(phase: string): Promise<void> {
@@ -197,8 +205,8 @@ export class ArtifactJobManager {
   readonly config: SnapshotConfig;
   readonly #readArtifact: (path: string) => Promise<Buffer>;
   readonly #unlinkFile: (path: string) => Promise<void>;
-  readonly #beforeArtifactRename: ((job: StoredJob) => Promise<void>) | undefined;
-  readonly #afterArtifactRename: ((job: StoredJob) => Promise<void>) | undefined;
+  readonly #beforeArtifactRename: ((job: StoredJob<JobCounters>) => Promise<void>) | undefined;
+  readonly #afterArtifactRename: ((job: StoredJob<JobCounters>) => Promise<void>) | undefined;
   readonly #jobs = new Map<string, RuntimeJob>();
   readonly #idempotency = new Map<string, string>();
   readonly #artifactJobs = new Map<string, string>();
@@ -273,7 +281,7 @@ export class ArtifactJobManager {
 
   async #loadJob(jobId: string): Promise<void> {
     const directory = this.jobDirectory(jobId);
-    let job: StoredJob;
+    let job: StoredJob<JobCounters>;
     try {
       job = JSON.parse(await readFile(join(directory, 'job.json'), 'utf8')) as StoredJob;
     } catch (error) {
@@ -351,7 +359,9 @@ export class ArtifactJobManager {
     return join(this.#scratchDirectory, jobId);
   }
 
-  async submit(input: SubmitJobInput): Promise<{ job: StoredJob; reused: boolean }> {
+  async submit<Counters extends JobCounters = SnapshotCounters>(
+    input: SubmitJobInput<Counters>,
+  ): Promise<{ job: StoredJob<Counters>; reused: boolean }> {
     await this.initialize();
     const result = this.#submitChain.then(() => this.#submit(input));
     this.#submitChain = result.then(
@@ -361,7 +371,9 @@ export class ArtifactJobManager {
     return result;
   }
 
-  async #submit(input: SubmitJobInput): Promise<{ job: StoredJob; reused: boolean }> {
+  async #submit<Counters extends JobCounters>(
+    input: SubmitJobInput<Counters>,
+  ): Promise<{ job: StoredJob<Counters>; reused: boolean }> {
     if (this.#closed) throw new FsError(ErrorCode.IO_ERROR, 'Job manager is shutting down');
     const priorId = this.#idempotency.get(input.idempotencyKey);
     if (priorId) {
@@ -370,21 +382,21 @@ export class ArtifactJobManager {
         if (prior.fingerprint !== input.fingerprint) {
           throw new FsError(
             ErrorCode.INVALID_INPUT,
-            'Idempotency key is already bound to different normalized snapshot parameters',
+            'Idempotency key is already bound to different normalized job parameters',
           );
         }
-        return { job: prior, reused: true };
+        return { job: prior as StoredJob<Counters>, reused: true };
       }
     }
     const queued = [...this.#jobs.values()].filter(
       (runtime) => runtime.job.state === 'queued',
     ).length;
     if (queued >= this.config.maxQueuedJobs) {
-      throw new FsError(ErrorCode.TOO_LARGE, 'Snapshot job queue is full');
+      throw new FsError(ErrorCode.TOO_LARGE, 'Artifact job queue is full');
     }
     const now = new Date().toISOString();
     const jobId = randomUUID();
-    const job: StoredJob = {
+    const job: StoredJob<Counters> = {
       schemaVersion: 1,
       jobId,
       kind: input.kind,
@@ -393,17 +405,18 @@ export class ArtifactJobManager {
       sourceRoot: input.sourceRoot,
       sourceRootId: input.sourceRootId,
       input: input.input,
+      ...(input.authorizationPaths ? { authorizationPaths: [...input.authorizationPaths] } : {}),
       state: 'queued',
       phase: 'queued',
       createdAt: now,
       complete: true,
-      counters: emptySnapshotCounters(),
+      counters: (input.counters ?? emptySnapshotCounters()) as Counters,
       errors: [],
       artifacts: [],
     };
     const runtime: RuntimeJob = {
       job,
-      run: input.run,
+      run: (ctx) => input.run(ctx as JobRunContext<Counters>),
       abortController: new AbortController(),
       tempBytes: 0,
     };
@@ -435,7 +448,7 @@ export class ArtifactJobManager {
       runtime.worker = this.#run(runtime)
         .catch((error: unknown) => {
           Logger.error(
-            `Snapshot job ${runtime.job.jobId} could not persist its terminal state: ${formatUnknownErrorMessage(error)}`,
+            `Artifact job ${runtime.job.jobId} could not persist its terminal state: ${formatUnknownErrorMessage(error)}`,
           );
         })
         .finally(() => {
@@ -483,17 +496,23 @@ export class ArtifactJobManager {
     }
   }
 
-  async getJob(jobId: string, guard: PathGuard): Promise<StoredJob> {
+  async getJob<Counters extends JobCounters = SnapshotCounters>(
+    jobId: string,
+    guard: PathGuard,
+  ): Promise<StoredJob<Counters>> {
     await this.initialize();
     const runtime = this.#jobs.get(jobId);
-    if (!runtime) throw new FsError(ErrorCode.NOT_FOUND, 'Snapshot job not found');
-    await guard.validateExistingDirectory(runtime.job.sourceRoot);
+    if (!runtime) throw new FsError(ErrorCode.NOT_FOUND, 'Job not found');
+    await this.#authorize(runtime.job, guard);
     await this.#expireIfNeeded(runtime);
-    return runtime.job;
+    return runtime.job as StoredJob<Counters>;
   }
 
-  async cancel(jobId: string, guard: PathGuard): Promise<StoredJob> {
-    const job = await this.getJob(jobId, guard);
+  async cancel<Counters extends JobCounters = SnapshotCounters>(
+    jobId: string,
+    guard: PathGuard,
+  ): Promise<StoredJob<Counters>> {
+    const job = await this.getJob<Counters>(jobId, guard);
     const runtime = this.#jobs.get(jobId);
     if (!runtime || isTerminal(job)) return job;
     job.state = 'cancelled';
@@ -501,7 +520,7 @@ export class ArtifactJobManager {
     job.complete = false;
     job.stopReason = 'cancelled-by-client';
     job.finishedAt = new Date().toISOString();
-    runtime.abortController.abort(new Error('Snapshot job cancelled'));
+    runtime.abortController.abort(new Error('Job cancelled'));
     await this.#removeArtifacts(runtime);
     await this.persist(job);
     return job;
@@ -513,7 +532,7 @@ export class ArtifactJobManager {
     if (!jobId) throw new FsError(ErrorCode.NOT_FOUND, 'Artifact not found or expired');
     const runtime = this.#jobs.get(jobId);
     if (!runtime) throw new FsError(ErrorCode.NOT_FOUND, 'Artifact not found or expired');
-    await guard.validateExistingDirectory(runtime.job.sourceRoot);
+    await this.#authorize(runtime.job, guard);
     const initialExpiry = runtime.job.resultExpiresAt
       ? Date.parse(runtime.job.resultExpiresAt)
       : Number.POSITIVE_INFINITY;
@@ -561,7 +580,7 @@ export class ArtifactJobManager {
   reserveTemp(runtime: RuntimeJob, bytes: number): void {
     if (!Number.isSafeInteger(bytes) || bytes < 0) throw new Error('Invalid disk reservation');
     if (this.#usedBytes + bytes > this.config.scratchQuotaBytes) {
-      throw new FsError(ErrorCode.TOO_LARGE, 'Snapshot scratch quota exceeded');
+      throw new FsError(ErrorCode.TOO_LARGE, 'Artifact scratch quota exceeded');
     }
     this.#usedBytes += bytes;
     runtime.tempBytes += bytes;
@@ -590,7 +609,7 @@ export class ArtifactJobManager {
       0,
     );
     if (currentArtifactBytes + artifactInput.size > this.config.maxJobArtifactBytes) {
-      throw new FsError(ErrorCode.TOO_LARGE, 'Snapshot job artifact-byte limit exceeded');
+      throw new FsError(ErrorCode.TOO_LARGE, 'Job artifact-byte limit exceeded');
     }
     const artifactId = randomUUID();
     const extension = artifactInput.kind === 'manifest' ? 'json' : 'zip';
@@ -618,7 +637,7 @@ export class ArtifactJobManager {
     return artifact;
   }
 
-  async persist(job: StoredJob): Promise<void> {
+  async persist(job: StoredJob<JobCounters>): Promise<void> {
     const previous = this.#persistChains.get(job.jobId) ?? Promise.resolve();
     const next = previous.then(() => this.#persistNow(job));
     this.#persistChains.set(
@@ -628,7 +647,7 @@ export class ArtifactJobManager {
     await next;
   }
 
-  async #persistNow(job: StoredJob): Promise<void> {
+  async #persistNow(job: StoredJob<JobCounters>): Promise<void> {
     const path = join(this.jobDirectory(job.jobId), 'job.json');
     const temp = join(this.jobDirectory(job.jobId), `job.${randomUUID()}.metadata-tmp`);
     const bytes = Buffer.from(`${JSON.stringify(job, null, 2)}\n`, 'utf8');
@@ -636,7 +655,7 @@ export class ArtifactJobManager {
     if (this.#usedBytes + bytes.length > this.config.scratchQuotaBytes) {
       throw new FsError(
         ErrorCode.TOO_LARGE,
-        'Snapshot scratch quota exceeded while saving metadata',
+        'Artifact scratch quota exceeded while saving metadata',
       );
     }
     await writeFile(temp, bytes, { flag: 'wx', mode: 0o600 });
@@ -824,6 +843,13 @@ export class ArtifactJobManager {
         'Snapshot source cannot be the scratch directory or one of its descendants',
         sourceRoot,
       );
+    }
+  }
+
+  async #authorize(job: StoredJob<JobCounters>, guard: PathGuard): Promise<void> {
+    await guard.validateExistingDirectory(job.sourceRoot);
+    for (const path of job.authorizationPaths ?? []) {
+      guard.assertPathAllowed(path);
     }
   }
 
