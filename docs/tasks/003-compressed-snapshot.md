@@ -379,3 +379,14 @@ Push, PR и merge оставить планированию до отдельн�
 - Настоящий short TEMP: snapshot 27/27 PASS; весь runner — 385 tests, 378 pass,
   0 fail, 7 прежних skips; walk benchmark 21000 rows — `verified: true`.
   Fail-before/pass-after и ссылки на CI сохранены в протоколе интеграции.
+
+### Интеграция принята, 2026-09-20
+
+- [PR #4](https://github.com/obolibok/filesystem-mcp/pull/4) слит в `main`,
+  merge `2de005ec37d632e43f188bc8de9d6671d94cefc2`.
+  Финальный head: `e3c088d4ea08ca0bf76bbff7fa9080fce86b8094`.
+- Полный CI финального head: Windows 383 pass / 0 fail / 2 platform skips;
+  Ubuntu 380 pass / 0 fail / 5 platform skips; по 385 tests.
+- Code review, локальные проверки и live smoke/main/upper приняты планированием.
+  Центральная доска: 003 `done`; 004 `proposed` до постановки и назначения.
+  Исторические pending/ready for review выше относятся к прежним этапам.

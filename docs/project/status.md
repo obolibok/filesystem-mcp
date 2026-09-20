@@ -4,16 +4,16 @@
 Это единая доска интеграционного статуса. Coding-чаты записывают свою работу в
 карточках задач, а планирование обновляет эту таблицу после review/интеграции.
 
-| ID       | Работа                                                                 | Статус   | Зависит от    | Назначение                                                                                                               |
-| -------- | ---------------------------------------------------------------------- | -------- | ------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| 000      | Подготовка контекста и правил работы                                   | done     | —             | Планирующий чат; docs checkpoint                                                                                         |
-| 001      | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)         | done     | 000           | `001 - baseline defects fix`; `codex/001-baseline-defects`                                                               |
-| 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)         | done     | 001           | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live                                    |
-| 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)   | done     | 002           | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3                                         |
-| 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)           | done     | 002, 002-live | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                                                          |
-| 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md) | review   | 002-tool      | `003 - compressed snapshot`; `codex/003-compressed-snapshot`; `9ff20792`; code review + live PASS; ready for integration |
-| 004      | Bundle выбранных originals на основе jobs/artifacts                    | proposed | 003           | Последовательно после 003; общий механизм повторно не реализуется                                                        |
-| 005      | Контролируемое повторение предметного исследования                     | proposed | 004           | Планирование + пользователь                                                                                              |
+| ID       | Работа                                                                 | Статус   | Зависит от    | Назначение                                                                                                                        |
+| -------- | ---------------------------------------------------------------------- | -------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 000      | Подготовка контекста и правил работы                                   | done     | —             | Планирующий чат; docs checkpoint                                                                                                  |
+| 001      | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)         | done     | 000           | `001 - baseline defects fix`; `codex/001-baseline-defects`                                                                        |
+| 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)         | done     | 001           | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live                                             |
+| 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)   | done     | 002           | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3                                                  |
+| 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)           | done     | 002, 002-live | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                                                                   |
+| 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md) | done     | 002-tool      | `003 - compressed snapshot`; принят через [PR #4](https://github.com/obolibok/filesystem-mcp/pull/4); code review, live и CI PASS |
+| 004      | Bundle выбранных originals на основе jobs/artifacts                    | proposed | 003           | Последовательно после 003; общий механизм повторно не реализуется                                                                 |
+| 005      | Контролируемое повторение предметного исследования                     | proposed | 004           | Планирование + пользователь                                                                                                       |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
 готовы; `active` — назначен исполнитель; `review` — есть проверяемый результат;
@@ -23,34 +23,56 @@
 
 ## Текущий следующий шаг
 
-Локальное code review 003 — **PASS** на head
-`9ff207922b55d040608590323e025fd45eb29634` ветки `codex/003-compressed-snapshot`.
-Замечания R1–R8 и два уточнения evidence закрыты:
-[итог ревью](../testing/003-review-r3-2026-09-20.md).
-Независимый `npm run check` на точном head с исходными зависимостями:
-380 tests, 373 pass, 0 fail, 7 прежних Windows skips.
+003 принята и интегрирована в `main`. Следующий шаг — уточнить scope и acceptance
+004 (bundle выбранных originals), затем назначить реализацию от принятого `main`.
+004 остаётся `proposed`; общие jobs/artifacts, TTL, quotas и delivery уже реализованы
+в 003 и должны использоваться повторно. Новая рабочая задача ещё не запущена.
 
-Пользователь разрешил synthetic live ChatGPT опыт: [текущий протокол](../testing/003-live-2026-09-20.md).
-Функциональный live опыт — **PASS: smoke, main и upper**.
-Main: 21011 уникальных путей, 103801018 B CSV, три ZIP около 5,53 / 5,53 / 1,11 MB.
-Upper: 13852 уникальных пути, 47183919 B CSV, один ZIP 7802264 B.
-Все manifest/ZIP материализованы; SHA-256/CRC/CSV и полные эталоны совпали;
-повторная доставка больших частей побайтово идентична. Main подтвердил reuse/conflict.
-Планирование проверило пользовательские отчёты и upper Python/JSON, сверило live jobs
-и hashes серверных файлов, независимо повторило строгий разбор upper.
-Источники evidence, timings и ограничения — в текущем протоколе.
+## Приёмка задачи 003, 2026-09-20
 
-Следующий шаг — интеграция `codex/003-compressed-snapshot` на проверенном head,
-затем назначение 004 от принятого main. Максимальный проверенный ZIP — 7802264 B;
-это не предел ChatGPT. Реальный обход миллионов файлов в течение 20–30 минут
-не проверялся; отдельный pipeline benchmark описан в локальном review.
+[PR #4](https://github.com/obolibok/filesystem-mcp/pull/4) слит в `main`:
+[merge `2de005ec`](https://github.com/obolibok/filesystem-mcp/commit/2de005ec37d632e43f188bc8de9d6671d94cefc2).
+Итоговый head: `e3c088d4ea08ca0bf76bbff7fa9080fce86b8094`, интеграционная ветка
+`codex/003-integration`. В ней объединены код исполнителя, planning evidence и
+исправления Windows, найденные при интеграции.
+
+- Фоновый `snapshot`, `job_status`, `cancel_job`, `get_artifact`: manifest и
+  самостоятельные сжатые CSV/ZIP части; idempotency, restart, TTL, quotas,
+  ограниченный обход и scratch вне исходников. Сохранены PathGuard/GuardedFileSystem.
+- [Code review](../testing/003-review-r3-2026-09-20.md) исходного runtime `9ff20792`:
+  R1–R8 и два уточнения evidence закрыты. Независимый полный check исходного head:
+  380 tests, 373 pass, 0 fail, 7 прежних Windows skips.
+- При интеграции исправлен startup с настоящим Windows 8.3 TEMP: ссылки в scratch
+  и ancestors проверяются до mkdir, а storage I/O использует canonical scratch.
+  Direct-pipeline fixtures и benchmark теперь нормализуют paths как рабочий tool;
+  assertions сохранены. [Протокол интеграции](../testing/003-integration-2026-09-20.md).
+- Локальный полный check после startup fix: 385 tests, 378 pass, 0 fail, 7 прежних
+  skips. Финальный follow-up: весь runner под short TEMP — те же 378 pass / 0 fail /
+  7 skips; полный `check:static` PASS. Пять новых alias/junction regressions и весь
+  snapshot suite 27/27 прошли без skips; независимое review follow-up — PASS.
+- [CI итогового head](https://github.com/obolibok/filesystem-mcp/actions/runs/35530671618):
+  полный `npm run check` на обеих платформах — PASS. Windows: 383 pass, 0 fail,
+  2 platform skips; Ubuntu: 380 pass, 0 fail, 5 platform skips; всего по 385 tests.
+- [Живой ChatGPT опыт](../testing/003-live-2026-09-20.md) на `9ff20792` —
+  **PASS: smoke, main и upper**. Main: 21011 уникальных путей, 103801018 B CSV,
+  три ZIP около 5,53 / 5,53 / 1,11 MB. Upper: 13852 уникальных пути,
+  47183919 B CSV, ZIP 7802264 B. Все manifest/ZIP материализованы;
+  SHA-256/CRC/CSV и полные эталоны совпали; повторная доставка больших частей
+  побайтово идентична. Main подтвердил reuse/conflict. Планирование сверило
+  пользовательские отчёты с jobs и серверными hashes, независимо разобрало upper.
+  Последующая startup-дельта не меняла CSV/ZIP producer или delivery.
+
+Максимальный проверенный ZIP — 7802264 B; это не установленный предел ChatGPT.
+Реальный обход миллионов файлов в течение 20–30 минут не проверялся;
+[отдельный pipeline benchmark](../testing/snapshot-benchmark-2026-09-20.md)
+проверил 3 млн metadata records. После canonical follow-up настоящий walk под
+short TEMP также прошёл: 21000 rows, errors 0, `verified: true`.
+
 Исполнитель: `003 - compressed snapshot`, task
-`01a0be9c-0f01-7c42-8abb-a6ff550e1532`.
-
-003 готова к интеграции; общий статус остаётся review до merge. Push/PR/merge
-не выполнялись. Три live jobs завершены; пользовательский foreground tunnel
-пока остаётся запущенным, остановка Ctrl+C ещё не подтверждена. Synthetic
-материалы сохранены локально. 004 остаётся proposed до интеграции и назначения.
+`01a0be9c-0f01-7c42-8abb-a6ff550e1532`, ветка `codex/003-compressed-snapshot`.
+Три live jobs завершены. При последней сверке пользовательский foreground tunnel
+отвечал; остановка Ctrl+C не подтверждена. Synthetic материалы сохранены локально.
+Runtime интеграционной ветки принят; состояние foreground стенда не менялось при merge.
 
 ## Запуск 003, 2026-09-20
 
