@@ -122,11 +122,74 @@
 
 ## Work record
 
-Не начато. Исполнитель заполняет по мере совместной проверки.
+Пошаговый прогон начат 2026-09-19; результат сохранён планированием 2026-09-20.
+ZIP — FAIL текущего resource-template маршрута; XLS не запускался. Продолжение:
+[002-tool](002-tool-delivery.md). Состояние teardown требует проверки перед следующим опытом.
 
 - Base/branch и целевой хост (обезличенно):
-- Доступность клиента/tunnel и выбранный маршрут:
-- Пройденные шаги и проверки:
-- Локальный/целевой/synthetic/живой результат:
-- Блокеры, ручные действия, teardown:
+  `1cf6ab8da6945f92bf945373432147f427fbd019`,
+  `codex/002-live-windows-chatgpt`; текущая Windows-машина пользователя.
+- Доступность клиента/tunnel и выбранный маршрут: ChatGPT Work виден,
+  Developer mode включён, создание personal plugins доступно. Проверяется маршрут
+  personal plugin → Secure MCP Tunnel → read-only stdio MCP. Platform Tunnel
+  settings доступны; создание/управление и ассоциация с ChatGPT workspace
+  подтверждены. Platform предлагает `tunnel-client` v0.0.14 для Windows amd64;
+  архив скачан, SHA-256 записан, Windows-бинарник запускается, `help quickstart`
+  и `help doctor` доступны. Authenticode status — `NotSigned`. Тестовый tunnel
+  endpoint создан с ассоциациями owning Platform organization и целевого ChatGPT
+  workspace; его ID и данные аккаунта в Git не записаны. Отдельный runtime API key
+  создан и остаётся только у пользователя. `doctor --explain` завершился с кодом
+  0: profile, env-only credential reference, tunnel identity, Node executable,
+  read-only MCP command и loopback health/UI listener прошли проверку. Foreground
+  daemon запущен; отдельный health probe получил `200 live`, `200 ready` и
+  подтвердил успешный control-plane poll. Personal plugin создан и подключён через
+  tunnel; refresh штатно обнаружил read-only actions.
+- Пройденные шаги и проверки: Windows 10 Pro 19045 x64; PowerShell 5.1; Git 2.45.1;
+  Node 24.15.0; npm 11.12.1; Python 3.12.3. Требования локального стенда выполнены.
+  Fork и base подтверждены; `npm ci` установил 241 package с нулём reported
+  vulnerabilities, `npm run build` успешно создал `dist/index.js`. Synthetic
+  ZIP/XLS и limit fixtures созданы; все размеры и четыре SHA-256 совпали с
+  принятым manifest. Mojibake при `Get-Content` в PowerShell 5.1 отделён от
+  проверки bytes; позднее Unicode проверен независимым reader.
+- Локальный/целевой/synthetic/живой результат: локальный
+  stdio MCP delivery harness и независимый Python verifier теперь `PASS`: uncached
+  repeats, hashes, exact-limit read, два отрицательных контроля, три ZIP entries и
+  семь XLS cells проверены. User-exported ChatGPT transcript подтверждает live
+  tool calls: точное дерево, размеры, чтение manifest и два ожидаемых результата
+  `find_files`. Это `PASS` для маршрута tools, но значения manifest не доказывают
+  materialization/bytes в analysis runtime. Изолированный ZIP test вернул
+  `ROUTE_FAIL_NOT_MATERIALIZED`: ChatGPT host выставил только семь tools и не
+  предоставил callable `resources/read`; resource не читался, blob/file в analysis
+  runtime не появился, Python не запускался, обходов через manifest/base64/upload
+  не было. Целевая доставка ZIP — наблюдаемый `FAIL` текущего контракта; XLS не
+  запускался, так как зависит от того же отсутствующего resource route. Живые
+  данные не выбирались.
+- Блокеры, ручные действия, teardown: Windows-клиент совместим, но не имеет
+  Authenticode-подписи; hash фиксирует проверенный download, а не доказывает
+  подпись издателя. Локальный synthetic этап завершён. Локальный stdio profile
+  ссылается на key через `env:CONTROL_PLANE_API_KEY` и ограничивает сервер
+  synthetic root. Первая попытка `init` безопасно остановлена:
+  PowerShell 5.1 передал quoted абсолютный Node path из `Program Files` так, что
+  preflight увидел `C:Program`; partial profile не создан. Повтор использует `node`
+  из `PATH` и forward-slash paths без пробелов и успешно создал один profile в
+  ignored `.tmp`. Проверено: только env key reference, secret value отсутствует,
+  read-only/root-boundary/synthetic root присутствуют. `doctor --explain` — `PASS`;
+  ожидаемые `SKIP` относятся к network/OAuth probes для stdio и необязательному
+  Codex control plugin. PowerShell 5.1 снова оформил ожидаемую stderr-диагностику
+  MCP server как `NativeCommandError`, но daemon продолжил работу; live/readiness
+  и обязательный control-plane poll — `PASS`. ChatGPT app создан через Tunnel,
+  подключён и штатно обновил actions при продолжающем работать daemon;
+  gate `list_roots`/`find_files` пройден, а materialization gate дал точный `FAIL`
+  на границе ChatGPT host → MCP resources. Минимальное предложение планированию —
+  отдельный read-only adapter spike с focused tool, возвращающим стандартный tool
+  file reference/resource link для одного guarded synthetic файла; сначала нужно
+  проверить фактический SDK/host contract, потому что official File APIs не дают
+  точной server-side output schema. Не добавлять public service, OAuth,
+  snapshot/bundle или production roots. Daemon/profile/plugin пока оставлены до
+  решения пользователя о сохранении стенда или teardown. Секреты в чат/Git не
+  передавать.
 - Файлы runbook, итоговый commit и решение для 003/004:
+  docs/testing/windows-chatgpt-live.md; обезличенные записи перенесены из worktree
+  в main планированием 2026-09-20 с уточнением ZIP FAIL / XLS не проверялся.
+  SHA — в handoff планирования. 003/004 остаются вне scope до подтверждённой
+  доставки или отдельного решения о смене маршрута.

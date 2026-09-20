@@ -9,6 +9,7 @@ import { DELETE } from './delete.js';
 import { DIFF } from './diff.js';
 import { EDIT } from './edit.js';
 import { FIND_FILES } from './find-files.js';
+import { GET_FILE } from './get-file.js';
 import { LIST_ROOTS } from './list-roots.js';
 import { LIST } from './list.js';
 import { MOVE } from './move.js';
@@ -31,6 +32,7 @@ export const ALL_TOOLS = [
   LIST_ROOTS,
   SEARCH_TEXT,
   FIND_FILES,
+  GET_FILE,
   STAT,
 ] as const;
 
@@ -48,7 +50,7 @@ export function registeredTools(readOnly: boolean): readonly DefinedTool[] {
 // Only the read-only tools are named individually: the mutating six are no
 // longer listed by hand anywhere, so their names reach callers through
 // MUTATING_TOOL_NAMES and ALL_TOOLS instead.
-export { LIST, LIST_ROOTS, READ, SEARCH_TEXT, FIND_FILES, STAT };
+export { LIST, LIST_ROOTS, READ, SEARCH_TEXT, FIND_FILES, GET_FILE, STAT };
 
 interface ToolRegistrarDeps {
   readonly server: McpServer;

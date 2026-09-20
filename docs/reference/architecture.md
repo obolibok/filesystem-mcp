@@ -27,11 +27,11 @@
 | Группа                      | Tools                                                       |
 | --------------------------- | ----------------------------------------------------------- |
 | Навигация                   | `list_roots`, `list`, `find_files`                          |
-| Чтение и metadata           | `read`, `stat`                                              |
+| Чтение и metadata           | `read`, `get_file`, `stat`                                  |
 | Текстовый поиск и сравнение | `search_text`, `diff`                                       |
 | Изменение                   | `create`, `edit`, `move`, `delete`, `patch`, `replace_text` |
 
-13 tools; `--read-only` публикует семь и исключает последние шесть. Источник
+14 tools; `--read-only` публикует восемь и исключает последние шесть. Источник
 inventory — [tools/index.ts](../../src/tools/index.ts). Есть stdio, Streamable HTTP,
 resources, `get-help`, progress, отмена, logs и подписки с protocol-era ограничениями.
 
@@ -48,8 +48,8 @@ Tool descriptions фиксируют то же правило.
 | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | UTF-8 TXT/Markdown/CSV/code             | Полное/частичное и batch чтение, literal/RE2 поиск; структурного парсинга CSV нет                                                  |
 | SVG                                     | Доступен текстовому `read`, `search_text` и text resource с MIME `image/svg+xml`                                                   |
-| Image/audio                             | Полный `read` возвращает media content block; file resource передаёт исходные байты base64 blob                                    |
-| PDF/Office/ZIP/binary                   | Текстовые операции отклоняют; file resource передаёт originals как base64 blob с исходными байтам                                  |
+| Image/audio                             | Полный `read` возвращает media content block; file resource и `get_file` передают исходные байты base64 blob                       |
+| PDF/Office/ZIP/binary                   | Текстовые операции отклоняют; file resource и `get_file` передают originals как byte-exact base64 blob                             |
 | UTF-16 LE/BE с BOM                      | `read` возвращает понятную encoding error; `search_text` считает `skippedUnsupportedEncoding`; resource возвращает byte-exact blob |
 | Binary со вводящим в заблуждение `.txt` | Определяется по sample: поиск пропускает с `skippedBinary`, resource возвращает `application/octet-stream` blob                    |
 
@@ -60,21 +60,26 @@ MIME detection не означает PDF extraction, OCR, Office parser или �
 
 Схема file resource: `filesystem-mcp://file/{+path}`. Encoder и decoder находятся
 в [file-uri.ts](../../src/core/file-uri.ts); использовать общий helper при построении
-URI. Получение blob SDK-клиентом не доказывает материализацию файла в конкретной
-аналитической среде.
+URI. `get_file` возвращает тот же URI одновременно в стандартном embedded resource
+(`type: resource`, `resource.blob`) и matching `resource_link`. Blob уже находится
+в результате `tools/call`; отдельный `resources/read` для него не нужен. Получение
+blob SDK-клиентом само по себе не доказывает материализацию файла в конкретной
+аналитической среде; проверенный ChatGPT-маршрут записан в
+[tool delivery protocol](../testing/tool-originals-delivery.md).
 
 ## Лимиты и контракт результата
 
-| Ограничение                | Baseline default / cap                                      | Владелец                        |
-| -------------------------- | ----------------------------------------------------------- | ------------------------------- |
-| Полное чтение/raw resource | 10 MiB; конфиг 1–100 MiB                                    | `core/util.ts`, `core/fs.ts`    |
-| Batch read budget          | 512 KiB по умолчанию                                        | `core/util.ts`, `tools/read.ts` |
-| Search timeout             | 5 секунд; конфиг 100–60000 ms                               | `core/util.ts`                  |
-| Search results             | До 10000 собранных результатов; page size отдельно          | `core/util.ts`, search tools    |
-| List entries               | До 20000                                                    | `core/util.ts`, `tools/list.ts` |
-| Search context             | До 10 строк с каждой стороны                                | `tools/search-text.ts`          |
-| Page snapshots             | 32 snapshots, TTL 60 секунд                                 | `core/page-store.ts`            |
-| Cached result resources    | 64 записи; 10 MiB на запись, 25 MiB суммарно; TTL 60 секунд | `core/store.ts`                 |
+| Ограничение                           | Baseline default / cap                                                            | Владелец                        |
+| ------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------- |
+| Полное чтение/raw resource/`get_file` | 10 MiB; конфиг 1–100 MiB                                                          | `core/util.ts`, `core/fs.ts`    |
+| `get_file` wire blob                  | Base64: ровно `4 * ceil(raw bytes / 3)` символов; отдельного configurable cap нет | `tools/get-file.ts`             |
+| Batch read budget                     | 512 KiB по умолчанию                                                              | `core/util.ts`, `tools/read.ts` |
+| Search timeout                        | 5 секунд; конфиг 100–60000 ms                                                     | `core/util.ts`                  |
+| Search results                        | До 10000 собранных результатов; page size отдельно                                | `core/util.ts`, search tools    |
+| List entries                          | До 20000                                                                          | `core/util.ts`, `tools/list.ts` |
+| Search context                        | До 10 строк с каждой стороны                                                      | `tools/search-text.ts`          |
+| Page snapshots                        | 32 snapshots, TTL 60 секунд                                                       | `core/page-store.ts`            |
+| Cached result resources               | 64 записи; 10 MiB на запись, 25 MiB суммарно; TTL 60 секунд                       | `core/store.ts`                 |
 
 Пагинация не отменяет cap/timeout первого обхода. Проверять `truncated`,
 `stoppedReason` и счётчики пропусков; пустая выдача не доказывает полноту поиска.
@@ -96,8 +101,8 @@ Watcher даёт сигнал изменения, не durable journal с checkp
 
 ## Ещё не реализовано
 
-`snapshot`, `bundle`, большие downloadable artifacts и их lifecycle, интеграция
-доставки в целевой ChatGPT-клиент. Их описание в brief/task board — план.
+`snapshot`, `bundle`, большие downloadable artifacts и их lifecycle. `get_file`
+доставляет ровно один guarded и size-limited оригинал; это не artifact service.
 Persistent corpus index, vector search, domain parsers и multi-user OAuth не
 входят в первую coding-задачу.
 
