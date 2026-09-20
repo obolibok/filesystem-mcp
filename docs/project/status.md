@@ -12,7 +12,7 @@
 | 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)    | done     | 002           | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3                                                  |
 | 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)            | done     | 002, 002-live | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                                                                   |
 | 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md)  | done     | 002-tool      | `003 - compressed snapshot`; принят через [PR #4](https://github.com/obolibok/filesystem-mcp/pull/4); code review, live и CI PASS |
-| 004      | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md) | active   | 003           | `004 - selected originals bundle`; `codex/004-selected-originals-bundle`; запрос на запуск принят приложением, worktree создан    |
+| 004      | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md) | active   | 003           | `codex/004-selected-originals-bundle`; worktree `025a`; пользователь подтвердил создание задачи и выполнение работы               |
 | 005      | Контролируемое повторение предметного исследования                      | proposed | 004           | Планирование + пользователь                                                                                                       |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -28,9 +28,9 @@
 собирает целые originals в независимые ZIP-части, manifest фиксирует provenance,
 per-file hashes и пропуски. Используется общий jobs/artifacts lifecycle из 003.
 
-Карточка опубликована в main; запрос на запуск отдельной рабочей задачи принят
-приложением. Исполнитель готовит код, локальные проверки и live runbook; целевой
-ChatGPT опыт и интеграция следуют после code review. Данные запуска записаны ниже.
+Карточка опубликована в main; пользователь подтвердил, что задача создана и работа
+идёт. Исполнитель готовит код, локальные проверки и live runbook; целевой ChatGPT
+опыт и интеграция следуют после code review. Данные запуска записаны ниже.
 
 ## Запуск 004, 2026-09-20
 
@@ -42,8 +42,12 @@ effort `xhigh`, проект `SWB RAG Dev`. Приложение создаёт 
 В созданном worktree `025a` независимо проверены точный base и наличие карточки.
 Приложение вернуло pending creation ID
 `client-new-thread:7ba85be7-71af-49fd-b256-75d53aa8eff1`; это ещё не task ID.
-На момент записи запрос принят, worktree готов, фактический task ID/первый ответ
-исполнителя пока не получены. Повторный запрос создания не отправлять.
+При первоначальной записи фактический task ID/первый ответ исполнителя ещё не
+были получены. Позднее пользователь подтвердил создание задачи и выполнение
+работы. В Git независимо видна ветка `codex/004-selected-originals-bundle` в
+worktree `025a`. Инструмент списка задач пока не возвращает её task ID; pending
+ID выше остаётся историей dispatch и не заменяет настоящий task ID. Повторный
+запрос создания не отправлять.
 
 Prompt передаёт разрешение начать реализацию, полный scope карточки, локальные
 проверки и commit/handoff. Центральную доску, live ChatGPT опыт и push/PR/merge
@@ -91,9 +95,12 @@ short TEMP также прошёл: 21000 rows, errors 0, `verified: true`.
 
 Исполнитель: `003 - compressed snapshot`, task
 `01a0be9c-0f01-7c42-8abb-a6ff550e1532`, ветка `codex/003-compressed-snapshot`.
-Три live jobs завершены. При последней сверке пользовательский foreground tunnel
-отвечал; остановка Ctrl+C не подтверждена. Synthetic материалы сохранены локально.
-Runtime интеграционной ветки принят; состояние foreground стенда не менялось при merge.
+Три live jobs завершены. После merge пользователь вручную завершил туннель:
+окно PowerShell с туннелем больше часа оставалось в `stopping`. Остановка
+подтверждена пользователем, штатный graceful shutdown не подтверждён; причина
+зависания не установлена. [Запись инцидента](../testing/003-live-2026-09-20.md).
+Функциональный live PASS сохраняется; пользователь отдельно подтвердил работу 004.
+Synthetic материалы сохранены локально; cleanup после forced termination не проверялся.
 
 ## Запуск 003, 2026-09-20
 
