@@ -300,7 +300,8 @@ Push, PR и merge оставить планированию до отдельн�
   96 829 298 B. High-entropy 300k boundedly отказал без artifacts. Полные числа и
   команды — в [benchmark report](../testing/snapshot-benchmark-2026-09-20.md).
 - Локальные follow-up commits: `009744ee` (runtime hardening), `16021c0c`
-  (regressions и verifier); documentation/handoff фиксируется отдельным commit.
+  (regressions и verifier), `6af551fa` (documentation/evidence), `9dc36647`
+  (старый byte-extraction helper также пропущен через строгий verifier).
 - Live ChatGPT остаётся `pending` до повторного review и совместного запуска по
   [protocol](../testing/snapshot-live.md). Локальные результаты не объявляются live PASS.
 - Состояние локального handoff: `ready for review`; push, PR и merge не выполнялись.
