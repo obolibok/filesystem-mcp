@@ -2,6 +2,12 @@
 
 Date of experiment: 2026-09-19. Task: [002](../tasks/002-originals-delivery.md).
 
+> [!NOTE]
+> This document preserves the historical `resources/read` experiment and its
+> measurements. The current harness and accepted ChatGPT route use `get_file`;
+> see [tool originals delivery](tool-originals-delivery.md) for the current
+> contract, commands, and live evidence.
+
 ## Result in one sentence
 
 The guarded server leg is `PASS` for a synthetic ZIP and a real BIFF8/OLE `.xls`,
@@ -157,13 +163,17 @@ node scripts/originals-delivery/local-mcp-check.mjs `
   --delivery-dir .tmp/originals-delivery/delivered
 ```
 
-`local-mcp-check.mjs` starts the built server over real stdio with `--read-only`, an explicit
-`--root-boundary`, and a 1 MiB file limit. It calls `resources/read`, decodes the returned blob,
-writes only the received bytes to the delivery directory, then calculates source/delivered/repeat
-hashes in Node. All reads explicitly bypass the SDK resource cache. Negative controls accept
-only the expected protocol error code and reason; a missing fixture, transport failure, or
-successful text response cannot pass as a size/access rejection. The destination is checked
-against the canonical source path, including Windows aliases, before creating output.
+At the recorded 2026-09-19 task commit, `local-mcp-check.mjs` started the built server over real
+stdio with `--read-only`, an explicit `--root-boundary`, and a 1 MiB file limit. It called
+`resources/read`, decoded the returned blob, wrote only the received bytes to the delivery
+directory, then calculated source/delivered/repeat hashes in Node. Those reads explicitly
+bypassed the SDK resource cache. The current script has since moved to `get_file`; running the
+commands above from current `main` exercises the new route documented in
+[tool originals delivery](tool-originals-delivery.md), not this historical resource route.
+Negative controls in the recorded run accepted only the expected protocol error code and reason;
+a missing fixture, transport failure, or successful text response could not pass as a size/access
+rejection. The destination was checked against the canonical source path, including Windows
+aliases, before creating output.
 `verify_delivered.py` receives only the source manifest and delivery directory;
 it calculates the delivered hashes again in Python and opens the delivered ZIP/XLS.
 

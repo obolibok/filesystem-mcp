@@ -4,16 +4,16 @@
 Это единая доска интеграционного статуса. Coding-чаты записывают свою работу в
 карточках задач, а планирование обновляет эту таблицу после review/интеграции.
 
-| ID       | Работа                                                               | Статус   | Зависит от    | Назначение                                                                                  |
-| -------- | -------------------------------------------------------------------- | -------- | ------------- | ------------------------------------------------------------------------------------------- |
-| 000      | Подготовка контекста и правил работы                                 | done     | —             | Планирующий чат; docs checkpoint                                                            |
-| 001      | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)       | done     | 000           | `001 - baseline defects fix`; `codex/001-baseline-defects`                                  |
-| 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)       | done     | 001           | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live       |
-| 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md) | review   | 002           | `002-live - Windows and ChatGPT validation`; старый маршрут ZIP FAIL; продолжение в 002-tool |
+| ID       | Работа                                                               | Статус   | Зависит от    | Назначение                                                                                                |
+| -------- | -------------------------------------------------------------------- | -------- | ------------- | --------------------------------------------------------------------------------------------------------- |
+| 000      | Подготовка контекста и правил работы                                 | done     | —             | Планирующий чат; docs checkpoint                                                                          |
+| 001      | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)       | done     | 000           | `001 - baseline defects fix`; `codex/001-baseline-defects`                                                |
+| 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)       | done     | 001           | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live                     |
+| 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md) | review   | 002           | `002-live - Windows and ChatGPT validation`; старый маршрут ZIP FAIL; продолжение в 002-tool              |
 | 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)         | review   | 002, 002-live | `002 - originals delivery experiment`; `codex/002-tool-delivery`; локальное review PASS; не интегрирована |
-| 003      | Потоковый snapshot каталога                                          | proposed | 002-tool      | Ожидает интеграцию 002-tool и постановку задачи                                            |
-| 004      | Bundle и manifest                                                    | proposed | 002-tool, 003 | Ожидает подтверждённую доставку и snapshot                                                  |
-| 005      | Контролируемое повторение предметного исследования                   | proposed | 004           | Планирование + пользователь                                                                 |
+| 003      | Потоковый snapshot каталога                                          | proposed | 002-tool      | Ожидает интеграцию 002-tool и постановку задачи                                                           |
+| 004      | Bundle и manifest                                                    | proposed | 002-tool, 003 | Ожидает подтверждённую доставку и snapshot                                                                |
+| 005      | Контролируемое повторение предметного исследования                   | proposed | 004           | Планирование + пользователь                                                                               |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
 готовы; `active` — назначен исполнитель; `review` — есть проверяемый результат;
