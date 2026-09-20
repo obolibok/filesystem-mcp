@@ -306,3 +306,38 @@ Push, PR и merge оставить планированию до отдельн�
 - Live ChatGPT остаётся `pending` до повторного review и совместного запуска по
   [protocol](../testing/snapshot-live.md). Локальные результаты не объявляются live PASS.
 - Состояние локального handoff: `ready for review`; push, PR и merge не выполнялись.
+
+### Доработка после повторного review `aee444c3`, 2026-09-20
+
+- В ветку обычным merge включён точный локальный `main` commit `aee444c3`; merge
+  commit `fe7d0939`. Центральная доска вручную не менялась.
+- R8: ошибка удаления expired artifact при startup теперь логируется отдельно для
+  job и не отклоняет `initialize()`. Неудалённый файл остаётся в quota accounting;
+  cached initialization остаётся успешно завершённой, а следующая scheduled/manual
+  cleanup повторяет сериализованное удаление и освобождает charge ровно один раз.
+  Ошибки создания, canonical-проверки и чтения корня scratch по-прежнему фатальны.
+- Fetch проверяет истёкший TTL до занятия read slot и не читает retained bytes и не
+  превращает пользовательский `NOT_FOUND` в ошибку фонового удаления. Завершение
+  уже начатого до TTL чтения сохраняет прежнюю cleanup-on-release семантику.
+- Regression параметризован для одноразовых `EACCES` и `EPERM`: два вызова
+  `initialize()` успешны без повторной загрузки metadata, expired artifact остаётся
+  недоступным и charged, обычная новая job проходит, quota probe блокируется, затем
+  cleanup удаляет artifact, освобождает квоту, повторный probe проходит и `close()`
+  завершается. Отдельный negative test сохраняет fatal startup для scratch-файла.
+- Verifier теперь сравнивает CSV header в callback parser до первой data row.
+  Correct empty snapshot принимается, empty snapshot с неверным header отклоняется.
+  Response-loss recovery и отдельный настоящий SDK call timeout оба переиспользуют
+  принятую job по idempotency key и ожидают её terminal `completed` state.
+- Проверки: targeted snapshot suite — 22/22 pass; `npm run check:static` — PASS;
+  полный `npm run check` — 380 tests, 373 pass, 0 fail, 7 прежних Windows skips.
+  Из-за известного host-сбоя `tsx/uv_os_get_passwd ENOMEM` проверки выполнялись с
+  временным fallback только в ignored dependency; после прогонов dependency
+  восстановлена byte-for-byte.
+- Из-за изменения verifier повторены pipeline benchmarks. 100 000 rows:
+  15 788 947 raw B, 1 698 026 ZIP B, 4,234 s, peak RSS 120 557 568 B; 3 000 000
+  rows: 478 889 517 raw B, 50 373 149 ZIP B, 11 parts, 126,193 s, peak RSS
+  236 859 392 B, heap 76 497 952 B, scratch 96 691 088 B. Оба результата
+  `verified: true`; unchanged walk/poor-compression профили не перезапускались.
+- Runtime/tests commit: `df89914f`. Live ChatGPT остаётся `pending` до принятия
+  повторного review и совместного synthetic запуска. Состояние локального handoff:
+  `ready for review`; push, PR и merge в main не выполнялись.
