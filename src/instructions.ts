@@ -5,6 +5,7 @@ import {
 } from './core/util.js';
 import {
   FIND_FILES,
+  GET_FILE,
   LIST,
   LIST_ROOTS,
   MUTATING_TOOL_NAMES,
@@ -17,7 +18,7 @@ function buildToolsOverview(readOnly: boolean): string {
   const rows: [string, string[]][] = [
     ['Navigate', [LIST_ROOTS.name, LIST.name, FIND_FILES.name]],
     ['Inspect', [STAT.name, SEARCH_TEXT.name]],
-    ['Read', [READ.name]],
+    ['Read', [READ.name, GET_FILE.name]],
   ];
 
   // Under --read-only the mutating tools are never registered, so advertising
@@ -68,7 +69,8 @@ export function buildSectionsRecord(readOnly: boolean): Record<string, string> {
       'legacy_roots: Legacy clients may additionally seed roots through the deprecated roots/list flow.',
       'sensitive_paths: Sensitive file paths (.env, *.pem, *id_rsa*) are denied by default.',
       `enforced_limits: max file size ${maxFileMb} MB, file search cap ${MAX_SEARCH_RESULTS} results, content search cap ${DEFAULT_SEARCH_CONTENT_RESULTS} matches.`,
-      'ephemeral_results: When a result carries a resource_link or a resourceUri (in structuredContent or _meta), call resources/read immediately — cached results are ephemeral and expire after ~60 seconds, eviction, or restart.',
+      `${GET_FILE.name}: Returns one byte-exact, size-limited file as an MCP embedded resource plus a resource_link; the receiving host decides whether to materialize it as a file.`,
+      `ephemeral_results: When a result carries only a resource_link or resourceUri (in structuredContent or _meta), call resources/read immediately — cached results are ephemeral and expire after ~60 seconds, eviction, or restart. ${GET_FILE.name} already embeds the file bytes in its tool result and needs no resources/read follow-up.`,
       'pagination: nextCursor appears in the result text and in _meta, backed by a snapshot on the same ~60s clock. Page through promptly; if a cursor is rejected, start again without one. resourceUri appears on the first page only.',
       '```',
     ].join('\n'),

@@ -23,8 +23,9 @@
   handoff и приёмка.
 - [Windows](development/windows.md): воспроизводимая установка и локальная проверка.
 - [Originals delivery](testing/originals-delivery.md): проверенный локальный стенд,
-  доказательства и ограничения; [002-live](tasks/002-live-windows-chatgpt.md) —
-  последовательное сопровождение проверки Windows/ChatGPT с пользователем.
+  доказательства и ограничения; [tool delivery](testing/tool-originals-delivery.md) —
+  фактически проверенный маршрут `get_file` в ChatGPT; [002-live](tasks/002-live-windows-chatgpt.md) —
+  исторический отрицательный опыт с `resources/read`.
 - [Архитектура, форматы и лимиты](reference/architecture.md): карта владельцев кода
   и ограничения исходной версии.
 - [Baseline от 19 сентября](testing/baseline-2026-09-19.md): проверенные наблюдения,

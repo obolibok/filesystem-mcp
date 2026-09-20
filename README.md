@@ -228,9 +228,10 @@ All tools are scoped to the configured roots. Call `list_roots` first to discove
 
 #### Read
 
-| Tool   | Description                                                                          |
-| :----- | :----------------------------------------------------------------------------------- |
-| `read` | Read a text file. Supports head/tail and line ranges. Accepts `paths[]` for batches. |
+| Tool       | Description                                                                                                  |
+| :--------- | :----------------------------------------------------------------------------------------------------------- |
+| `read`     | Read a text file. Supports head/tail and line ranges. Accepts `paths[]` for batches.                         |
+| `get_file` | Return one original file as a byte-exact MCP embedded resource plus a resource link, subject to read limits. |
 
 #### Write
 

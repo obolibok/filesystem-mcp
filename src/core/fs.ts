@@ -383,7 +383,7 @@ export class GuardedFileSystem {
   async readRaw(
     filePath: string,
     options?: { signal?: AbortSignal },
-  ): Promise<{ content: Buffer; mimeType: string; isBinary: boolean }> {
+  ): Promise<{ content: Buffer; mimeType: string; isBinary: boolean; validPath: string }> {
     const validPath = await this.pathGuard.validateExistingPath(filePath);
     const stats = await withAbort(fsStat(validPath), options?.signal);
     assertFileStats(filePath, stats);
@@ -399,6 +399,7 @@ export class GuardedFileSystem {
     return {
       content,
       mimeType: mimeInfo.mimeType,
+      validPath,
       // MIME kind and wire representation are related but not identical: SVG
       // is an image MIME whose bytes are searchable UTF-8 text, while a .txt
       // file may contain binary or an unsupported UTF-16 encoding. Known

@@ -1,9 +1,4 @@
-import {
-  Client,
-  InMemoryTransport,
-  ProtocolError,
-  ProtocolErrorCode,
-} from '@modelcontextprotocol/client';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { McpServer } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
@@ -12,34 +7,39 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 import { test } from 'node:test';
 
-import { checkRejection, prepareDeliveryDirectory, readBlob } from './local-mcp-check.mjs';
+import { checkRejection, prepareDeliveryDirectory, readEmbeddedFile } from './local-mcp-check.mjs';
 
-test('repeat reads reach the MCP server despite a fresh SDK resource cache', async () => {
+test('repeat get_file calls reach the MCP server and return fresh embedded bytes', async () => {
   const client = new Client(
     { name: 'delivery-regression', version: '1.0.0' },
-    { versionNegotiation: { mode: 'auto' }, defaultCacheTtlMs: 60_000 },
+    { versionNegotiation: { mode: 'auto' } },
   );
-  const server = new McpServer({ name: 'cached-fixture', version: '1.0.0' });
+  const server = new McpServer({ name: 'tool-fixture', version: '1.0.0' });
   const file = '/synthetic/original.bin';
   const uri = `filesystem-mcp://file/${file}`;
   let reads = 0;
-  server.registerResource(
-    'original',
-    uri,
-    { cacheHint: { ttlMs: 60_000, cacheScope: 'public' } },
-    () => ({
-      contents: [{ uri, blob: Buffer.from(String(++reads)).toString('base64') }],
-    }),
-  );
+  server.registerTool('get_file', { description: 'fixture', inputSchema: {} }, () => {
+    const bytes = Buffer.from(String(++reads));
+    const blob = bytes.toString('base64');
+    return {
+      content: [
+        { type: 'resource', resource: { uri, blob } },
+        { type: 'resource_link', uri, name: 'original.bin', size: bytes.length },
+      ],
+      _meta: {
+        size: bytes.length,
+        encodedSize: blob.length,
+        resourceUri: uri,
+        delivery: 'mcp-embedded-resource',
+      },
+    };
+  });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   try {
     await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
-    await client.readResource({ uri });
-    await client.readResource({ uri });
-    assert.equal(reads, 1, 'the real SDK must first demonstrate a fresh cache hit');
-    assert.equal((await readBlob(client, file)).bytes.toString(), '2');
-    assert.equal((await readBlob(client, file)).bytes.toString(), '3');
-    assert.equal(reads, 3);
+    assert.equal((await readEmbeddedFile(client, file)).bytes.toString(), '1');
+    assert.equal((await readEmbeddedFile(client, file)).bytes.toString(), '2');
+    assert.equal(reads, 2);
   } finally {
     await client.close();
     await server.close();
@@ -47,35 +47,52 @@ test('repeat reads reach the MCP server despite a fresh SDK resource cache', asy
 });
 
 test('negative controls accept only the expected protocol rejection', async () => {
-  const tooLarge = 'File exceeds size limit (1048577 > 1048576 bytes)';
-  const outside = 'Outside allowed directories.';
-  for (const expected of [tooLarge, outside]) {
-    const rejectedClient = (error) => ({
-      readResource: async () => {
-        throw error;
-      },
+  const cases = [
+    ['TOO_LARGE', 'File exceeds size limit (1048577 > 1048576 bytes)'],
+    ['ACCESS_DENIED', 'Outside allowed directories.'],
+  ];
+  for (const [expectedCode, expectedMessage] of cases) {
+    const rejectedClient = (result) => ({
+      callTool: async () => result,
     });
-    const expectedError = new ProtocolError(ProtocolErrorCode.InvalidParams, expected);
+    const expectedResult = {
+      isError: true,
+      content: [{ type: 'text', text: `${expectedCode}: ${expectedMessage}` }],
+    };
     assert.equal(
-      (await checkRejection(rejectedClient(expectedError), '/file.bin', expected)).status,
+      (
+        await checkRejection(
+          rejectedClient(expectedResult),
+          '/file.bin',
+          expectedCode,
+          expectedMessage,
+        )
+      ).status,
       'PASS',
     );
     for (const unexpected of [
-      new ProtocolError(ProtocolErrorCode.InvalidParams, 'File not found'),
-      new ProtocolError(ProtocolErrorCode.InternalError, expected),
-      new Error('Connection closed'),
-      new assert.AssertionError({ message: 'Expected a blob' }),
+      { isError: true, content: [{ type: 'text', text: `NOT_FOUND: ${expectedMessage}` }] },
+      { isError: true, content: [{ type: 'text', text: `${expectedCode}: other` }] },
+      { content: [{ type: 'text', text: `${expectedCode}: ${expectedMessage}` }] },
+      {
+        isError: true,
+        content: [
+          { type: 'text', text: `${expectedCode}: ${expectedMessage}` },
+          { type: 'resource', resource: { uri: '/file.bin', blob: 'Ynl0ZXM=' } },
+        ],
+      },
     ]) {
       assert.equal(
-        (await checkRejection(rejectedClient(unexpected), '/file.bin', expected)).status,
+        (
+          await checkRejection(
+            rejectedClient(unexpected),
+            '/file.bin',
+            expectedCode,
+            expectedMessage,
+          )
+        ).status,
         'FAIL',
       );
-    }
-    for (const content of [{ text: 'read succeeded' }, { blob: 'Ynl0ZXM=' }]) {
-      const client = {
-        readResource: async () => ({ contents: [{ uri: '/file.bin', ...content }] }),
-      };
-      assert.equal((await checkRejection(client, '/file.bin', expected)).status, 'FAIL');
     }
   }
 });

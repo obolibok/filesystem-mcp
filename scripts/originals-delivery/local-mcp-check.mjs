@@ -1,4 +1,4 @@
-import { Client, ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/client';
+import { Client } from '@modelcontextprotocol/client';
 import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 import assert from 'node:assert/strict';
@@ -36,11 +36,6 @@ function sha256(data) {
   return createHash('sha256').update(data).digest('hex');
 }
 
-function fileResourceUri(path) {
-  const posix = path.replaceAll('\\', '/');
-  return `filesystem-mcp://file/${encodeURIComponent(posix).replaceAll('%2F', '/')}`;
-}
-
 function errorRecord(error) {
   return {
     name: error instanceof Error ? error.name : typeof error,
@@ -49,19 +44,35 @@ function errorRecord(error) {
   };
 }
 
-export async function readBlob(client, filePath) {
+export async function readEmbeddedFile(client, filePath) {
   const started = performance.now();
-  const response = await client.readResource(
-    { uri: fileResourceUri(filePath) },
-    { cacheMode: 'bypass' },
-  );
+  const response = await client.callTool({ name: 'get_file', arguments: { path: filePath } });
   const elapsedMs = performance.now() - started;
-  assert.equal(response.contents.length, 1);
-  const [content] = response.contents;
-  assert.ok(content && 'blob' in content, `${filePath} did not arrive as a binary blob`);
+  assert.notEqual(response.isError, true, `${filePath} get_file returned an error`);
+  const content = response.content.find((block) => block.type === 'resource');
+  assert.ok(content && 'resource' in content, `${filePath} did not arrive as an embedded resource`);
+  assert.ok('blob' in content.resource, `${filePath} embedded resource did not contain bytes`);
+  const link = response.content.find((block) => block.type === 'resource_link');
+  assert.ok(link && 'uri' in link, `${filePath} did not include a resource link`);
+  assert.equal(link.uri, content.resource.uri);
+  const bytes = Buffer.from(content.resource.blob, 'base64');
+  assert.equal(
+    bytes.toString('base64'),
+    content.resource.blob,
+    `${filePath} blob is not canonical base64`,
+  );
+  assert.equal(link.name, basename(filePath));
+  assert.equal(link.mimeType, content.resource.mimeType);
+  assert.equal(link.size, bytes.length);
+  assert.equal(response._meta?.size, bytes.length);
+  assert.equal(response._meta?.encodedSize, content.resource.blob.length);
+  assert.equal(response._meta?.encodedSize, 4 * Math.ceil(bytes.length / 3));
+  assert.equal(response._meta?.resourceUri, content.resource.uri);
+  assert.equal(response._meta?.delivery, 'mcp-embedded-resource');
   return {
-    bytes: Buffer.from(content.blob, 'base64'),
-    mimeType: content.mimeType ?? 'application/octet-stream',
+    bytes,
+    mimeType: content.resource.mimeType ?? 'application/octet-stream',
+    encodedSize: content.resource.blob.length,
     elapsedMs: Number(elapsedMs.toFixed(1)),
   };
 }
@@ -97,18 +108,27 @@ export async function prepareDeliveryDirectory(source, destination) {
   return deliveryDir;
 }
 
-export async function checkRejection(client, filePath, expectedMessage) {
+export async function checkRejection(client, filePath, expectedCode, expectedMessage) {
   try {
-    // A successful text response is still an unauthorized read, not a blob
-    // decoding failure that can stand in for a server rejection.
-    await client.readResource({ uri: fileResourceUri(filePath) }, { cacheMode: 'bypass' });
-    return { status: 'FAIL', error: 'unexpected success' };
-  } catch (error) {
+    const response = await client.callTool({
+      name: 'get_file',
+      arguments: { path: filePath },
+    });
+    const text = response.content.find((block) => block.type === 'text')?.text ?? '';
+    const leakedResource = response.content.some(
+      (block) => block.type === 'resource' || block.type === 'resource_link',
+    );
     const matches =
-      error instanceof ProtocolError &&
-      error.code === ProtocolErrorCode.InvalidParams &&
-      error.message.includes(expectedMessage);
-    return { observed: errorRecord(error), status: matches ? 'PASS' : 'FAIL' };
+      response.isError === true &&
+      text.includes(`${expectedCode}:`) &&
+      text.includes(expectedMessage) &&
+      !leakedResource;
+    return {
+      observed: { isError: response.isError === true, text, leakedResource },
+      status: matches ? 'PASS' : 'FAIL',
+    };
+  } catch (error) {
+    return { observed: errorRecord(error), status: 'FAIL' };
   }
 }
 
@@ -143,12 +163,12 @@ async function main() {
   const outsideRoot = await mkdtemp(join(dirname(fixtureRoot), 'outside-root-'));
 
   const report = {
-    schemaVersion: 1,
-    route: 'Node client -> stdio MCP -> resources/read blob -> delivery directory',
+    schemaVersion: 2,
+    route: 'Node client -> stdio MCP -> get_file embedded resource -> delivery directory',
     fixtureRoot: '<scratch>/source',
     deliveryDir: '<scratch>/delivered',
     maxFileSizeBytes: options.maxFileSize,
-    resourceCacheMode: 'bypass',
+    toolResultCache: 'not applicable; each repeat is a new tools/call request',
     originals: {},
     controls: {},
   };
@@ -161,6 +181,7 @@ async function main() {
     assert.deepEqual(report.readOnlyToolNames, [
       'diff',
       'find_files',
+      'get_file',
       'list',
       'list_roots',
       'read',
@@ -171,11 +192,11 @@ async function main() {
     for (const [kind, record] of Object.entries(manifest.originals)) {
       const sourcePath = join(fixtureRoot, record.file);
       const sourceBytes = await readFile(sourcePath);
-      const first = await readBlob(client, sourcePath);
+      const first = await readEmbeddedFile(client, sourcePath);
       const deliveredPath = join(deliveryDir, record.file);
       await writeFile(deliveredPath, first.bytes);
       const deliveredBytes = await readFile(deliveredPath);
-      const second = await readBlob(client, sourcePath);
+      const second = await readEmbeddedFile(client, sourcePath);
       const sourceHash = sha256(sourceBytes);
       const deliveredHash = sha256(deliveredBytes);
       const repeatHash = sha256(second.bytes);
@@ -186,10 +207,12 @@ async function main() {
         file: record.file,
         mimeType: first.mimeType,
         sourceSize: sourceBytes.length,
+        firstEncodedSize: first.encodedSize,
         deliveredSize: deliveredBytes.length,
         sourceSha256Node: sourceHash,
         deliveredSha256Node: deliveredHash,
         repeatedSha256Node: repeatHash,
+        secondEncodedSize: second.encodedSize,
         firstReadMs: first.elapsedMs,
         secondReadMs: second.elapsedMs,
         status: 'PASS',
@@ -197,11 +220,12 @@ async function main() {
     }
 
     const atLimit = manifest.limitFixtures.atLimit;
-    const atLimitRead = await readBlob(client, join(fixtureRoot, atLimit.file));
+    const atLimitRead = await readEmbeddedFile(client, join(fixtureRoot, atLimit.file));
     assert.equal(atLimitRead.bytes.length, options.maxFileSize);
     assert.equal(sha256(atLimitRead.bytes), atLimit.sha256);
     report.controls.atLimit = {
       size: atLimitRead.bytes.length,
+      encodedSize: atLimitRead.encodedSize,
       elapsedMs: atLimitRead.elapsedMs,
       status: 'PASS',
     };
@@ -209,10 +233,11 @@ async function main() {
     const overLimit = manifest.limitFixtures.overLimit;
     report.controls.overLimit = {
       size: overLimit.size,
-      expected: 'resource read rejected above FS_MAX_FILE_SIZE',
+      expected: 'get_file rejected above FS_MAX_FILE_SIZE without resource content',
       ...(await checkRejection(
         client,
         join(fixtureRoot, overLimit.file),
+        'TOO_LARGE',
         `File exceeds size limit (${overLimit.size} > ${options.maxFileSize} bytes)`,
       )),
     };
@@ -220,8 +245,13 @@ async function main() {
     const outsidePath = join(outsideRoot, 'not-allowed.bin');
     await writeFile(outsidePath, Buffer.from('OUTSIDE ROOT\n', 'utf8'));
     report.controls.outsideRoot = {
-      expected: 'resource read rejected outside synthetic root',
-      ...(await checkRejection(client, outsidePath, 'Outside allowed directories.')),
+      expected: 'get_file rejected outside synthetic root without resource content',
+      ...(await checkRejection(
+        client,
+        outsidePath,
+        'ACCESS_DENIED',
+        'Outside allowed directories.',
+      )),
     };
   } finally {
     const cleanupErrors = [];

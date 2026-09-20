@@ -95,7 +95,7 @@ New-Item -ItemType Directory -Path $fixturePath | Out-Null
 node dist/index.js --read-only --root-boundary $fixturePath $fixturePath --print-config --json
 ```
 
-Ожидаются `transport: stdio`, `readOnly: true`, roots этого fixture, семь tools и
+Ожидаются `transport: stdio`, `readOnly: true`, roots этого fixture, восемь tools и
 лимит полного чтения 10 MiB. Если каталог имеет alias через junction/drive mapping или
 Windows 8.3 name, сервер может показать оба пути. Они не делают omitted `path`
 неоднозначным, пока разрешаются в одну location.

@@ -109,6 +109,7 @@ const EXT_MAP: Record<string, { mimeType: string; kind: MimeKind }> = {
   xz: { mimeType: 'application/x-xz', kind: 'binary' },
 
   // Other binary formats
+  xls: { mimeType: 'application/vnd.ms-excel', kind: 'binary' },
   wasm: { mimeType: 'application/wasm', kind: 'binary' },
   so: { mimeType: 'application/octet-stream', kind: 'binary' },
   dylib: { mimeType: 'application/octet-stream', kind: 'binary' },
@@ -140,7 +141,6 @@ const EXTRA_BINARY_EXTENSIONS = [
   'woff2',
   'doc',
   'docx',
-  'xls',
   'xlsx',
   'ppt',
   'pptx',

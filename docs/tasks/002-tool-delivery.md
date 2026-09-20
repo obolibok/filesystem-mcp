@@ -82,20 +82,20 @@ URI, blob/base64 в сообщении модели, hash от сервера и
 
 ## Acceptance
 
-- [ ] Wire contract и источники описаны; SDK-допустимость и фактическая поддержка
+- [x] Wire contract и источники описаны; SDK-допустимость и фактическая поддержка
       ChatGPT различаются. Неизвестные поля не выданы за документированный API.
-- [ ] Tool читает один guarded файл, сохраняет bytes и действует в read-only;
+- [x] Tool читает один guarded файл, сохраняет bytes и действует в read-only;
       прежние text/media/resource сценарии сохранены.
-- [ ] Содержательные tests проверяют binary bytes, outside-root/traversal,
+- [x] Содержательные tests проверяют binary bytes, outside-root/traversal,
       canonical paths/symlink containment, превышение лимита и cancellation.
       Неожиданная ошибка не засчитывается как ожидаемый отказ ограничения.
-- [ ] ChatGPT получил ZIP, сам вычислил hash и открыл entries; затем получил XLS
+- [x] ChatGPT получил ZIP, сам вычислил hash и открыл entries; затем получил XLS
       и прочитал контрольные cells. Локальный SDK smoke не заменяет эту проверку.
-- [ ] Повторная доставка проверена без кэшированной подмены и ручного переноса;
+- [x] Повторная доставка проверена без кэшированной подмены и ручного переноса;
       фактический build в tunnel profile установлен. Непроверенные форматы отмечены.
-- [ ] При невозможности доставки зафиксирован точный FAIL/BLOCKED; невыполненные
+- [x] При невозможности доставки зафиксирован точный FAIL/BLOCKED; невыполненные
       ZIP/XLS критерии остаются невыполненными, добавленный tool не назван решением.
-- [ ] Regression tests и `npm run check` проходят; среда и skips записаны.
+- [x] Regression tests и `npm run check` проходят; среда и skips записаны.
       Reference, протокол и Work record обновлены; есть локальный commit и handoff
       с branch/base/head. Секреты и рабочие документы не попали в tracked изменения.
 
@@ -118,11 +118,40 @@ URI, blob/base64 в сообщении модели, hash от сервера и
 
 ## Work record
 
-Не начато. Постановка одобрена пользователем 2026-09-20; исполнитель не назначен.
+Готово к review 2026-09-20.
 
-- Base/branch и проверяемая сборка:
-- Output contract, источники и гипотезы:
-- Изменения и сохранённые ограничения:
-- Локальные проверки, full check и skips:
-- ChatGPT ZIP/XLS/повтор: PASS/FAIL/BLOCKED/не проверялось, доказательства:
-- Состояние стенда, ограничения, итоговый commit и handoff:
+- Base/branch и проверяемая сборка: ветка `codex/002-tool-delivery` синхронизирована
+  с принятым локальным `main` `84eb8221ab405d2201208dcfe4e771bdab994100` без
+  reset/clean. Проверялись собранный `dist/index.js` этой ветки и synthetic root;
+  старый профиль из worktree `c004` сохранён с backup и направлен на эту сборку.
+- Output contract, источники и гипотезы: выбран стандартный MCP `CallToolResult`
+  с embedded binary resource и matching `resource_link`; metadata остаётся в `_meta`.
+  Установленный SDK 2.0.0 допускает оба content block, а OpenAI File APIs не были
+  ошибочно использованы как server output schema. До live run материализация была
+  гипотезой; контракт и ссылки записаны в
+  [tool-originals-delivery.md](../testing/tool-originals-delivery.md).
+- Изменения и сохранённые ограничения: добавлен один `get_file`, который вызывает
+  `GuardedFileSystem.readRaw` с request signal, использует validated canonical path
+  и общий URI helper. Сохранены PathGuard/root/sensitive policy, raw size cap,
+  read-only gate и прежние read/resources/media сценарии. Raw и base64 sizes
+  записываются раздельно; `.xls` получает `application/vnd.ms-excel`. Snapshot,
+  bundle, OAuth, публичный URL и artifact service не добавлены.
+- Локальные проверки, full check и skips: targeted regressions — 8/8 PASS;
+  реальный stdio harness и независимый Python `zipfile`/`xlrd` verifier — PASS для
+  ZIP/XLS/repeat, exact 1 MiB, over-limit и outside-root. `npm run check` — PASS:
+  358 tests, 351 pass, 0 fail, 7 skip. Skips — прежние POSIX inode/mode/0222 и
+  недоступные в отдельных suites Windows symlink cases; `GET-FILE-001..005`, включая
+  Windows junction containment, прошли без skip.
+- ChatGPT ZIP/XLS/повтор: `PASS`. ChatGPT получил материализованный ZIP 703 B,
+  сам вычислил `4e729b…fe02`, проверил CRC и открыл три entries. Первый permission
+  round-trip вызвал tool дважды и дал два одинаковых file objects, подтвердив repeat
+  без ручного upload. Затем два отдельных вызова материализовали настоящий BIFF8 XLS
+  5,632 B; оба runtime hashes — `db5c5c…fc91`, открыты два листа и все семь cells.
+  `manifest.json`, server hash, URL и base64 в ответе не использовались.
+- Состояние стенда, ограничения, итоговый commit и handoff: Tunnel client 0.0.14
+  прошёл `doctor` и `/readyz`; ChatGPT после refresh увидел `get_file`. В Git нет
+  ключа, tunnel ID, абсолютных пользовательских путей, бинарных fixtures или live
+  screenshots. Profile и backup остаются в ignored `.tmp` исходного worktree;
+  daemon остановлен пользователем после проверки. Target limit выше малых ZIP/XLS,
+  остальные форматы и lifecycle не проверялись. Итоговый commit — commit с этой
+  записью; hash передаётся в handoff, push/merge не выполняются.
