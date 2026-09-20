@@ -358,3 +358,13 @@ Push, PR и merge оставить планированию до отдельн�
   acceptance выполнены; пользователь разрешил push/PR/merge. Интеграционная ветка
   `codex/003-integration` объединяет принятый код и planning evidence; runtime
   совпадает с проверенным head. Итог CI/merge фиксирует центральная доска.
+
+### Исправление Windows CI при интеграции, 2026-09-20
+
+- Первый PR CI выявил ошибочную классификацию short TEMP как symlink/junction.
+  Исправление не меняет CSV/ZIP producer или delivery: manager проверяет ссылки
+  в scratch/ancestors и использует canonical scratch для I/O и exclusion.
+- Пять новых regression cases: до исправления 2 PASS / 3 FAIL, после 5 PASS /
+  0 FAIL / 0 skips. Настоящие 8.3 aliases работают; scratch не попадает в snapshot;
+  реальные leaf/ancestor junction отвергаются до mkdir.
+- Подробности и CI evidence: [протокол интеграции](../testing/003-integration-2026-09-20.md).

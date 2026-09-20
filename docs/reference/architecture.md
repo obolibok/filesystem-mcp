@@ -126,6 +126,10 @@ Snapshot не является атомарным filesystem snapshot: исче�
 из уже скомпилированных rules; nested patterns и negation сохраняются. Walk depth —
 жёсткий policy cap и приводит к `failed`, а не к partial completed результату.
 
+Scratch и его ancestors не могут быть symlink/junction; проверка выполняется
+до создания storage. Windows 8.3 spelling разрешён, после проверки manager
+использует canonical scratch для I/O, cleanup и исключения из source traversal.
+
 Source I/O остаётся в PathGuard/GuardedFileSystem. Scratch не становится source root,
 caller не выбирает output path, а status/cancel/fetch каждый раз проверяют текущий
 доступ к canonical source root. Одна HTTP credential остаётся одним endpoint scope;

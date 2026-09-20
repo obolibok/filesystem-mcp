@@ -1,8 +1,19 @@
 import type { CallToolResult } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -16,6 +27,7 @@ import { GuardedFileSystem } from '../src/core/fs.js';
 import { ArtifactJobManager, fingerprintJobInput } from '../src/core/job-manager.js';
 import type { StoredJob } from '../src/core/job-types.js';
 import { emptySnapshotCounters } from '../src/core/job-types.js';
+import { isSamePath } from '../src/core/path-utils.js';
 import { getSnapshotConfig } from '../src/core/snapshot-config.js';
 import type { SnapshotRecord } from '../src/core/snapshot-pipeline.js';
 import {
@@ -52,6 +64,24 @@ function embeddedBytes(result: CallToolResult): Buffer {
   const block = result.content.find((item) => item.type === 'resource');
   assert(block?.type === 'resource' && 'blob' in block.resource);
   return Buffer.from(block.resource.blob, 'base64');
+}
+
+function windowsShortPath(path: string): string {
+  return execFileSync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      '$ErrorActionPreference = "Stop"; (New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:FSMCP_SHORT_PATH_TEST).ShortPath',
+    ],
+    {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 10_000,
+      env: { ...process.env, FSMCP_SHORT_PATH_TEST: path },
+    },
+  ).trim();
 }
 
 async function unzipSingle(bytes: Buffer): Promise<{ name: string; bytes: Buffer }> {
@@ -1186,6 +1216,130 @@ describe('snapshot jobs and artifacts', () => {
       }
     }
   });
+
+  for (const spelling of ['canonical', 'short-scratch', 'short-ancestor'] as const) {
+    it(
+      `keeps ${spelling} scratch outside snapshot sources and results`,
+      {
+        skip: spelling !== 'canonical' && process.platform !== 'win32',
+      },
+      async (t) => {
+        const container = await realpath(await createTestRoot());
+        let manager: ArtifactJobManager | undefined;
+        try {
+          const source = join(container, 'snapshot parent long name');
+          const scratch = join(source, 'snapshot scratch long name');
+          await mkdir(source);
+          await writeTestFile(source, 'kept.txt', 'kept');
+          let configuredScratch = scratch;
+          if (spelling !== 'canonical') {
+            const aliasTarget = spelling === 'short-scratch' ? scratch : source;
+            await mkdir(aliasTarget, { recursive: true });
+            const shortPath = windowsShortPath(aliasTarget);
+            if (isSamePath(shortPath, aliasTarget)) {
+              t.skip('Windows filesystem does not provide an 8.3 short name for this fixture');
+              return;
+            }
+            assert(isSamePath(await realpath(shortPath), aliasTarget));
+            configuredScratch =
+              spelling === 'short-scratch'
+                ? shortPath
+                : join(shortPath, 'snapshot scratch long name');
+          }
+          const guard = await makeGuard([source]);
+          const fs = new GuardedFileSystem(guard);
+          manager = new ArtifactJobManager({
+            ...getSnapshotConfig(),
+            scratchDirectory: configuredScratch,
+            ephemeralScratch: false,
+          });
+          await manager.initialize();
+          const probeId = randomUUID();
+          assert.equal(manager.jobDirectory(probeId), join(scratch, probeId));
+          await manager.assertScratchSeparated(source);
+          await assert.rejects(
+            manager.assertScratchSeparated(scratch),
+            /cannot be the scratch directory/u,
+          );
+          await assert.rejects(
+            manager.assertScratchSeparated(join(scratch, 'nested')),
+            /cannot be the scratch directory/u,
+          );
+          assert.equal(manager.isScratchPath(scratch), true);
+          assert.equal(manager.isScratchPath(join(scratch, 'nested')), true);
+          assert.equal(manager.isScratchPath(`${scratch}-sibling`), false);
+          const submitted = await manager.submit({
+            kind: 'snapshot',
+            idempotencyKey: 'scratch-spelling-key',
+            fingerprint: fingerprintJobInput('scratch-spelling'),
+            sourceRoot: source,
+            sourceRootId: 'root-test',
+            input: {},
+            run: async (ctx) =>
+              runSnapshotPipeline(fs, source, { includeHidden: true, includeIgnored: false }, ctx),
+          });
+          const activeManager = manager;
+          const completed = await waitForTerminal(() =>
+            activeManager.getJob(submitted.job.jobId, guard),
+          );
+          assert.equal(completed.state, 'completed');
+          assert.equal(completed.counters.filesWritten, 1);
+          assert.equal(completed.counters.scratchExcluded, 1);
+          const part = completed.artifacts.find((artifact) => artifact.kind === 'snapshot-part');
+          assert(part);
+          const delivered = await manager.getArtifact(part.artifactId, guard);
+          const csv = (await unzipSingle(delivered.bytes)).bytes.toString('utf8');
+          const rows = parse<{ RelativePath: string }>(csv, { columns: true });
+          assert.deepEqual(
+            rows.map((row) => row.RelativePath),
+            ['kept.txt'],
+          );
+        } finally {
+          await manager?.close().catch(() => undefined);
+          await cleanupTestRoot(container);
+        }
+      },
+    );
+  }
+
+  for (const linkPosition of ['scratch', 'ancestor'] as const) {
+    it(`rejects a real junction or symlink at the scratch ${linkPosition} before creating storage`, async (t) => {
+      const container = await realpath(await createTestRoot());
+      try {
+        const target = join(container, 'target');
+        const alias = join(container, 'alias');
+        await mkdir(target);
+        try {
+          await symlink(target, alias, 'junction');
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (
+            process.platform === 'win32' &&
+            (code === 'EPERM' || code === 'EACCES' || code === 'UNKNOWN')
+          ) {
+            t.skip(`junction creation unavailable: ${code}`);
+            return;
+          }
+          throw error;
+        }
+        const configuredScratch =
+          linkPosition === 'scratch' ? alias : join(alias, 'new', 'scratch');
+        const manager = new ArtifactJobManager({
+          ...getSnapshotConfig(),
+          scratchDirectory: configuredScratch,
+          ephemeralScratch: false,
+        });
+        await assert.rejects(manager.initialize(), (error: NodeJS.ErrnoException) => {
+          assert.equal(error.code, 'ACCESS_DENIED');
+          assert.match(error.message, /must not be a symlink or junction alias/u);
+          return true;
+        });
+        assert.deepEqual(await readdir(target), []);
+      } finally {
+        await cleanupTestRoot(container);
+      }
+    });
+  }
 
   it('keeps scratch initialization failures fatal', async () => {
     const root = await createTestRoot();

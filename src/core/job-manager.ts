@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Dirent } from 'node:fs';
 import {
+  lstat,
   mkdir,
   readdir,
   readFile,
@@ -11,7 +12,7 @@ import {
   unlink,
   writeFile,
 } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { ErrorCode, formatUnknownErrorMessage, FsError, isNodeError } from './errors.js';
@@ -95,6 +96,27 @@ async function replaceMetadataFile(temp: string, destination: string): Promise<v
       if (!transient || attempt >= METADATA_RENAME_ATTEMPTS) throw error;
       await delay(attempt * 10);
     }
+  }
+}
+
+async function assertScratchHasNoLinks(path: string): Promise<void> {
+  let current = resolve(path);
+  for (;;) {
+    try {
+      if ((await lstat(current)).isSymbolicLink()) {
+        throw new FsError(
+          ErrorCode.ACCESS_DENIED,
+          'FS_SNAPSHOT_DIR must not be a symlink or junction alias',
+          path,
+        );
+      }
+    } catch (error) {
+      // A new scratch may not exist yet, but its existing ancestors must be safe.
+      if (!isNodeError(error) || error.code !== 'ENOENT') throw error;
+    }
+    const parent = dirname(current);
+    if (parent === current) return;
+    current = parent;
   }
 }
 
@@ -187,6 +209,7 @@ export class ArtifactJobManager {
   readonly #lifecycleChains = new Map<string, Promise<void>>();
   readonly #activeReads = new Map<string, number>();
   readonly #metadataBytes = new Map<string, number>();
+  #scratchDirectory: string;
   #initialized?: Promise<void>;
   #cleanupTimer?: NodeJS.Timeout;
   #usedBytes = 0;
@@ -198,6 +221,7 @@ export class ArtifactJobManager {
 
   constructor(config: SnapshotConfig = getSnapshotConfig(), deps: ArtifactJobManagerDeps = {}) {
     this.config = config;
+    this.#scratchDirectory = resolve(config.scratchDirectory);
     this.#readArtifact = deps.readArtifact ?? (async (path) => readFile(path));
     this.#unlinkFile = deps.unlinkFile ?? unlink;
     this.#beforeArtifactRename = deps.beforeArtifactRename;
@@ -210,18 +234,16 @@ export class ArtifactJobManager {
   }
 
   async #initialize(): Promise<void> {
-    await mkdir(this.config.scratchDirectory, { recursive: true, mode: 0o700 });
-    const realScratch = await realpath(this.config.scratchDirectory);
-    if (!isSamePath(realScratch, this.config.scratchDirectory)) {
-      throw new FsError(
-        ErrorCode.ACCESS_DENIED,
-        'FS_SNAPSHOT_DIR must not be a symlink or junction alias',
-        this.config.scratchDirectory,
-      );
-    }
+    const requestedScratch = this.config.scratchDirectory;
+    await assertScratchHasNoLinks(requestedScratch);
+    await mkdir(requestedScratch, { recursive: true, mode: 0o700 });
+    await assertScratchHasNoLinks(requestedScratch);
+    // Windows 8.3 names are valid spellings, not links. Use their canonical path
+    // for every later storage operation and comparison with guarded source paths.
+    this.#scratchDirectory = await realpath(requestedScratch);
     let entries: Dirent[];
     try {
-      entries = await readdir(this.config.scratchDirectory, { withFileTypes: true });
+      entries = await readdir(this.#scratchDirectory, { withFileTypes: true });
     } catch (error) {
       throw new FsError(
         ErrorCode.IO_ERROR,
@@ -326,7 +348,7 @@ export class ArtifactJobManager {
 
   jobDirectory(jobId: string): string {
     if (!JOB_ID_RE.test(jobId)) throw new FsError(ErrorCode.INVALID_INPUT, 'Invalid job ID');
-    return join(this.config.scratchDirectory, jobId);
+    return join(this.#scratchDirectory, jobId);
   }
 
   async submit(input: SubmitJobInput): Promise<{ job: StoredJob; reused: boolean }> {
@@ -794,8 +816,8 @@ export class ArtifactJobManager {
   async assertScratchSeparated(sourceRoot: string): Promise<void> {
     await this.initialize();
     if (
-      isSamePath(sourceRoot, this.config.scratchDirectory) ||
-      isPathInsideDirectory(this.config.scratchDirectory, sourceRoot)
+      isSamePath(sourceRoot, this.#scratchDirectory) ||
+      isPathInsideDirectory(this.#scratchDirectory, sourceRoot)
     ) {
       throw new FsError(
         ErrorCode.INVALID_INPUT,
@@ -807,8 +829,8 @@ export class ArtifactJobManager {
 
   isScratchPath(path: string): boolean {
     return (
-      isSamePath(path, this.config.scratchDirectory) ||
-      isPathInsideDirectory(this.config.scratchDirectory, path)
+      isSamePath(path, this.#scratchDirectory) ||
+      isPathInsideDirectory(this.#scratchDirectory, path)
     );
   }
 
@@ -852,7 +874,7 @@ export class ArtifactJobManager {
     }
     await Promise.allSettled(workers);
     if (this.config.ephemeralScratch) {
-      await rm(this.config.scratchDirectory, { recursive: true, force: true });
+      await rm(this.#scratchDirectory, { recursive: true, force: true });
     }
   }
 }
