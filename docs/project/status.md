@@ -9,9 +9,9 @@
 | 000      | Подготовка контекста и правил работы                                 | done     | —             | Планирующий чат; docs checkpoint                                                            |
 | 001      | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)       | done     | 000           | `001 - baseline defects fix`; `codex/001-baseline-defects`                                  |
 | 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)       | done     | 001           | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live       |
-| 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md) | review   | 002           | `002-live - Windows and ChatGPT validation`; ZIP FAIL, XLS не проверялся; teardown уточнить |
-| 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)         | ready    | 002, 002-live | Одобрена 2026-09-20; исполнитель не назначен                                                |
-| 003      | Потоковый snapshot каталога                                          | proposed | 002-tool      | Ожидает подтверждённую доставку в целевой среде                                             |
+| 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md) | review   | 002           | `002-live - Windows and ChatGPT validation`; старый маршрут ZIP FAIL; продолжение в 002-tool |
+| 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)         | review   | 002, 002-live | `002 - originals delivery experiment`; `codex/002-tool-delivery`; локальное review PASS; не интегрирована |
+| 003      | Потоковый snapshot каталога                                          | proposed | 002-tool      | Ожидает интеграцию 002-tool и постановку задачи                                            |
 | 004      | Bundle и manifest                                                    | proposed | 002-tool, 003 | Ожидает подтверждённую доставку и snapshot                                                  |
 | 005      | Контролируемое повторение предметного исследования                   | proposed | 004           | Планирование + пользователь                                                                 |
 
@@ -23,11 +23,40 @@
 
 ## Текущий следующий шаг
 
-Выполнить 002-tool: пользователь разрешил минимальную доработку read-only tool
-для доставки originals и повторную проверку в ChatGPT на synthetic стенде.
-[Карточка](../tasks/002-tool-delivery.md) готова; сначала подтвердить контракт
-результата, затем проверить ZIP 703 bytes, после успеха — XLS. Наличие URI/base64
-или локальный SDK PASS не заменяет получения и открытия файла в среде анализа.
+002-tool прошла локальное review. Следующий шаг — публикация ветки, проверка CI
+и интеграция после отдельной команды: исполнителю было задано не делать push/merge.
+После интеграции можно готовить scope 003; успех малых fixtures не определяет
+допустимый размер будущих bundle.
+
+## Review задачи 002-tool, 2026-09-20
+
+Исполнитель — `002 - originals delivery experiment`, task
+`01a0b975-35f7-73f1-b94c-caf22ab46fa9`; ветка `codex/002-tool-delivery`.
+Проверен commit `881f94d684b513f460491bae701b7292e402e072` относительно базы
+`84eb8221ab405d2201208dcfe4e771bdab994100`.
+
+- Добавлен read-only `get_file`: исходные bytes в стандартном MCP embedded
+  resource и согласованный `resource_link` в результате tools/call. Сохранены
+  PathGuard, raw-size limit, отмена запроса и отсутствие серверных парсеров.
+- По протоколу исполнителя `docs/testing/tool-originals-delivery.md` в этой ветке
+  ChatGPT материализовал ZIP 703 bytes и BIFF8 XLS 5632 bytes, вычислил SHA-256
+  полученных файлов, открыл три ZIP entry и прочитал все семь контрольных XLS cells.
+  XLS получен двумя отдельными вызовами; ZIP повторился при permission round-trip.
+  Эти live-наблюдения опираются на протокол исполнителя и handoff пользователя;
+  планирование повторно не запускало ChatGPT/tunnel.
+- Независимый `npm ci` и `npm run check` в изолированном checkout проверенного
+  commit: 358 tests, 351 pass, 0 fail, 7 известных platform/permission skips.
+  Отдельный повтор трёх регрессий harness: 3 pass, 0 fail, 0 skip.
+- Review runtime, harness и evidence не выявило блокирующих замечаний.
+  Неблокирующее уточнение перед интеграцией: старый
+  [протокол стенда](../testing/originals-delivery.md) ещё описывает актуальный
+  harness через resources/read/cache bypass. Сохранить исторические измерения,
+  но пометить смену маршрута на get_file и сослаться на новый протокол.
+- Размеры выше этих малых fixtures в ChatGPT, остальные форматы и lifecycle
+  не проверены. Локальные size-limit тесты не заменяют ограничения принимающего host.
+  По handoff tunnel остановлен; профиль, backup и synthetic стенд сохранены локально.
+- Push, PR, CI этого commit и merge не выполнялись. До интеграции статус остаётся
+  `review`; `snapshot`, `bundle`, OAuth и публичный файловый сервис не реализованы.
 
 ## Результат 002-live, 2026-09-20
 
@@ -44,9 +73,10 @@
 - При последней записи daemon/profile/plugin были оставлены на стенде; их текущее
   состояние и требуемые перезапуск/teardown выясняет исполнитель следующего опыта.
 
-002-live находится на review с отрицательным результатом маршрута и открытым
-состоянием teardown. Статус done у 002 означает принятие локального стенда.
-003/004 не начинать до подтверждённой доставки или отдельного решения планирования.
+002-live остаётся историей отрицательного результата маршрута resources/read;
+доставку через get_file и состояние teardown уточнил следующий опыт 002-tool выше.
+Статус done у 002 означает принятие локального стенда. 003/004 не начинать до
+интеграции 002-tool и назначения следующей задачи планированием.
 
 ## Приёмка задачи 002
 
