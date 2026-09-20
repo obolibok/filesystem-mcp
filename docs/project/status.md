@@ -4,16 +4,16 @@
 Это единая доска интеграционного статуса. Coding-чаты записывают свою работу в
 карточках задач, а планирование обновляет эту таблицу после review/интеграции.
 
-| ID       | Работа                                                                 | Статус   | Зависит от    | Назначение                                                                            |
-| -------- | ---------------------------------------------------------------------- | -------- | ------------- | ------------------------------------------------------------------------------------- |
-| 000      | Подготовка контекста и правил работы                                   | done     | —             | Планирующий чат; docs checkpoint                                                      |
-| 001      | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)         | done     | 000           | `001 - baseline defects fix`; `codex/001-baseline-defects`                            |
-| 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)         | done     | 001           | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live |
-| 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)   | done     | 002           | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3      |
-| 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)           | done     | 002, 002-live | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                       |
-| 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md) | review   | 002-tool      | `codex/003-compressed-snapshot`; head `b9a919af`; R1–R7 закрыты, R8 changes requested |
-| 004      | Bundle выбранных originals на основе jobs/artifacts                    | proposed | 003           | Последовательно после 003; общий механизм повторно не реализуется                     |
-| 005      | Контролируемое повторение предметного исследования                     | proposed | 004           | Планирование + пользователь                                                           |
+| ID       | Работа                                                                 | Статус   | Зависит от    | Назначение                                                                                                |
+| -------- | ---------------------------------------------------------------------- | -------- | ------------- | --------------------------------------------------------------------------------------------------------- |
+| 000      | Подготовка контекста и правил работы                                   | done     | —             | Планирующий чат; docs checkpoint                                                                          |
+| 001      | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)         | done     | 000           | `001 - baseline defects fix`; `codex/001-baseline-defects`                                                |
+| 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)         | done     | 001           | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live                     |
+| 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)   | done     | 002           | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3                          |
+| 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)           | done     | 002, 002-live | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                                           |
+| 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md) | review   | 002-tool      | `003 - compressed snapshot`; `codex/003-compressed-snapshot`; `9ff20792`; local review PASS, live pending |
+| 004      | Bundle выбранных originals на основе jobs/artifacts                    | proposed | 003           | Последовательно после 003; общий механизм повторно не реализуется                                         |
+| 005      | Контролируемое повторение предметного исследования                     | proposed | 004           | Планирование + пользователь                                                                               |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
 готовы; `active` — назначен исполнитель; `review` — есть проверяемый результат;
@@ -23,22 +23,22 @@
 
 ## Текущий следующий шаг
 
-Повторно проверена 003: head `b9a919afa77364e0995a8a730d04272446b13804` ветки
-`codex/003-compressed-snapshot`; planning main `bc6724fb` включён merge-коммитом
-`ec6cf8a9`. Исходные R1–R7 исправлены. Результат — **changes requested**:
-[повторное ревью и постановка на R8](../testing/003-review-r2-2026-09-20.md).
-[Первое ревью](../testing/003-review-2026-09-20.md) сохраняет исторические замечания.
+Локальное code review 003 — **PASS** на head
+`9ff207922b55d040608590323e025fd45eb29634` ветки `codex/003-compressed-snapshot`.
+Замечания R1–R8 и два уточнения evidence закрыты:
+[итог ревью](../testing/003-review-r3-2026-09-20.md).
+Независимый `npm run check` на точном head с исходными зависимостями:
+380 tests, 373 pass, 0 fail, 7 прежних Windows skips.
 
-Независимый полный `npm run check` на точном новом head с чистыми зависимостями:
-378 tests, 371 pass, 0 fail, 7 прежних skips. Runtime/dependencies не менялись.
-Воспроизведена одна новая регрессия: временная ошибка удаления expired artifact
-при startup оставляет manager.initialize в постоянном failure и блокирует
-MCP endpoint. Требуется сохранить учёт bytes, позволить запуск и повторить cleanup.
-Два неблокирующих уточнения verifier/HTTP evidence также записаны в отчёте.
+Следующий шаг — synthetic live ChatGPT прогон с пользователем на проверенной
+ветке по `docs/testing/snapshot-live.md`: материализация manifest и ZIP-частей,
+независимые hashes/CRC/CSV counts, повторная выдача и size ladder около 5,53 MB.
+Исполнитель: `003 - compressed snapshot`, task
+`01a0be9c-0f01-7c42-8abb-a6ff550e1532`.
 
-Следующий шаг: исправление R8 в той же задаче 003, короткое повторное review,
-затем synthetic live ChatGPT прогон с пользователем. Целевой PASS остаётся pending
-и не подменяется локальными проверками. 004 остаётся proposed, после принятия 003.
+Целевой PASS остаётся pending и не подменяется локальными проверками. 003 ещё
+не интегрирована в main, поэтому общий статус остаётся review. Push/PR/merge
+не выполнялись. 004 остаётся proposed до целевой проверки и приёмки 003.
 
 ## Запуск 003, 2026-09-20
 
@@ -48,9 +48,10 @@ MCP endpoint. Требуется сохранить учёт bytes, позвол
 Новый worktree создан на базе `ce4f22b4f9ca453d915100c3206363d96dc6d208`,
 карточка и измерения в нём присутствуют. В prompt передана ветка
 `codex/003-compressed-snapshot` и поручение начать локальную реализацию.
-Реализация найдена и проверена по Git-ветке выше; app list_threads пока не возвращает
-задачу 003. Фактический task ID остаётся неустановленным;
-повторную задачу не создавать. Push/PR/merge исполнителю не поручены.
+Фактический task ID подтверждён через handoff и app read_thread:
+`01a0be9c-0f01-7c42-8abb-a6ff550e1532`, название `003 - compressed snapshot`.
+Pending ID выше сохраняется только как история запуска. Push/PR/merge исполнителю
+не поручены.
 
 ## Приёмка задачи 002-tool, 2026-09-20
 
