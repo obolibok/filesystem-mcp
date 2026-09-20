@@ -249,8 +249,8 @@ Push, PR и merge оставить планированию до отдельн�
   quota/error/security checks выполнены. Не закрыты полный aggregate check из-за
   двух base formatting mismatches и отдельный live ChatGPT опыт, поэтому карточка
   не передаётся как `done`.
-- Локальные commits: `f126d63d` (контракт) и `63f4f08f` (основная реализация);
-  validation/benchmark/docs будут зафиксированы отдельным финальным commit.
+- Локальные commits: `f126d63d` (контракт), `63f4f08f` (основная реализация) и
+  `1ce57b7c` (hardening, regression suite, benchmark и документация).
 - Ограничения и handoff: source snapshot не атомарен; v1 не читает и не хеширует
   содержимое originals, не разыменовывает symlink/junction, не возобновляет job после
   restart и не заявляет multi-user isolation.
