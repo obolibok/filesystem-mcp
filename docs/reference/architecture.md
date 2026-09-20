@@ -28,10 +28,13 @@
 | --------------------------- | ----------------------------------------------------------- |
 | Навигация                   | `list_roots`, `list`, `find_files`                          |
 | Чтение и metadata           | `read`, `get_file`, `stat`                                  |
+| Snapshot jobs               | `snapshot`, `job_status`, `cancel_job`, `get_artifact`      |
 | Текстовый поиск и сравнение | `search_text`, `diff`                                       |
 | Изменение                   | `create`, `edit`, `move`, `delete`, `patch`, `replace_text` |
 
-14 tools; `--read-only` публикует восемь и исключает последние шесть. Источник
+18 tools; `--read-only` публикует двенадцать, включая snapshot jobs, и исключает
+последние шесть source-mutating tools. `snapshot` и `cancel_job` меняют служебное
+состояние и поэтому честно имеют `readOnlyHint: false`, но не изменяют источники. Источник
 inventory — [tools/index.ts](../../src/tools/index.ts). Есть stdio, Streamable HTTP,
 resources, `get-help`, progress, отмена, logs и подписки с protocol-era ограничениями.
 
@@ -80,6 +83,11 @@ blob SDK-клиентом само по себе не доказывает ма�
 | Search context                        | До 10 строк с каждой стороны                                                      | `tools/search-text.ts`          |
 | Page snapshots                        | 32 snapshots, TTL 60 секунд                                                       | `core/page-store.ts`            |
 | Cached result resources               | 64 записи; 10 MiB на запись, 25 MiB суммарно; TTL 60 секунд                       | `core/store.ts`                 |
+| Snapshot CSV record / raw part        | 1 MiB / 45 MiB                                                                    | `core/snapshot-config.ts`       |
+| Snapshot ZIP / delivery               | 8 MiB / 8 MiB; delivery также ограничен `FS_MAX_FILE_SIZE`                        | `core/snapshot-config.ts`       |
+| Snapshot job raw / ready artifacts    | 512 MiB / 512 MiB; до 128 частей                                                  | `core/snapshot-config.ts`       |
+| Snapshot concurrency / queue / time   | 1 running / 4 queued / 60 минут                                                   | `core/job-manager.ts`           |
+| Snapshot scratch / result TTL         | 1 GiB / 24 часа от completed                                                      | `core/job-manager.ts`           |
 
 Пагинация не отменяет cap/timeout первого обхода. Проверять `truncated`,
 `stoppedReason` и счётчики пропусков; пустая выдача не доказывает полноту поиска.
@@ -93,20 +101,61 @@ blob SDK-клиентом само по себе не доказывает ма�
 Текстовые tools сохраняют metadata в `_meta`; outputs без собственного текста
 могут использовать `structuredContent`. `define.ts` не публикует `outputSchema`.
 Перед изменением этого контракта изучить compatibility comments и tests, не
-добавлять schema механически. Новые artifact/job ответы потребуют отдельной оценки.
+добавлять schema механически. Изменения artifact/job ответов требуют проверки совместимости.
+
+Snapshot jobs имеют отдельный disk-backed lifecycle и не используют 60-секундные
+ResourceStore/PageSnapshotStore. `snapshot` быстро регистрирует job с обязательным
+idempotencyKey; `job_status` опрашивается отдельными вызовами, `cancel_job` отменяет
+собственный AbortController job, `get_artifact` выдаёт ровно один manifest/ZIP как
+embedded resource + matching resource_link. HTTP endpoint владеет одним manager для
+всех per-request McpServer; закрытие запроса его не очищает. После process restart
+queued/running становятся `interrupted`, completed bytes остаются immutable до TTL.
+Startup удаляет только manager-owned partial/metadata-temp и UUID-named ZIP/JSON.
+Unreferenced final после crash между rename и metadata commit удаляется; ошибка
+удаления остаётся учтённой в scratch quota до успешного cleanup/restart. Expiry,
+artifact removal и terminal directory cleanup сериализованы для каждой job.
+
+CSV v1 — UTF-8 без BOM, CRLF, RFC 4180, одинаковый header в каждой части:
+`RootId,RelativePath,Name,Extension,Length,LastWriteTime`. RelativePath использует
+`/`, Length — bytes, время — ISO 8601 UTC. Обычные файлы перечисляются потоково;
+symlink/junction не разыменовываются. Manifest v1 фиксирует interval наблюдения,
+policy, counters/errors/completeness и SHA-256/rows/raw/ZIP/base64 sizes частей.
+Snapshot не является атомарным filesystem snapshot: исчезновение/недоступность
+делает `complete=false`, но не скрывается как пустой успех.
+Кэш уникальных путей внутри `ignore` ограничен периодическим созданием нового matcher
+из уже скомпилированных rules; nested patterns и negation сохраняются. Walk depth —
+жёсткий policy cap и приводит к `failed`, а не к partial completed результату.
+
+Scratch и его ancestors не могут быть symlink/junction; проверка выполняется
+до создания storage. Windows 8.3 spelling разрешён, после проверки manager
+использует canonical scratch для I/O, cleanup и исключения из source traversal.
+
+Source I/O остаётся в PathGuard/GuardedFileSystem. Scratch не становится source root,
+caller не выбирает output path, а status/cancel/fetch каждый раз проверяют текущий
+доступ к canonical source root. Одна HTTP credential остаётся одним endpoint scope;
+multi-user isolation этим не заявляется. Один scratch каталог имеет одного владельца-
+процесс; параллельным экземплярам нужны разные каталоги. Metadata сохраняется atomic
+rename; quota учитывает spool, готовые artifacts и job metadata. ZIP producer применяет
+минимум ZIP/delivery/captured general-file caps, а fetch повторно проверяет текущий
+`FS_MAX_FILE_SIZE`. Cleanup защищает активное чтение и освобождает quota только после
+фактического удаления bytes.
 
 HTTP baseline имеет один auth context: общий ключ, guard/grants, resource/page
 stores для endpoint. OAuth spike не обеспечивает production изоляцию principal.
 Watcher даёт сигнал изменения, не durable journal с checkpoint для индекса.
 
+На [проверенном стенде ChatGPT](../testing/003-live-2026-09-20.md) доставлен
+и повторно получен ZIP 7802264 B; верхний предел принимающего host не установлен.
+
 ## Ещё не реализовано
 
-`snapshot`, `bundle`, большие downloadable artifacts и их lifecycle. `get_file`
-доставляет ровно один guarded и size-limited оригинал; это не artifact service.
-Persistent corpus index, vector search, domain parsers и multi-user OAuth не
-входят в первую coding-задачу.
+`bundle` выбранных originals. `get_file` доставляет ровно один guarded и
+size-limited оригинал; snapshot artifact service хранит только metadata CSV/ZIP и
+не является bundle service.
+Persistent corpus index, vector search, domain parsers и multi-user OAuth остаются
+вне принятого scope пилота.
 
-Будущий artifact service должен разделять read-only источники и создание
-служебных результатов. Кэш tool output на 60 секунд не подходит для долгой выдачи
-CSV/ZIP. Перечисление миллионов записей требует отдельного потокового обхода,
-а не повторного использования ограниченного `find_files` как полного snapshot.
+Snapshot artifact service разделяет read-only источники и создание служебных
+результатов. Кэш tool output на 60 секунд не используется для долгой выдачи CSV/ZIP.
+Перечисление миллионов записей выполняет отдельный потоковый обход, а не снятие cap
+с `find_files`.

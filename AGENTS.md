@@ -44,8 +44,8 @@ owns hosting, `src/server.ts` composition, `src/tools/` MCP contracts, and
 - Preserve `PathGuard` validation and the `GuardedFileSystem` boundary. Do not
   introduce unguarded filesystem access in tool handlers.
 - The pilot reads source files and delivers originals for analysis elsewhere.
-  `snapshot`, `bundle`, artifact delivery and OAuth are not implemented merely
-  because they appear in a plan. Consult the current board and code.
+  Snapshot uses the shared jobs/artifacts lifecycle. Do not treat bundle or OAuth
+  plans as implemented capabilities; consult the current board and code.
 - Keep domain parsers, vector databases and unrelated redesigns outside baseline fixes.
 - Use synthetic fixtures. Do not commit production documents, file inventories,
   chat exports, credentials, personal absolute paths or generated archives.

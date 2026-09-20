@@ -62,9 +62,11 @@
     "@modelcontextprotocol/express": "2.0.0",
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
+    "@types/yazl": "^3.3.1",
     "diff": "^9",
     "express": "^5.2.1",
     "ignore": "^7.0.9",
+    "yazl": "^3.3.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -73,13 +75,16 @@
     "@trivago/prettier-plugin-sort-imports": "^6.0.2",
     "@types/express": "^5.0.6",
     "@types/node": "^24",
+    "@types/yauzl": "^3.4.0",
+    "csv-parse": "^7.0.2",
     "eslint": "^10",
     "eslint-config-prettier": "^10.1.8",
     "knip": "^6",
     "prettier": "^3.9.6",
     "tsx": "^4.23.13",
     "typescript": "^6",
-    "typescript-eslint": "^8.70.0"
+    "typescript-eslint": "^8.70.0",
+    "yauzl": "^3.4.0"
   },
   "engines": {
     "node": ">=24"

@@ -95,7 +95,7 @@ New-Item -ItemType Directory -Path $fixturePath | Out-Null
 node dist/index.js --read-only --root-boundary $fixturePath $fixturePath --print-config --json
 ```
 
-Ожидаются `transport: stdio`, `readOnly: true`, roots этого fixture, восемь tools и
+Ожидаются `transport: stdio`, `readOnly: true`, roots этого fixture, двенадцать tools и
 лимит полного чтения 10 MiB. Если каталог имеет alias через junction/drive mapping или
 Windows 8.3 name, сервер может показать оба пути. Они не делают omitted `path`
 неоднозначным, пока разрешаются в одну location.
@@ -131,6 +131,43 @@ node dist/index.js --port 3000 --http-host 127.0.0.1 --read-only --root-boundary
 значение явно при необходимости. Это локальный endpoint, не подключение облачного
 ChatGPT. Доставка в выбранную среду анализа — отдельный будущий опыт.
 Не оставлять тестовый сервер работающим после проверки.
+
+## Snapshot jobs
+
+`snapshot` доступен вместе с `job_status`, `cancel_job` и `get_artifact`, в том
+числе с `--read-only`: источники только читаются, а служебные bytes пишутся в
+отдельный scratch. Для воспроизводимого deployment задавать стабильный каталог:
+
+```powershell
+$env:FS_SNAPSHOT_DIR = 'D:\filesystem-mcp-scratch'
+node dist/index.js --read-only --root-boundary $fixturePath $fixturePath
+```
+
+Один scratch каталог принадлежит одному процессу сервера. Для параллельных
+экземпляров задавать разные `FS_SNAPSHOT_DIR`; каталог должен переживать restart
+того же экземпляра, если требуется повторная выдача completed artifacts.
+
+Scratch не должен быть source root или его потомком. Если scratch находится внутри
+более широкого source root, walker канонически исключает его subtree и фиксирует это
+в manifest. Default без переменной — `filesystem-mcp-snapshot-v1` под системным temp;
+OS может очищать temp, поэтому это только локальный профиль, не durable deployment.
+
+Быстрый synthetic test и воспроизводимые load/walk команды:
+
+```powershell
+node --test --import tsx __tests__/snapshot.test.ts
+node --import tsx scripts/snapshot-benchmark/run.mts --mode pipeline --records 3000000
+node --import tsx scripts/snapshot-benchmark/run.mts --mode walk --walk-files 21000 --records 1
+node --import tsx scripts/snapshot-benchmark/run.mts --mode walk --walk-files 60000 --records 1
+```
+
+Два walk-масштаба используют одинаковые caps и `.gitignore`: сравнивать peak RSS/heap,
+а не только row count, чтобы regression в path cache был виден. Benchmark verifier
+должен пройти до конца каждого ZIP, проверить единственный CSV entry, CRC-32, SHA-256
+и strict CSV parse. Benchmark 3 млн не входит в обычный CI. Перед live опытом следовать
+[snapshot protocol](../testing/snapshot-live.md); локальный PASS не доказывает
+материализацию большой embedded resource в ChatGPT. Результаты проверенного
+стенда: [smoke/main/upper](../testing/003-live-2026-09-20.md).
 
 JSON-конфиги зависят от клиента: README содержит отдельный VS Code пример с
 `servers` и другие варианты с `mcpServers`. Не копировать оболочку между клиентами.
