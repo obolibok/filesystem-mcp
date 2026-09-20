@@ -55,6 +55,9 @@ function embeddedBytes(result: CallToolResult): Buffer {
 }
 
 async function unzipSingle(bytes: Buffer): Promise<{ name: string; bytes: Buffer }> {
+  // Keep byte-returning assertions on the same whole-archive/CRC gate as the
+  // benchmark verifier; the extraction below is only for inspecting CSV bytes.
+  await verifySnapshotZip(bytes, false);
   return new Promise((resolve, reject) => {
     yauzl.fromBuffer(bytes, { lazyEntries: true }, (openError, zip) => {
       if (openError || !zip) {
