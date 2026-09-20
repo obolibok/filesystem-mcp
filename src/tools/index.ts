@@ -60,7 +60,19 @@ export function registeredTools(readOnly: boolean): readonly DefinedTool[] {
 // Only selected tools are named individually: the source-mutating six are no
 // longer listed by hand anywhere, so their names reach callers through
 // MUTATING_TOOL_NAMES and ALL_TOOLS instead.
-export { LIST, LIST_ROOTS, READ, SEARCH_TEXT, FIND_FILES, GET_FILE, STAT };
+export {
+  CANCEL_JOB,
+  FIND_FILES,
+  GET_ARTIFACT,
+  GET_FILE,
+  JOB_STATUS,
+  LIST,
+  LIST_ROOTS,
+  READ,
+  SEARCH_TEXT,
+  SNAPSHOT,
+  STAT,
+};
 
 interface ToolRegistrarDeps {
   readonly server: McpServer;

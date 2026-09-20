@@ -183,6 +183,12 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
 
   const wire = new StdioServerTransport();
   const listens = new Map<string | number, StdioListenState>();
+  let jobsClosing: Promise<void> | undefined;
+
+  const closeJobs = (): Promise<void> => {
+    jobsClosing ??= jobManager.close();
+    return jobsClosing;
+  };
 
   // Deleting the entry is what makes this idempotent: a second call for the
   // same id finds nothing to release.
@@ -199,7 +205,7 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
     for (const state of listens.values()) state.cancelled = true;
     listens.clear();
     registry.destroy();
-    void jobManager.close();
+    void closeJobs();
     const ctx = activeCtx;
     activeCtx = undefined;
     // Both steps below are guarded separately, and for the same reason: this
@@ -343,7 +349,11 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
       try {
         cleanupConnection();
       } finally {
-        await handle.close();
+        try {
+          await handle.close();
+        } finally {
+          await closeJobs();
+        }
       }
     },
   };

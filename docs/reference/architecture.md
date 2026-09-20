@@ -83,6 +83,11 @@ blob SDK-клиентом само по себе не доказывает ма�
 | Search context                        | До 10 строк с каждой стороны                                                      | `tools/search-text.ts`          |
 | Page snapshots                        | 32 snapshots, TTL 60 секунд                                                       | `core/page-store.ts`            |
 | Cached result resources               | 64 записи; 10 MiB на запись, 25 MiB суммарно; TTL 60 секунд                       | `core/store.ts`                 |
+| Snapshot CSV record / raw part        | 1 MiB / 45 MiB                                                                    | `core/snapshot-config.ts`       |
+| Snapshot ZIP / delivery               | 8 MiB / 8 MiB; delivery также ограничен `FS_MAX_FILE_SIZE`                        | `core/snapshot-config.ts`       |
+| Snapshot job raw / ready artifacts    | 512 MiB / 512 MiB; до 128 частей                                                  | `core/snapshot-config.ts`       |
+| Snapshot concurrency / queue / time   | 1 running / 4 queued / 60 минут                                                   | `core/job-manager.ts`           |
+| Snapshot scratch / result TTL         | 1 GiB / 24 часа от completed                                                      | `core/job-manager.ts`           |
 
 Пагинация не отменяет cap/timeout первого обхода. Проверять `truncated`,
 `stoppedReason` и счётчики пропусков; пустая выдача не доказывает полноту поиска.
@@ -97,6 +102,30 @@ blob SDK-клиентом само по себе не доказывает ма�
 могут использовать `structuredContent`. `define.ts` не публикует `outputSchema`.
 Перед изменением этого контракта изучить compatibility comments и tests, не
 добавлять schema механически. Новые artifact/job ответы потребуют отдельной оценки.
+
+Snapshot jobs имеют отдельный disk-backed lifecycle и не используют 60-секундные
+ResourceStore/PageSnapshotStore. `snapshot` быстро регистрирует job с обязательным
+idempotencyKey; `job_status` опрашивается отдельными вызовами, `cancel_job` отменяет
+собственный AbortController job, `get_artifact` выдаёт ровно один manifest/ZIP как
+embedded resource + matching resource_link. HTTP endpoint владеет одним manager для
+всех per-request McpServer; закрытие запроса его не очищает. После process restart
+queued/running становятся `interrupted`, completed bytes остаются immutable до TTL.
+
+CSV v1 — UTF-8 без BOM, CRLF, RFC 4180, одинаковый header в каждой части:
+`RootId,RelativePath,Name,Extension,Length,LastWriteTime`. RelativePath использует
+`/`, Length — bytes, время — ISO 8601 UTC. Обычные файлы перечисляются потоково;
+symlink/junction не разыменовываются. Manifest v1 фиксирует interval наблюдения,
+policy, counters/errors/completeness и SHA-256/rows/raw/ZIP/base64 sizes частей.
+Snapshot не является атомарным filesystem snapshot: исчезновение/недоступность
+делает `complete=false`, но не скрывается как пустой успех.
+
+Source I/O остаётся в PathGuard/GuardedFileSystem. Scratch не становится source root,
+caller не выбирает output path, а status/cancel/fetch каждый раз проверяют текущий
+доступ к canonical source root. Одна HTTP credential остаётся одним endpoint scope;
+multi-user isolation этим не заявляется. Один scratch каталог имеет одного владельца-
+процесс; параллельным экземплярам нужны разные каталоги. Metadata сохраняется atomic
+rename; quota учитывает spool, готовые artifacts и job metadata. Cleanup защищает
+активное чтение.
 
 HTTP baseline имеет один auth context: общий ключ, guard/grants, resource/page
 stores для endpoint. OAuth spike не обеспечивает production изоляцию principal.

@@ -12,6 +12,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { ErrorCode, formatUnknownErrorMessage, FsError, isNodeError } from './errors.js';
 import type { GuardedFileSystem } from './fs.js';
@@ -27,6 +28,7 @@ import { getMaxTextFileSize } from './util.js';
 const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const MAX_ERROR_SAMPLES = 20;
 const MAX_ERROR_MESSAGE = 512;
+const METADATA_RENAME_ATTEMPTS = 8;
 
 export interface SubmitJobInput {
   readonly kind: string;
@@ -69,6 +71,21 @@ function safeErrorSample(error: unknown, path?: string): JobErrorSample {
         : ErrorCode.UNKNOWN;
   const message = formatUnknownErrorMessage(error).slice(0, MAX_ERROR_MESSAGE);
   return { code, message, ...(path ? { path } : {}) };
+}
+
+async function replaceMetadataFile(temp: string, destination: string): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await rename(temp, destination);
+      return;
+    } catch (error) {
+      const transient =
+        isNodeError(error) &&
+        (error.code === 'EPERM' || error.code === 'EACCES' || error.code === 'EBUSY');
+      if (!transient || attempt >= METADATA_RENAME_ATTEMPTS) throw error;
+      await delay(attempt * 10);
+    }
+  }
 }
 
 export function fingerprintJobInput(value: unknown): string {
@@ -146,11 +163,13 @@ export class JobRunContext {
 
 export class ArtifactJobManager {
   readonly config: SnapshotConfig;
+  readonly #readArtifact: (path: string) => Promise<Buffer>;
   readonly #jobs = new Map<string, RuntimeJob>();
   readonly #idempotency = new Map<string, string>();
   readonly #artifactJobs = new Map<string, string>();
   readonly #persistChains = new Map<string, Promise<void>>();
   readonly #activeReads = new Map<string, number>();
+  readonly #metadataBytes = new Map<string, number>();
   #initialized?: Promise<void>;
   #cleanupTimer?: NodeJS.Timeout;
   #usedBytes = 0;
@@ -160,8 +179,12 @@ export class ArtifactJobManager {
   readonly #readWaiters: (() => void)[] = [];
   #submitChain: Promise<void> = Promise.resolve();
 
-  constructor(config: SnapshotConfig = getSnapshotConfig()) {
+  constructor(
+    config: SnapshotConfig = getSnapshotConfig(),
+    deps: { readArtifact?: (path: string) => Promise<Buffer> } = {},
+  ) {
     this.config = config;
+    this.#readArtifact = deps.readArtifact ?? (async (path) => readFile(path));
   }
 
   async initialize(): Promise<void> {
@@ -220,6 +243,10 @@ export class ArtifactJobManager {
     };
     this.#jobs.set(jobId, runtime);
     this.#idempotency.set(job.idempotencyKey, jobId);
+    const metadataSize =
+      (await stat(join(directory, 'job.json')).catch(() => undefined))?.size ?? 0;
+    this.#metadataBytes.set(jobId, metadataSize);
+    this.#usedBytes += metadataSize;
     for (const artifact of job.artifacts) {
       if (
         !JOB_ID_RE.test(artifact.artifactId) ||
@@ -236,6 +263,7 @@ export class ArtifactJobManager {
       job.complete = false;
       job.stopReason = 'server-restarted';
       job.finishedAt = new Date().toISOString();
+      await this.#removeArtifacts(runtime);
       await this.persist(job);
     }
     const leftovers = await readdir(directory, { withFileTypes: true });
@@ -247,9 +275,7 @@ export class ArtifactJobManager {
         continue;
       }
       const path = join(directory, leftover.name);
-      const size = (await stat(path).catch(() => undefined))?.size ?? 0;
       await unlink(path).catch(() => undefined);
-      this.#usedBytes = Math.max(0, this.#usedBytes - size);
     }
   }
 
@@ -339,10 +365,16 @@ export class ArtifactJobManager {
       );
       if (!runtime?.run) return;
       this.#running += 1;
-      runtime.worker = this.#run(runtime).finally(() => {
-        this.#running -= 1;
-        this.#pump();
-      });
+      runtime.worker = this.#run(runtime)
+        .catch((error: unknown) => {
+          Logger.error(
+            `Snapshot job ${runtime.job.jobId} could not persist its terminal state: ${formatUnknownErrorMessage(error)}`,
+          );
+        })
+        .finally(() => {
+          this.#running -= 1;
+          this.#pump();
+        });
     }
   }
 
@@ -352,11 +384,11 @@ export class ArtifactJobManager {
     job.state = 'running';
     job.phase = 'starting';
     job.startedAt = new Date().toISOString();
-    await this.persist(job);
     const timeout = AbortSignal.timeout(this.config.maxJobMs);
     const signal = AbortSignal.any([runtime.abortController.signal, timeout]);
     const ctx = new JobRunContext(this, runtime, signal);
     try {
+      await this.persist(job);
       signal.throwIfAborted();
       const manifestArtifactId = await runtime.run(ctx);
       if (!isJobRunning(job)) return;
@@ -367,7 +399,10 @@ export class ArtifactJobManager {
       job.finishedAt = new Date().toISOString();
       job.resultExpiresAt = new Date(Date.now() + this.config.resultTtlMs).toISOString();
     } catch (error) {
-      if (runtime.abortController.signal.aborted || this.#closed) return;
+      if (runtime.abortController.signal.aborted || this.#closed) {
+        await this.#removeArtifacts(runtime);
+        return;
+      }
       job.state = 'failed';
       job.phase = 'failed';
       job.complete = false;
@@ -412,24 +447,30 @@ export class ArtifactJobManager {
     const runtime = this.#jobs.get(jobId);
     if (!runtime) throw new FsError(ErrorCode.NOT_FOUND, 'Artifact not found or expired');
     await guard.validateExistingDirectory(runtime.job.sourceRoot);
-    await this.#expireIfNeeded(runtime);
-    if (runtime.job.resultExpired) throw new FsError(ErrorCode.NOT_FOUND, 'Artifact has expired');
-    const artifact = runtime.job.artifacts.find((candidate) => candidate.artifactId === artifactId);
-    if (!artifact || runtime.job.state !== 'completed') {
-      throw new FsError(ErrorCode.NOT_FOUND, 'Artifact is not available');
-    }
-    const deliveryLimit = Math.min(this.config.maxDeliveryBytes, getMaxTextFileSize());
-    if (artifact.size > deliveryLimit) {
-      throw new FsError(
-        ErrorCode.TOO_LARGE,
-        `Artifact exceeds delivery limit (${String(artifact.size)} > ${String(deliveryLimit)} bytes)`,
-      );
-    }
     await this.#acquireReadSlot();
     this.#activeReads.set(jobId, (this.#activeReads.get(jobId) ?? 0) + 1);
     try {
+      const expiry = runtime.job.resultExpiresAt
+        ? Date.parse(runtime.job.resultExpiresAt)
+        : Number.POSITIVE_INFINITY;
+      if (runtime.job.resultExpired || Date.now() >= expiry) {
+        throw new FsError(ErrorCode.NOT_FOUND, 'Artifact has expired');
+      }
+      const artifact = runtime.job.artifacts.find(
+        (candidate) => candidate.artifactId === artifactId,
+      );
+      if (!artifact || runtime.job.state !== 'completed') {
+        throw new FsError(ErrorCode.NOT_FOUND, 'Artifact is not available');
+      }
+      const deliveryLimit = Math.min(this.config.maxDeliveryBytes, getMaxTextFileSize());
+      if (artifact.size > deliveryLimit) {
+        throw new FsError(
+          ErrorCode.TOO_LARGE,
+          `Artifact exceeds delivery limit (${String(artifact.size)} > ${String(deliveryLimit)} bytes)`,
+        );
+      }
       const path = this.#artifactPath(jobId, artifact);
-      const bytes = await readFile(path);
+      const bytes = await this.#readArtifact(path);
       if (bytes.length !== artifact.size)
         throw new FsError(ErrorCode.IO_ERROR, 'Artifact size changed');
       const hash = createHash('sha256').update(bytes).digest('hex');
@@ -440,6 +481,7 @@ export class ArtifactJobManager {
       if (remaining > 0) this.#activeReads.set(jobId, remaining);
       else this.#activeReads.delete(jobId);
       this.#releaseReadSlot();
+      if (remaining === 0) await this.#expireIfNeeded(runtime);
     }
   }
 
@@ -511,6 +553,7 @@ export class ArtifactJobManager {
     const path = join(this.jobDirectory(job.jobId), 'job.json');
     const temp = join(this.jobDirectory(job.jobId), `job.${randomUUID()}.metadata-tmp`);
     const bytes = Buffer.from(`${JSON.stringify(job, null, 2)}\n`, 'utf8');
+    const previousBytes = this.#metadataBytes.get(job.jobId) ?? 0;
     if (this.#usedBytes + bytes.length > this.config.scratchQuotaBytes) {
       throw new FsError(
         ErrorCode.TOO_LARGE,
@@ -518,7 +561,13 @@ export class ArtifactJobManager {
       );
     }
     await writeFile(temp, bytes, { flag: 'wx', mode: 0o600 });
-    await rename(temp, path);
+    try {
+      await replaceMetadataFile(temp, path);
+    } finally {
+      await unlink(temp).catch(() => undefined);
+    }
+    this.#usedBytes += bytes.length - previousBytes;
+    this.#metadataBytes.set(job.jobId, bytes.length);
   }
 
   #artifactPath(jobId: string, artifact: StoredArtifact): string {
@@ -577,13 +626,20 @@ export class ArtifactJobManager {
       await this.#expireIfNeeded(runtime);
       const finished = runtime.job.finishedAt ? Date.parse(runtime.job.finishedAt) : undefined;
       if (
-        runtime.job.resultExpired &&
+        (runtime.job.resultExpired ||
+          (runtime.job.state !== 'completed' && isTerminal(runtime.job))) &&
         finished !== undefined &&
         Date.now() - finished > this.config.resultTtlMs * 2 &&
         (this.#activeReads.get(runtime.job.jobId) ?? 0) === 0
       ) {
         this.#jobs.delete(runtime.job.jobId);
         this.#idempotency.delete(runtime.job.idempotencyKey);
+        this.#usedBytes = Math.max(
+          0,
+          this.#usedBytes - (this.#metadataBytes.get(runtime.job.jobId) ?? 0),
+        );
+        this.#metadataBytes.delete(runtime.job.jobId);
+        this.#persistChains.delete(runtime.job.jobId);
         await rm(this.jobDirectory(runtime.job.jobId), { recursive: true, force: true });
       }
     }
@@ -640,7 +696,11 @@ export class ArtifactJobManager {
         runtime.job.stopReason = 'server-shutdown';
         runtime.job.finishedAt = new Date().toISOString();
         runtime.abortController.abort(new Error('Server shutting down'));
-        await this.persist(runtime.job);
+        await this.persist(runtime.job).catch((error: unknown) => {
+          Logger.warn(
+            `Could not persist interrupted snapshot job ${runtime.job.jobId}: ${formatUnknownErrorMessage(error)}`,
+          );
+        });
       }
       if (runtime.worker) workers.push(runtime.worker);
     }

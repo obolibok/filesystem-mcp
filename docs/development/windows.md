@@ -132,6 +132,38 @@ node dist/index.js --port 3000 --http-host 127.0.0.1 --read-only --root-boundary
 ChatGPT. Доставка в выбранную среду анализа — отдельный будущий опыт.
 Не оставлять тестовый сервер работающим после проверки.
 
+## Snapshot jobs
+
+`snapshot` доступен вместе с `job_status`, `cancel_job` и `get_artifact`, в том
+числе с `--read-only`: источники только читаются, а служебные bytes пишутся в
+отдельный scratch. Для воспроизводимого deployment задавать стабильный каталог:
+
+```powershell
+$env:FS_SNAPSHOT_DIR = 'D:\filesystem-mcp-scratch'
+node dist/index.js --read-only --root-boundary $fixturePath $fixturePath
+```
+
+Один scratch каталог принадлежит одному процессу сервера. Для параллельных
+экземпляров задавать разные `FS_SNAPSHOT_DIR`; каталог должен переживать restart
+того же экземпляра, если требуется повторная выдача completed artifacts.
+
+Scratch не должен быть source root или его потомком. Если scratch находится внутри
+более широкого source root, walker канонически исключает его subtree и фиксирует это
+в manifest. Default без переменной — `filesystem-mcp-snapshot-v1` под системным temp;
+OS может очищать temp, поэтому это только локальный профиль, не durable deployment.
+
+Быстрый synthetic test и воспроизводимые load/walk команды:
+
+```powershell
+node --test --import tsx __tests__/snapshot.test.ts
+node --import tsx scripts/snapshot-benchmark/run.mts --mode pipeline --records 3000000
+node --import tsx scripts/snapshot-benchmark/run.mts --mode walk --walk-files 21000 --records 1
+```
+
+Benchmark 3 млн не входит в обычный CI. Перед live опытом следовать
+[snapshot protocol](../testing/snapshot-live.md); локальный PASS не доказывает
+материализацию большой embedded resource в ChatGPT.
+
 JSON-конфиги зависят от клиента: README содержит отдельный VS Code пример с
 `servers` и другие варианты с `mcpServers`. Не копировать оболочку между клиентами.
 В строках JSON использовать `C:/path` либо экранированные `C:\\path`; placeholders

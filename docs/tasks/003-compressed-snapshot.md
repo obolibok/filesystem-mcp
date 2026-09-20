@@ -144,37 +144,37 @@ job, ограниченная очередь, время job до 60 минут,
 
 ## Acceptance
 
-- [ ] Контракт и настройки документированы; submit/status/cancel/fetch работают
-  в stdio и последовательных независимых HTTP-запросах, в source read-only режиме.
-- [ ] Повторный и параллельный submit с одним key не дублирует обход; конфликт
-  аргументов отклоняется. Потерянный ответ, disconnect и короткий client timeout
-  не уничтожают принятую job; последующий статус её видит. Отмена и shutdown проверены.
-- [ ] Настоящий synthetic FS walk более 20 000 файлов: точное множество/число строк
-  на неизменяемом дереве, без пропусков/дублей. Unicode,
-  пустое расширение, Windows paths/aliases, inaccessible/disappearing files,
-  escape junction, ignore semantics и исключение scratch проверены.
-- [ ] Отдельный synthetic pipeline benchmark: около 3 млн metadata records /
-  450–500 MB raw с реалистичной длиной строк; bounded streaming, все части проверены
-  независимым verifier (ZIP integrity, CSV parsing, schema, counts, SHA-256).
-  Проверить плохо сжимаемые данные, граничные размеры и CSV quoting/multiline через
-  synthetic metadata или POSIX fixtures: не требовать запрещённых символов в Windows
-  именах файлов. Production input не нужен.
-- [ ] Записаны elapsed, peak RSS/heap, peak disk, rows/raw/ZIP/base64 bytes и число
-  частей. При одинаковых caps сравнить меньший и большой pipeline: память не растёт
-  пропорционально числу строк. Ориентир standalone benchmark — peak RSS <256 MiB;
-  отклонение объяснить и устранить источник неограниченного роста перед handoff.
-  Полный benchmark выполнить локально; не помещать 3 млн файлов в обычный CI.
-- [ ] Disk/size/job quotas, ENOSPC, compression failure, cancel/complete races,
-  TTL/cleanup concurrent with read, restart и сужение доступа воспроизводимо проверены.
-  Нет утечки partial artifacts и выдачи неавторизованных bytes.
+- [x] Контракт и настройки документированы; submit/status/cancel/fetch работают
+      в stdio и последовательных независимых HTTP-запросах, в source read-only режиме.
+- [x] Повторный и параллельный submit с одним key не дублирует обход; конфликт
+      аргументов отклоняется. Потерянный ответ, disconnect и короткий client timeout
+      не уничтожают принятую job; последующий статус её видит. Отмена и shutdown проверены.
+- [x] Настоящий synthetic FS walk более 20 000 файлов: точное множество/число строк
+      на неизменяемом дереве, без пропусков/дублей. Unicode,
+      пустое расширение, Windows paths/aliases, inaccessible/disappearing files,
+      escape junction, ignore semantics и исключение scratch проверены.
+- [x] Отдельный synthetic pipeline benchmark: около 3 млн metadata records /
+      450–500 MB raw с реалистичной длиной строк; bounded streaming, все части проверены
+      независимым verifier (ZIP integrity, CSV parsing, schema, counts, SHA-256).
+      Проверить плохо сжимаемые данные, граничные размеры и CSV quoting/multiline через
+      synthetic metadata или POSIX fixtures: не требовать запрещённых символов в Windows
+      именах файлов. Production input не нужен.
+- [x] Записаны elapsed, peak RSS/heap, peak disk, rows/raw/ZIP/base64 bytes и число
+      частей. При одинаковых caps сравнить меньший и большой pipeline: память не растёт
+      пропорционально числу строк. Ориентир standalone benchmark — peak RSS <256 MiB;
+      отклонение объяснить и устранить источник неограниченного роста перед handoff.
+      Полный benchmark выполнить локально; не помещать 3 млн файлов в обычный CI.
+- [x] Disk/size/job quotas, ENOSPC, compression failure, cancel/complete races,
+      TTL/cleanup concurrent with read, restart и сужение доступа воспроизводимо проверены.
+      Нет утечки partial artifacts и выдачи неавторизованных bytes.
 - [ ] Полный npm run check, relevant HTTP/stdio tests, reference, runbook и
-  воспроизводимый benchmark/protocol обновлены. Skips и их причины указаны.
+      воспроизводимый benchmark/protocol обновлены. Skips и их причины указаны.
 - [ ] После локальной готовности — synthetic live ChatGPT прогон с пользователем:
-  start/status/получение manifest и нескольких частей, независимые hashes,
-  распаковка и CSV counts. Size ladder включает архив около 5,53 MB и выбранную
-  рабочую границу; записать raw/ZIP/wire sizes, таймауты/ошибки и повторную выдачу.
-  Не загружать production архив. Если этот шаг ждёт пользователя/среду, закончить
-  локальную реализацию, закоммитить и явно передать pending live, не заявляя done.
+      start/status/получение manifest и нескольких частей, независимые hashes,
+      распаковка и CSV counts. Size ladder включает архив около 5,53 MB и выбранную
+      рабочую границу; записать raw/ZIP/wire sizes, таймауты/ошибки и повторную выдачу.
+      Не загружать production архив. Если этот шаг ждёт пользователя/среду, закончить
+      локальную реализацию, закоммитить и явно передать pending live, не заявляя done.
 
 ## Порядок работы и handoff
 
@@ -208,18 +208,49 @@ Push, PR и merge оставить планированию до отдельн�
   1 running + 4 queued jobs, 60 minutes/job, TTL 24 hours, scratch quota 1 GiB,
   2 concurrent artifact reads. Настройки задаются отдельными `FS_SNAPSHOT_*`
   variables; MB/MiB в документации не смешиваются.
-- Что изменилось и почему: работа продолжается. Общий disk-backed manager будет
-  endpoint/process scoped и producer-neutral, чтобы 004 добавил producer, а не
-  второй lifecycle. Metadata фиксируется атомарно; restart сохраняет completed
-  artifacts и переводит queued/running в `interrupted`, без автоматического resume.
-  Scratch выбирается оператором (`FS_SNAPSHOT_DIR`) либо создаётся в системном temp,
-  никогда не добавляется в source roots; совпадающее/вложенное source дерево
-  отклоняется, чтобы snapshot не перечислял собственные результаты.
-- Команды, результаты, среда и skips: pending.
-- Benchmark (walk отдельно от metadata pipeline): pending.
-- Live evidence / что ожидает пользователя: после локальной реализации pending
-  целевой synthetic ChatGPT прогон; SDK/local delivery не будет отмечен как live PASS.
-- Выполненные и оставшиеся acceptance: pending.
+- Что изменилось и почему: общий disk-backed manager реализован endpoint/process
+  scoped и producer-neutral, чтобы 004 добавил producer, а не второй lifecycle.
+  Metadata фиксируется atomic temp+rename с bounded Windows retry; restart сохраняет
+  completed artifacts и переводит queued/running в `interrupted`, без resume.
+  Scratch выбирается оператором (`FS_SNAPSHOT_DIR`) либо стабильно создаётся в
+  системном temp; один каталог имеет одного владельца-процесс. Он не становится
+  source root: source внутри scratch отклоняется, scratch subtree внутри source
+  канонически исключается. HTTP manager живёт дольше per-request server, stdio
+  shutdown ожидает manager close. Idempotency submit сериализован, чтения имеют
+  отдельный semaphore, cleanup не удаляет artifact во время активного read.
+- Pipeline: bounded `opendir` walk через `GuardedFileSystem`, nested `.gitignore`,
+  default/hidden filters, без следования symlink/junction; CSV режется только на
+  границе записи и текущая raw часть spool-ится в scratch. `yazl` выбран как малая
+  streaming ZIP dependency (MIT; одна runtime dependency `buffer-crc32`); `yauzl`
+  и `csv-parse` используются только независимым test/benchmark verifier.
+- Команды, результаты, среда и skips: Windows, Node.js 24.15.0. `npm run build`,
+  `npm run type-check`, `npm run type-check:test`, `eslint .`, `knip` и targeted
+  snapshot/HTTP/stdio tests проходят. Полный `npm test`: 367 tests, 360 pass,
+  0 fail, 7 skips. Skips существующие: одна POSIX inode/mode проверка, одна POSIX
+  0222 проверка и пять сценариев symlink, недоступных текущему Windows runner.
+  `npm run check` выполнен, но останавливается только на унаследованном Prettier
+  mismatch в `docs/project/status.md` и `docs/testing/snapshot-shape-2026-09-20.md`;
+  первый файл запрещено менять этой задачей. Все изменённые файлы проходят отдельный
+  `prettier --check`; последующие knip и полный test выполнены отдельно.
+- Benchmark (walk отдельно от metadata pipeline): воспроизводимый runner и полные
+  результаты в [snapshot benchmark](../testing/snapshot-benchmark-2026-09-20.md).
+  3 000 000 записей: 478 889 517 raw bytes, 50 373 149 ZIP bytes, 11 частей,
+  152,320 s, peak RSS 236 810 240 B, heap 76 750 992 B, scratch 96 691 088 B,
+  base64 67 170 596 chars; independent ZIP/CSV/hash verifier PASS. 100 000 строк
+  дали peak RSS 132 177 920 B: 30x rows при 1,79x RSS. Real walk: 21 000 файлов,
+  exact set/count, 8,021 s, peak RSS 140 468 224 B. Poor-compression профиль
+  boundedly отказал на 8 MiB ZIP cap без опубликованных partial artifacts.
+- Live evidence / что ожидает пользователя: локальная реализация готова; pending
+  целевой synthetic ChatGPT прогон по [live protocol](../testing/snapshot-live.md).
+  Нужны materialized manifest и минимум три ZIP-части, включая около 5,53 MB,
+  независимые hashes/распаковка/CSV counts/повторная выдача и size ladder. SDK/local
+  delivery не отмечается как live PASS; production input запрещён.
+- Выполненные и оставшиеся acceptance: локальные contract/lifecycle/walk/benchmark/
+  quota/error/security checks выполнены. Не закрыты полный aggregate check из-за
+  двух base formatting mismatches и отдельный live ChatGPT опыт, поэтому карточка
+  не передаётся как `done`.
+- Локальные commits: `f126d63d` (контракт) и `63f4f08f` (основная реализация);
+  validation/benchmark/docs будут зафиксированы отдельным финальным commit.
 - Ограничения и handoff: source snapshot не атомарен; v1 не читает и не хеширует
   содержимое originals, не разыменовывает symlink/junction, не возобновляет job после
   restart и не заявляет multi-user isolation.

@@ -146,7 +146,7 @@ async function loadLocalIgnore(
   }
 }
 
-export async function* walkSnapshotRecords(
+async function* walkSnapshotRecords(
   fs: GuardedFileSystem,
   root: string,
   options: SnapshotWalkOptions,
@@ -261,6 +261,7 @@ async function writeBuffer(part: OpenPart, bytes: Buffer, ctx: JobRunContext): P
     while (offset < bytes.length) {
       ctx.signal.throwIfAborted();
       const result = await part.handle.write(bytes, offset, bytes.length - offset);
+      if (result.bytesWritten === 0) throw new Error('Snapshot spool write made no progress');
       offset += result.bytesWritten;
     }
     part.rawBytes += bytes.length;
@@ -316,7 +317,12 @@ async function finalizePart(part: OpenPart, ctx: JobRunContext): Promise<StoredA
       }
       ctx.reserveDisk(chunk.length);
       try {
-        await zipHandle.write(chunk);
+        let offset = 0;
+        while (offset < chunk.length) {
+          const result = await zipHandle.write(chunk, offset, chunk.length - offset);
+          if (result.bytesWritten === 0) throw new Error('Snapshot ZIP write made no progress');
+          offset += result.bytesWritten;
+        }
       } catch (error) {
         ctx.releaseDisk(chunk.length);
         throw error;

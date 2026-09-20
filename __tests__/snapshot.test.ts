@@ -2,8 +2,8 @@ import type { CallToolResult } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -111,15 +111,17 @@ describe('snapshot jobs and artifacts', () => {
       });
       const jobId = meta(submitted).job?.jobId;
       assert(jobId);
+      await client.close();
+      const resumedClient = await http.makeClient('snapshot-http-resumed');
       const deadline = Date.now() + 10_000;
       for (;;) {
-        const status = await client.callTool({ name: 'job_status', arguments: { jobId } });
+        const status = await resumedClient.callTool({ name: 'job_status', arguments: { jobId } });
         if (meta(status).state === 'completed') break;
         assert.notEqual(meta(status).state, 'failed');
         assert(Date.now() < deadline, 'HTTP snapshot did not finish');
         await delay(10);
       }
-      await client.close();
+      await resumedClient.close();
     } finally {
       await http.close();
     }
@@ -220,6 +222,117 @@ describe('snapshot jobs and artifacts', () => {
     }
   });
 
+  it('records inaccessible and disappearing files without failing the bounded walk', async () => {
+    const root = await createTestRoot();
+    const scratch = await createTestRoot();
+    await writeTestFile(root, 'ok.txt', 'ok');
+    await writeTestFile(root, 'denied.txt', 'denied');
+    await writeTestFile(root, 'gone.txt', 'gone');
+    const guard = await makeGuard([root]);
+    class FaultingFileSystem extends GuardedFileSystem {
+      override async statDetailed(
+        filePath: string,
+        options?: { signal?: AbortSignal },
+      ): ReturnType<GuardedFileSystem['statDetailed']> {
+        if (basename(filePath) === 'denied.txt') {
+          throw Object.assign(new Error('synthetic permission denial'), { code: 'EACCES' });
+        }
+        if (basename(filePath) === 'gone.txt') await unlink(filePath);
+        return super.statDetailed(filePath, options);
+      }
+    }
+    const fs = new FaultingFileSystem(guard);
+    const manager = new ArtifactJobManager({
+      ...getSnapshotConfig(),
+      scratchDirectory: scratch,
+      ephemeralScratch: false,
+    });
+    try {
+      const submitted = await manager.submit({
+        kind: 'snapshot',
+        idempotencyKey: 'walk-errors-key',
+        fingerprint: fingerprintJobInput('walk-errors'),
+        sourceRoot: root,
+        sourceRootId: 'root-test',
+        input: {},
+        run: async (ctx) =>
+          runSnapshotPipeline(fs, root, { includeHidden: false, includeIgnored: false }, ctx),
+      });
+      const completed = await waitForTerminal(() => manager.getJob(submitted.job.jobId, guard));
+      assert.equal(completed.state, 'completed');
+      assert.equal(completed.complete, false);
+      assert.equal(completed.counters.filesWritten, 1);
+      assert.equal(completed.counters.inaccessibleSkipped, 1);
+      assert.equal(completed.counters.disappearedSkipped, 1);
+      assert.equal(completed.counters.errors, 2);
+      assert.deepEqual(
+        new Set(completed.errors.map((error) => error.code)),
+        new Set(['EACCES', 'NOT_FOUND']),
+      );
+    } finally {
+      await manager.close();
+      await rm(scratch, { recursive: true, force: true });
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('does not follow an escape junction and excludes an in-source scratch directory', async (t) => {
+    const container = await createTestRoot();
+    const external = await createTestRoot();
+    const root = join(container, 'target');
+    const alias = join(container, 'alias');
+    const scratch = join(root, '.snapshot-scratch');
+    await mkdir(root);
+    await writeTestFile(root, 'kept.txt', 'kept');
+    await writeTestFile(external, 'escaped.txt', 'escaped');
+    try {
+      await symlink(root, alias, 'junction');
+      await symlink(external, join(root, 'escape-junction'), 'junction');
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EPERM' || code === 'EACCES' || code === 'UNKNOWN') {
+        t.skip(`junction creation unavailable: ${code}`);
+        return;
+      }
+      throw error;
+    }
+    const guard = await makeGuard([alias]);
+    const canonicalRoot = await guard.validateExistingDirectory(alias);
+    const fs = new GuardedFileSystem(guard);
+    const manager = new ArtifactJobManager({
+      ...getSnapshotConfig(),
+      scratchDirectory: scratch,
+      ephemeralScratch: false,
+    });
+    try {
+      await manager.assertScratchSeparated(canonicalRoot);
+      const submitted = await manager.submit({
+        kind: 'snapshot',
+        idempotencyKey: 'junction-key',
+        fingerprint: fingerprintJobInput('junction'),
+        sourceRoot: canonicalRoot,
+        sourceRootId: 'root-test',
+        input: {},
+        run: async (ctx) =>
+          runSnapshotPipeline(
+            fs,
+            canonicalRoot,
+            { includeHidden: true, includeIgnored: false },
+            ctx,
+          ),
+      });
+      const completed = await waitForTerminal(() => manager.getJob(submitted.job.jobId, guard));
+      assert.equal(completed.state, 'completed');
+      assert.equal(completed.counters.filesWritten, 1);
+      assert.equal(completed.counters.symlinksSkipped, 1);
+      assert.equal(completed.counters.scratchExcluded, 1);
+    } finally {
+      await manager.close();
+      await cleanupTestRoot(container);
+      await cleanupTestRoot(external);
+    }
+  });
+
   it('keeps CSV quoting on record boundaries and preserves completed artifacts across restart', async () => {
     const root = await createTestRoot();
     const scratch = await createTestRoot();
@@ -283,6 +396,56 @@ describe('snapshot jobs and artifacts', () => {
       } finally {
         await restarted.close();
       }
+    } finally {
+      await manager.close();
+      await rm(scratch, { recursive: true, force: true });
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('coalesces parallel submits with one idempotency key into one producer run', async () => {
+    const root = await createTestRoot();
+    const scratch = await createTestRoot();
+    const guard = await makeGuard([root]);
+    const config = {
+      ...getSnapshotConfig(),
+      scratchDirectory: scratch,
+      ephemeralScratch: false,
+    };
+    const manager = new ArtifactJobManager(config);
+    let producerRuns = 0;
+    const input = {
+      kind: 'snapshot',
+      idempotencyKey: 'parallel-key',
+      fingerprint: fingerprintJobInput('parallel'),
+      sourceRoot: root,
+      sourceRootId: 'root-test',
+      input: {},
+      run: async (ctx: Parameters<Parameters<ArtifactJobManager['submit']>[0]['run']>[0]) => {
+        producerRuns += 1;
+        await delay(25);
+        return writeSnapshotFromRecords(
+          (async function* () {
+            yield {
+              rootId: 'root-test',
+              relativePath: 'one.txt',
+              name: 'one.txt',
+              extension: '.txt',
+              length: 1,
+              lastWriteTime: '2026-09-20T00:00:00.000Z',
+            };
+          })(),
+          ctx,
+          { includeHidden: false, includeIgnored: false },
+        );
+      },
+    };
+    try {
+      const results = await Promise.all(Array.from({ length: 8 }, () => manager.submit(input)));
+      assert.equal(new Set(results.map((result) => result.job.jobId)).size, 1);
+      assert.equal(results.filter((result) => !result.reused).length, 1);
+      await waitForTerminal(() => manager.getJob(results[0]?.job.jobId ?? '', guard));
+      assert.equal(producerRuns, 1);
     } finally {
       await manager.close();
       await rm(scratch, { recursive: true, force: true });
@@ -370,7 +533,7 @@ describe('snapshot jobs and artifacts', () => {
     }
   });
 
-  it('fails boundedly when final ZIP or scratch quota cannot contain a part', async () => {
+  it('fails boundedly on ZIP cap, scratch quota, and synthetic ENOSPC', async () => {
     const root = await createTestRoot();
     const scratch = await createTestRoot();
     const guard = await makeGuard([root]);
@@ -406,10 +569,84 @@ describe('snapshot jobs and artifacts', () => {
       assert.equal(failed.state, 'failed');
       assert.match(failed.stopReason ?? '', /ZIP part/u);
       assert.deepEqual(failed.artifacts, []);
+
+      const diskFull = await manager.submit({
+        kind: 'snapshot',
+        idempotencyKey: 'enospc-key',
+        fingerprint: fingerprintJobInput('enospc'),
+        sourceRoot: root,
+        sourceRootId: 'root-test',
+        input: {},
+        run: async (ctx) => {
+          const partial = ctx.tempPath('disk-full');
+          const bytes = Buffer.from('partial bytes');
+          ctx.reserveDisk(bytes.length);
+          await writeFile(partial, bytes);
+          throw Object.assign(new Error('synthetic disk full'), { code: 'ENOSPC' });
+        },
+      });
+      const noSpace = await waitForTerminal(() => manager.getJob(diskFull.job.jobId, guard));
+      assert.equal(noSpace.state, 'failed');
+      assert.equal(noSpace.errors.at(-1)?.code, 'ENOSPC');
+      assert.deepEqual(noSpace.artifacts, []);
+      assert(
+        (await readdir(manager.jobDirectory(noSpace.jobId))).every(
+          (name) => !name.endsWith('.partial'),
+        ),
+      );
     } finally {
       await manager.close();
       await rm(scratch, { recursive: true, force: true });
       await cleanupTestRoot(root);
+    }
+
+    const quotaRoot = await createTestRoot();
+    const quotaScratch = await createTestRoot();
+    const quotaGuard = await makeGuard([quotaRoot]);
+    const quotaManager = new ArtifactJobManager({
+      ...getSnapshotConfig(),
+      scratchDirectory: quotaScratch,
+      ephemeralScratch: false,
+      maxRecordBytes: 16 * 1024,
+      maxRawPartBytes: 24 * 1024,
+      maxJobRawBytes: 24 * 1024,
+      maxJobArtifactBytes: 24 * 1024,
+      scratchQuotaBytes: 4096,
+    });
+    try {
+      const submitted = await quotaManager.submit({
+        kind: 'snapshot',
+        idempotencyKey: 'scratch-cap-key',
+        fingerprint: fingerprintJobInput('scratch-cap'),
+        sourceRoot: quotaRoot,
+        sourceRootId: 'root-test',
+        input: {},
+        run: async (ctx) =>
+          writeSnapshotFromRecords(
+            (async function* () {
+              yield {
+                rootId: 'root-test',
+                relativePath: `${'x'.repeat(5000)}.txt`,
+                name: `${'x'.repeat(5000)}.txt`,
+                extension: '.txt',
+                length: 1,
+                lastWriteTime: '2026-09-20T00:00:00.000Z',
+              };
+            })(),
+            ctx,
+            { includeHidden: false, includeIgnored: false },
+          ),
+      });
+      const failed = await waitForTerminal(() =>
+        quotaManager.getJob(submitted.job.jobId, quotaGuard),
+      );
+      assert.equal(failed.state, 'failed');
+      assert.match(failed.stopReason ?? '', /scratch quota/u);
+      assert.deepEqual(failed.artifacts, []);
+    } finally {
+      await quotaManager.close();
+      await rm(quotaScratch, { recursive: true, force: true });
+      await cleanupTestRoot(quotaRoot);
     }
   });
 
@@ -424,10 +661,24 @@ describe('snapshot jobs and artifacts', () => {
       ...getSnapshotConfig(),
       scratchDirectory: scratch,
       ephemeralScratch: false,
-      resultTtlMs: 100,
+      resultTtlMs: 200,
       cleanupIntervalMs: 10,
     };
-    const manager = new ArtifactJobManager(config);
+    let enteredRead!: () => void;
+    let releaseRead!: () => void;
+    const readStarted = new Promise<void>((resolve) => {
+      enteredRead = resolve;
+    });
+    const readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const manager = new ArtifactJobManager(config, {
+      readArtifact: async (path) => {
+        enteredRead();
+        await readGate;
+        return readFile(path);
+      },
+    });
     try {
       const submitted = await manager.submit({
         kind: 'snapshot',
@@ -447,11 +698,18 @@ describe('snapshot jobs and artifacts', () => {
       const narrowed = await makeGuard([otherRoot]);
       await assert.rejects(manager.getJob(submitted.job.jobId, narrowed), /Outside allowed/u);
 
-      await delay(125);
+      const activeRead = manager.getArtifact(artifactId, guard);
+      await readStarted;
+      await delay(225);
+      await manager.cleanupExpired();
+      assert.equal((await manager.getJob(submitted.job.jobId, guard)).resultExpired, undefined);
+      releaseRead();
+      assert((await activeRead).bytes.length > 0);
       const expired = await manager.getJob(submitted.job.jobId, guard);
       assert.equal(expired.resultExpired, true);
       await assert.rejects(manager.getArtifact(artifactId, guard), /expired|not found/u);
     } finally {
+      releaseRead();
       await manager.close();
       await rm(scratch, { recursive: true, force: true });
       await cleanupTestRoot(root);

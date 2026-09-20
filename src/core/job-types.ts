@@ -7,7 +7,7 @@ export const JOB_STATES = [
   'interrupted',
 ] as const;
 
-export type JobState = (typeof JOB_STATES)[number];
+type JobState = (typeof JOB_STATES)[number];
 
 export interface SnapshotCounters {
   entriesSeen: number;
