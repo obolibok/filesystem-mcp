@@ -35,6 +35,7 @@ import {
   readAcceptedConfirm,
   readAcceptedMultiChoice,
 } from '../core/input-required.js';
+import type { ArtifactJobManager } from '../core/job-manager.js';
 import { Logger, sanitizeLogField } from '../core/observability.js';
 import type { LoggingLevel } from '../core/observability.js';
 import type { PageSnapshotStore } from '../core/page-store.js';
@@ -53,6 +54,7 @@ export interface ToolCtx {
   readonly fs: GuardedFileSystem;
   readonly pageStore: PageSnapshotStore;
   readonly resourceStore: ResourceStore | undefined;
+  readonly jobManager: ArtifactJobManager;
   /** Emits a log line to stderr via `Logger.emit`, gated by `LOG_LEVEL`. */
   readonly log?: (level: LoggingLevel, data: unknown, logger?: string) => void;
   readonly sendNotification?: (notification: Notification) => Promise<void>;
@@ -91,6 +93,7 @@ interface ToolDeps {
   readonly pathGuard: PathGuard;
   readonly pageStore: PageSnapshotStore;
   readonly resourceStore: ResourceStore | undefined;
+  readonly jobManager: ArtifactJobManager;
   readonly era?: 'legacy' | 'modern';
 }
 
@@ -108,8 +111,8 @@ interface RunResult<T> {
 
 /**
  * `ToolAnnotations` with `readOnlyHint` required. It is optional in the SDK, but
- * MUTATING_TOOL_NAMES derives the `--read-only` gate from it, so a tool that
- * forgets it must be a compile error rather than a silent reclassification.
+ * every tool must state whether the call itself creates service state. The
+ * separate `sourceMutating` bit owns the `--read-only` source-filesystem gate.
  */
 type DeclaredAnnotations = ToolAnnotations & { readonly readOnlyHint: boolean };
 
@@ -120,6 +123,8 @@ export interface ToolDef<I extends z.ZodType, O extends z.ZodType> {
   readonly input: I;
   readonly output: O;
   readonly annotations: DeclaredAnnotations;
+  /** True only when the tool mutates caller source files and must be hidden by --read-only. */
+  readonly sourceMutating?: boolean;
   readonly timeoutMs?: number;
   readonly progress?: (args: z.infer<I>) => ProgressCtx;
   readonly progressDone?: (args: z.infer<I>, result: z.infer<O>) => Partial<ProgressCtx>;
@@ -142,13 +147,17 @@ export interface ToolDef<I extends z.ZodType, O extends z.ZodType> {
 export interface DefinedTool {
   readonly name: string;
   readonly annotations: DeclaredAnnotations;
+  readonly sourceMutating: boolean;
 
   register(deps: ToolDeps): RegisteredTool;
 }
 
 function toToolCtx(
   ctx: ServerContext,
-  deps: Pick<ToolDeps, 'pathGuard' | 'pageStore' | 'resourceStore' | 'server' | 'era'>,
+  deps: Pick<
+    ToolDeps,
+    'pathGuard' | 'pageStore' | 'resourceStore' | 'jobManager' | 'server' | 'era'
+  >,
 ): ToolCtx {
   // Envelope first, accessor second — the two eras carry this differently.
   // A modern request states the capabilities in its own `_meta` envelope; a
@@ -185,6 +194,7 @@ function toToolCtx(
     fs: new GuardedFileSystem(deps.pathGuard),
     pageStore: deps.pageStore,
     resourceStore: deps.resourceStore,
+    jobManager: deps.jobManager,
     sendNotification: async (notification) => ctx.mcpReq.notify(notification),
     inputResponses: ctx.mcpReq.inputResponses,
     requestState: ctx.mcpReq.requestState,
@@ -479,8 +489,8 @@ export function defineTool<I extends z.ZodType, O extends z.ZodType>(
   // rather than once per `register` — the HTTP leg registers every tool afresh
   // on each request.
   // Published annotations are derived, not passed through. `readOnlyHint` is
-  // load-bearing (MUTATING_TOOL_NAMES derives the --read-only gate from it) and
-  // `openWorldHint: false` is a real claim for a filesystem server. The other
+  // load-bearing for client consent and `openWorldHint: false` is a real claim
+  // for a filesystem server. The other
   // two describe behavior a read-only tool cannot have, and restate the default
   // for a mutating one — 29 tokens per tool for nothing a client acts on.
   const publishedAnnotations: ToolAnnotations = {
@@ -509,6 +519,7 @@ export function defineTool<I extends z.ZodType, O extends z.ZodType>(
   return {
     name: def.name,
     annotations: def.annotations,
+    sourceMutating: def.sourceMutating ?? !def.annotations.readOnlyHint,
 
     register(deps: ToolDeps): RegisteredTool {
       return deps.server.registerTool(def.name, toolDefShape, async (args, ctx) =>

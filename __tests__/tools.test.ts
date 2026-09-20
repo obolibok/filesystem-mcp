@@ -2497,7 +2497,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const full = await createTestClientPair([tmpDir]);
     try {
       const { tools } = await full.client.listTools();
-      assert.strictEqual(tools.length, 14, 'tool count changed; update the budget deliberately');
+      assert.strictEqual(tools.length, 18, 'tool count changed; update the budget deliberately');
       const size = JSON.stringify(tools).length;
       assert.ok(
         size <= BUDGET_CHARS,

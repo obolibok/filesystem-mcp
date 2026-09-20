@@ -28,10 +28,13 @@
 | --------------------------- | ----------------------------------------------------------- |
 | Навигация                   | `list_roots`, `list`, `find_files`                          |
 | Чтение и metadata           | `read`, `get_file`, `stat`                                  |
+| Snapshot jobs               | `snapshot`, `job_status`, `cancel_job`, `get_artifact`      |
 | Текстовый поиск и сравнение | `search_text`, `diff`                                       |
 | Изменение                   | `create`, `edit`, `move`, `delete`, `patch`, `replace_text` |
 
-14 tools; `--read-only` публикует восемь и исключает последние шесть. Источник
+18 tools; `--read-only` публикует двенадцать, включая snapshot jobs, и исключает
+последние шесть source-mutating tools. `snapshot` и `cancel_job` меняют служебное
+состояние и поэтому честно имеют `readOnlyHint: false`, но не изменяют источники. Источник
 inventory — [tools/index.ts](../../src/tools/index.ts). Есть stdio, Streamable HTTP,
 resources, `get-help`, progress, отмена, logs и подписки с protocol-era ограничениями.
 
@@ -101,12 +104,13 @@ Watcher даёт сигнал изменения, не durable journal с checkp
 
 ## Ещё не реализовано
 
-`snapshot`, `bundle`, большие downloadable artifacts и их lifecycle. `get_file`
-доставляет ровно один guarded и size-limited оригинал; это не artifact service.
+`bundle` выбранных originals. `get_file` доставляет ровно один guarded и
+size-limited оригинал; snapshot artifact service хранит только metadata CSV/ZIP и
+не является bundle service.
 Persistent corpus index, vector search, domain parsers и multi-user OAuth не
 входят в первую coding-задачу.
 
-Будущий artifact service должен разделять read-only источники и создание
-служебных результатов. Кэш tool output на 60 секунд не подходит для долгой выдачи
-CSV/ZIP. Перечисление миллионов записей требует отдельного потокового обхода,
-а не повторного использования ограниченного `find_files` как полного snapshot.
+Snapshot artifact service разделяет read-only источники и создание служебных
+результатов. Кэш tool output на 60 секунд не используется для долгой выдачи CSV/ZIP.
+Перечисление миллионов записей выполняет отдельный потоковый обход, а не снятие cap
+с `find_files`.

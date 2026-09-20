@@ -16,6 +16,7 @@ import { createServer as createHttpServer } from 'node:http';
 import type { Express, NextFunction, Request, Response } from 'express';
 
 import { formatUnknownErrorMessage } from '../core/errors.js';
+import { ArtifactJobManager } from '../core/job-manager.js';
 import { Logger } from '../core/observability.js';
 import { PageSnapshotStore } from '../core/page-store.js';
 import { PathGuard } from '../core/path.js';
@@ -279,6 +280,8 @@ export async function startHttpServer(
     modernHandler.notify.resourcesChanged();
   });
   const sharedPageStore = new PageSnapshotStore();
+  const sharedJobManager = new ArtifactJobManager();
+  await sharedJobManager.initialize();
   // One guard for the whole endpoint. The modern leg builds a fresh McpServer
   // per request, so a per-instance guard would discard every accepted access
   // grant the moment the request ended — re-prompting on each subsequent call
@@ -298,6 +301,7 @@ export async function startHttpServer(
         pathGuard: sharedPathGuard,
         resourceStore: sharedStore,
         pageStore: sharedPageStore,
+        jobManager: sharedJobManager,
         era,
         ...(apiKey !== undefined ? { apiKey } : {}),
       });
@@ -351,9 +355,12 @@ export async function startHttpServer(
   const teardown = (): Promise<void> => {
     sharedRegistry.destroy();
     sharedPageStore.clear();
-    return modernHandler.close().catch((err: unknown) => {
-      Logger.error('[HTTP] Error closing handler:', formatUnknownErrorMessage(err));
-    });
+    return Promise.all([
+      sharedJobManager.close(),
+      modernHandler.close().catch((err: unknown) => {
+        Logger.error('[HTTP] Error closing handler:', formatUnknownErrorMessage(err));
+      }),
+    ]).then(() => undefined);
   };
   const originalClose = httpServer.close.bind(httpServer);
   httpServer.close = function (callback?: (error?: Error) => void) {

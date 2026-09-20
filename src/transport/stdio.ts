@@ -12,6 +12,7 @@ import {
 import { fileURLToPath } from 'node:url';
 
 import { formatUnknownErrorMessage } from '../core/errors.js';
+import { ArtifactJobManager } from '../core/job-manager.js';
 import { Logger } from '../core/observability.js';
 import type { ServerOptions } from '../core/path.js';
 import { PathGuard } from '../core/path.js';
@@ -128,11 +129,14 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
   // Shared with the resource contract so a `resources/subscribe` and a
   // `subscriptions/listen` naming the same URI reuse one watcher.
   const registry = createWatcherRegistry();
+  const jobManager = new ArtifactJobManager();
   const factory: McpServerFactory = async ({ era }) => {
     await ensurePathGuard();
+    await jobManager.initialize();
     const c = await createServer(options, {
       watcherRegistry: registry,
       pathGuard,
+      jobManager,
       era,
       ...(config.apiKey !== undefined ? { apiKey: config.apiKey } : {}),
     });
@@ -195,6 +199,7 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
     for (const state of listens.values()) state.cancelled = true;
     listens.clear();
     registry.destroy();
+    void jobManager.close();
     const ctx = activeCtx;
     activeCtx = undefined;
     // Both steps below are guarded separately, and for the same reason: this

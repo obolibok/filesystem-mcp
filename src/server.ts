@@ -7,6 +7,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 
 import packageJson from '../package.json' with { type: 'json' };
 import { requestStateCodec } from './core/input-required.js';
+import { ArtifactJobManager } from './core/job-manager.js';
 import { Logger } from './core/observability.js';
 import { PageSnapshotStore } from './core/page-store.js';
 import type { ServerOptions } from './core/path.js';
@@ -61,6 +62,8 @@ export async function createServer(
      * stdio, where the connection-owned context clears its store on close.
      */
     pageStore?: PageSnapshotStore;
+    /** Endpoint/process-scoped owner of durable jobs and artifacts. */
+    jobManager?: ArtifactJobManager;
     /** The protocol era this instance serves; omitted where the caller does not know. */
     era?: 'legacy' | 'modern';
     /**
@@ -146,6 +149,8 @@ export async function createServer(
       });
     });
   const pageStore = extraDeps?.pageStore ?? new PageSnapshotStore();
+  const jobManager = extraDeps?.jobManager ?? new ArtifactJobManager();
+  await jobManager.initialize();
 
   const pathGuard = extraDeps?.pathGuard ?? new PathGuard(options);
   // Recompute once per guard, keyed on the guard's own state rather than on
@@ -161,6 +166,7 @@ export async function createServer(
     pathGuard,
     pageStore,
     resourceStore,
+    jobManager,
     cacheScope,
     ...(options.readOnly ? { readOnly: true } : {}),
     ...(extraDeps?.watcherRegistry ? { watcherRegistry: extraDeps.watcherRegistry } : {}),
@@ -174,6 +180,7 @@ export async function createServer(
 
   // False when the store is shared across instances and outlives this one.
   const ownsPages = extraDeps?.pageStore === undefined;
+  const ownsJobs = extraDeps?.jobManager === undefined;
   let cleanedUp = false;
   return {
     mcp: server,
@@ -182,6 +189,7 @@ export async function createServer(
       if (cleanedUp) return;
       cleanedUp = true;
       if (ownsPages) pageStore.clear();
+      if (ownsJobs) void jobManager.close();
       resourceDisposable.dispose();
     },
   };
