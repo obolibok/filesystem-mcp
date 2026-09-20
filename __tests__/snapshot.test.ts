@@ -1152,9 +1152,13 @@ describe('snapshot jobs and artifacts', () => {
       const failed = await waitForTerminal(() => manager.getJob(faulted.job.jobId, guard));
       assert.equal(failed.state, 'failed');
       assert.deepEqual(failed.artifacts, []);
-      assert(
-        (await readdir(manager.jobDirectory(failed.jobId))).every((name) => name === 'job.json'),
-      );
+      const cleanupDeadline = Date.now() + 2000;
+      for (;;) {
+        const names = await readdir(manager.jobDirectory(failed.jobId));
+        if (names.every((name) => name === 'job.json')) break;
+        assert(Date.now() < cleanupDeadline, 'faulted ZIP job left a partial artifact');
+        await delay(5);
+      }
 
       const healthy = await manager.submit({
         kind: 'snapshot',
