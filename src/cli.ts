@@ -13,6 +13,7 @@ import {
 } from './core/path-utils.js';
 import { PathGuard } from './core/path.js';
 import { IS_WINDOWS, parseTrueEnvFlag } from './core/primitives.js';
+import { getSnapshotConfig } from './core/snapshot-config.js';
 import { getMaxTextFileSize } from './core/util.js';
 import { registeredTools } from './tools/index.js';
 
@@ -239,6 +240,7 @@ export async function runPrintConfig(options: {
   const allowedRoots = pathGuard.getAllowedDirectories();
 
   const tools = registeredTools(options.readOnly).map((t) => t.name);
+  const snapshot = getSnapshotConfig();
 
   // Derived, never assumed: `--print-config --port 3000` reports the HTTP bind
   // that `--port` would actually have started, not the stdio default.
@@ -251,7 +253,26 @@ export async function runPrintConfig(options: {
     allowedRoots,
     tools,
     apiKey: options.apiKey ? '***' : null,
-    limits: { maxFileSizeBytes: getMaxTextFileSize() },
+    limits: {
+      maxFileSizeBytes: getMaxTextFileSize(),
+      snapshot: {
+        scratchDirectory: snapshot.scratchDirectory,
+        maxRecordBytes: snapshot.maxRecordBytes,
+        maxRawPartBytes: snapshot.maxRawPartBytes,
+        maxZipBytes: snapshot.maxZipBytes,
+        maxDeliveryBytes: snapshot.maxDeliveryBytes,
+        maxJobRawBytes: snapshot.maxJobRawBytes,
+        maxJobArtifactBytes: snapshot.maxJobArtifactBytes,
+        maxParts: snapshot.maxParts,
+        maxRunningJobs: snapshot.maxRunningJobs,
+        maxQueuedJobs: snapshot.maxQueuedJobs,
+        maxJobMs: snapshot.maxJobMs,
+        resultTtlMs: snapshot.resultTtlMs,
+        scratchQuotaBytes: snapshot.scratchQuotaBytes,
+        maxConcurrentReads: snapshot.maxConcurrentReads,
+        maxWalkDepth: snapshot.maxWalkDepth,
+      },
+    },
   };
 
   if (options.json) {
@@ -264,5 +285,9 @@ export async function runPrintConfig(options: {
     write(`${key('allowedRoots:')}${config.allowedRoots.join(', ') || cliFmt.dim('(none)')}\n`);
     write(`${key('tools:')}${cliFmt.dim(config.tools.join(', '))}\n`);
     write(`${key('maxFileSize:')}${cliFmt.yellow(String(config.limits.maxFileSizeBytes))}\n`);
+    write(
+      `${key('snapshotDir:')}${cliFmt.dim(config.limits.snapshot.scratchDirectory)}\n` +
+        `${key('snapshotCaps:')}${cliFmt.yellow(`${String(config.limits.snapshot.maxRawPartBytes)} raw / ${String(config.limits.snapshot.maxZipBytes)} ZIP / ${String(config.limits.snapshot.maxDeliveryBytes)} delivery bytes`)}\n`,
+    );
   }
 }

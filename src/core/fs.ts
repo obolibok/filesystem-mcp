@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Stats } from 'node:fs';
+import type { Dir, Stats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import {
   chmod as fsChmod,
@@ -412,6 +412,20 @@ export class GuardedFileSystem {
   async open(filePath: string): Promise<FileHandle> {
     const validPath = await this.pathGuard.validateExistingPath(filePath);
     return fsOpen(validPath, 'r');
+  }
+
+  /**
+   * Open one guarded directory for a bounded streaming walk. The caller owns
+   * the returned handle and must close it (async iteration closes it too).
+   */
+  async opendir(
+    dirPath: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<{ directory: Dir; validPath: string }> {
+    const validPath = await this.pathGuard.validateExistingDirectory(dirPath);
+    options?.signal?.throwIfAborted();
+    const directory = await withAbort(fsOpendir(validPath), options?.signal);
+    return { directory, validPath };
   }
 
   // Single resolution + stat: validateExistingPathDetailed resolves the real

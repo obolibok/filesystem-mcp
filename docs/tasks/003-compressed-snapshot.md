@@ -144,37 +144,37 @@ job, ограниченная очередь, время job до 60 минут,
 
 ## Acceptance
 
-- [ ] Контракт и настройки документированы; submit/status/cancel/fetch работают
-  в stdio и последовательных независимых HTTP-запросах, в source read-only режиме.
-- [ ] Повторный и параллельный submit с одним key не дублирует обход; конфликт
-  аргументов отклоняется. Потерянный ответ, disconnect и короткий client timeout
-  не уничтожают принятую job; последующий статус её видит. Отмена и shutdown проверены.
-- [ ] Настоящий synthetic FS walk более 20 000 файлов: точное множество/число строк
-  на неизменяемом дереве, без пропусков/дублей. Unicode,
-  пустое расширение, Windows paths/aliases, inaccessible/disappearing files,
-  escape junction, ignore semantics и исключение scratch проверены.
-- [ ] Отдельный synthetic pipeline benchmark: около 3 млн metadata records /
-  450–500 MB raw с реалистичной длиной строк; bounded streaming, все части проверены
-  независимым verifier (ZIP integrity, CSV parsing, schema, counts, SHA-256).
-  Проверить плохо сжимаемые данные, граничные размеры и CSV quoting/multiline через
-  synthetic metadata или POSIX fixtures: не требовать запрещённых символов в Windows
-  именах файлов. Production input не нужен.
-- [ ] Записаны elapsed, peak RSS/heap, peak disk, rows/raw/ZIP/base64 bytes и число
-  частей. При одинаковых caps сравнить меньший и большой pipeline: память не растёт
-  пропорционально числу строк. Ориентир standalone benchmark — peak RSS <256 MiB;
-  отклонение объяснить и устранить источник неограниченного роста перед handoff.
-  Полный benchmark выполнить локально; не помещать 3 млн файлов в обычный CI.
-- [ ] Disk/size/job quotas, ENOSPC, compression failure, cancel/complete races,
-  TTL/cleanup concurrent with read, restart и сужение доступа воспроизводимо проверены.
-  Нет утечки partial artifacts и выдачи неавторизованных bytes.
-- [ ] Полный npm run check, relevant HTTP/stdio tests, reference, runbook и
-  воспроизводимый benchmark/protocol обновлены. Skips и их причины указаны.
+- [x] Контракт и настройки документированы; submit/status/cancel/fetch работают
+      в stdio и последовательных независимых HTTP-запросах, в source read-only режиме.
+- [x] Повторный и параллельный submit с одним key не дублирует обход; конфликт
+      аргументов отклоняется. Потерянный ответ, disconnect и короткий client timeout
+      не уничтожают принятую job; последующий статус её видит. Отмена и shutdown проверены.
+- [x] Настоящий synthetic FS walk более 20 000 файлов: точное множество/число строк
+      на неизменяемом дереве, без пропусков/дублей. Unicode,
+      пустое расширение, Windows paths/aliases, inaccessible/disappearing files,
+      escape junction, ignore semantics и исключение scratch проверены.
+- [x] Отдельный synthetic pipeline benchmark: около 3 млн metadata records /
+      450–500 MB raw с реалистичной длиной строк; bounded streaming, все части проверены
+      независимым verifier (ZIP integrity, CSV parsing, schema, counts, SHA-256).
+      Проверить плохо сжимаемые данные, граничные размеры и CSV quoting/multiline через
+      synthetic metadata или POSIX fixtures: не требовать запрещённых символов в Windows
+      именах файлов. Production input не нужен.
+- [x] Записаны elapsed, peak RSS/heap, peak disk, rows/raw/ZIP/base64 bytes и число
+      частей. При одинаковых caps сравнить меньший и большой pipeline: память не растёт
+      пропорционально числу строк. Ориентир standalone benchmark — peak RSS <256 MiB;
+      отклонение объяснить и устранить источник неограниченного роста перед handoff.
+      Полный benchmark выполнить локально; не помещать 3 млн файлов в обычный CI.
+- [x] Disk/size/job quotas, ENOSPC, compression failure, cancel/complete races,
+      TTL/cleanup concurrent with read, restart и сужение доступа воспроизводимо проверены.
+      Нет утечки partial artifacts и выдачи неавторизованных bytes.
+- [x] Полный npm run check, relevant HTTP/stdio tests, reference, runbook и
+      воспроизводимый benchmark/protocol обновлены. Skips и их причины указаны.
 - [ ] После локальной готовности — synthetic live ChatGPT прогон с пользователем:
-  start/status/получение manifest и нескольких частей, независимые hashes,
-  распаковка и CSV counts. Size ladder включает архив около 5,53 MB и выбранную
-  рабочую границу; записать raw/ZIP/wire sizes, таймауты/ошибки и повторную выдачу.
-  Не загружать production архив. Если этот шаг ждёт пользователя/среду, закончить
-  локальную реализацию, закоммитить и явно передать pending live, не заявляя done.
+      start/status/получение manifest и нескольких частей, независимые hashes,
+      распаковка и CSV counts. Size ladder включает архив около 5,53 MB и выбранную
+      рабочую границу; записать raw/ZIP/wire sizes, таймауты/ошибки и повторную выдачу.
+      Не загружать production архив. Если этот шаг ждёт пользователя/среду, закончить
+      локальную реализацию, закоммитить и явно передать pending live, не заявляя done.
 
 ## Порядок работы и handoff
 
@@ -192,13 +192,152 @@ Push, PR и merge оставить планированию до отдельн�
 
 ## Work record
 
-Заполняет исполнитель. До запуска: не начато.
+Реализация начата 2026-09-20.
 
-- Base и branch:
-- Контракт tools, schema/manifest и defaults:
-- Что изменилось и почему:
-- Команды, результаты, среда и skips:
-- Benchmark (walk отдельно от metadata pipeline):
-- Live evidence / что ожидает пользователя:
-- Выполненные и оставшиеся acceptance:
-- Ограничения и handoff:
+- Base и branch: `ce4f22b4f9ca453d915100c3206363d96dc6d208`,
+  `codex/003-compressed-snapshot`, отдельный worktree приложения.
+- Контракт tools, schema/manifest и defaults: выбраны `snapshot`, `job_status`,
+  `cancel_job`, `get_artifact`. `snapshot` принимает обязательные `path` и
+  `idempotencyKey`, а также `includeHidden` / `includeIgnored`; status/cancel/fetch
+  принимают opaque ID и повторно проверяют доступ к canonical source root. CSV v1:
+  UTF-8 без BOM, CRLF, RFC 4180 quoting, header
+  `RootId,RelativePath,Name,Extension,Length,LastWriteTime`; relative paths всегда
+  POSIX, timestamp — ISO 8601 UTC. Manifest JSON v1 является отдельным immutable
+  artifact и перечисляет ZIP-части. Defaults до benchmark: raw CSV part 45 MiB,
+  ZIP artifact/delivery 8 MiB, record 1 MiB, 128 parts/job, 512 MiB/job,
+  1 running + 4 queued jobs, 60 minutes/job, TTL 24 hours, scratch quota 1 GiB,
+  2 concurrent artifact reads. Настройки задаются отдельными `FS_SNAPSHOT_*`
+  variables; MB/MiB в документации не смешиваются.
+- Что изменилось и почему: общий disk-backed manager реализован endpoint/process
+  scoped и producer-neutral, чтобы 004 добавил producer, а не второй lifecycle.
+  Metadata фиксируется atomic temp+rename с bounded Windows retry; restart сохраняет
+  completed artifacts и переводит queued/running в `interrupted`, без resume.
+  Scratch выбирается оператором (`FS_SNAPSHOT_DIR`) либо стабильно создаётся в
+  системном temp; один каталог имеет одного владельца-процесс. Он не становится
+  source root: source внутри scratch отклоняется, scratch subtree внутри source
+  канонически исключается. HTTP manager живёт дольше per-request server, stdio
+  shutdown ожидает manager close. Idempotency submit сериализован, чтения имеют
+  отдельный semaphore, cleanup не удаляет artifact во время активного read.
+- Pipeline: bounded `opendir` walk через `GuardedFileSystem`, nested `.gitignore`,
+  default/hidden filters, без следования symlink/junction; CSV режется только на
+  границе записи и текущая raw часть spool-ится в scratch. `yazl` выбран как малая
+  streaming ZIP dependency (MIT; одна runtime dependency `buffer-crc32`); `yauzl`
+  и `csv-parse` используются только независимым test/benchmark verifier.
+- Команды, результаты, среда и skips: Windows, Node.js 24.15.0. `npm run build`,
+  `npm run type-check`, `npm run type-check:test`, `eslint .`, `knip` и targeted
+  snapshot/HTTP/stdio tests проходят. Полный `npm test`: 367 tests, 360 pass,
+  0 fail, 7 skips. Skips существующие: одна POSIX inode/mode проверка, одна POSIX
+  0222 проверка и пять сценариев symlink, недоступных текущему Windows runner.
+  `npm run check` выполнен, но останавливается только на унаследованном Prettier
+  mismatch в `docs/project/status.md` и `docs/testing/snapshot-shape-2026-09-20.md`;
+  первый файл запрещено менять этой задачей. Все изменённые файлы проходят отдельный
+  `prettier --check`; последующие knip и полный test выполнены отдельно.
+- Benchmark (walk отдельно от metadata pipeline): воспроизводимый runner и полные
+  результаты в [snapshot benchmark](../testing/snapshot-benchmark-2026-09-20.md).
+  3 000 000 записей: 478 889 517 raw bytes, 50 373 149 ZIP bytes, 11 частей,
+  152,320 s, peak RSS 236 810 240 B, heap 76 750 992 B, scratch 96 691 088 B,
+  base64 67 170 596 chars; independent ZIP/CSV/hash verifier PASS. 100 000 строк
+  дали peak RSS 132 177 920 B: 30x rows при 1,79x RSS. Real walk: 21 000 файлов,
+  exact set/count, 8,021 s, peak RSS 140 468 224 B. Poor-compression профиль
+  boundedly отказал на 8 MiB ZIP cap без опубликованных partial artifacts.
+- Live evidence / что ожидает пользователя: локальная реализация готова; pending
+  целевой synthetic ChatGPT прогон по [live protocol](../testing/snapshot-live.md).
+  Нужны materialized manifest и минимум три ZIP-части, включая около 5,53 MB,
+  независимые hashes/распаковка/CSV counts/повторная выдача и size ladder. SDK/local
+  delivery не отмечается как live PASS; production input запрещён.
+- Выполненные и оставшиеся acceptance: локальные contract/lifecycle/walk/benchmark/
+  quota/error/security checks выполнены. Не закрыты полный aggregate check из-за
+  двух base formatting mismatches и отдельный live ChatGPT опыт, поэтому карточка
+  не передаётся как `done`.
+- Локальные commits: `f126d63d` (контракт), `63f4f08f` (основная реализация) и
+  `1ce57b7c` (hardening, regression suite, benchmark и документация).
+- Ограничения и handoff: source snapshot не атомарен; v1 не читает и не хеширует
+  содержимое originals, не разыменовывает symlink/junction, не возобновляет job после
+  restart и не заявляет multi-user isolation.
+
+### Доработка после review `bc6724fb`, 2026-09-20
+
+- В ветку обычным merge включён точный локальный `main` commit `bc6724fb`; merge
+  commit `ec6cf8a9`. Центральная доска вручную не менялась.
+- R1: cache уникальных путей внутри активных `ignore` matcher ограничен 256 tests;
+  matcher пересоздаётся из скомпилированных rules публичным API. Regression сохраняет
+  nested ignore/negation после нескольких refresh. Настоящие walk-21k/walk-60k с
+  `.gitignore` и одинаковой instrumentation дали 2,86× files при 1,17× peak RSS и
+  1,28× peak heap.
+- R2: ZIP теперь получает явно управляемый source stream; ошибки source/producer
+  передаются output consumer, все streams/handle закрываются. Fault injection удаляет
+  raw spool перед compression: job становится `failed`, ready/partial artifacts нет,
+  следующий job в том же manager завершается успешно.
+- R3/R4: artifact removal и expiry/terminal cleanup сериализованы per job. Quota
+  освобождается после фактического удаления; failed deletion остаётся charged.
+  Startup удаляет только manager-owned partial/metadata-temp и UUID ZIP/JSON,
+  распознаёт orphan final после rename-before-metadata и повторяет cleanup на restart.
+  Concurrent cleanup, quota-vs-disk, injected delete failure, второй restart и
+  сохранение чужого файла покрыты regression tests.
+- R5: walker относит только ожидаемые NOT_FOUND/access ошибки к partial completeness;
+  превышение depth и остальные hard failures завершают job как `failed` без manifest.
+- R6: общий benchmark verifier требует один CSV, полный конец ZIP, strict independent
+  CSV parse и собственный CRC-32 распакованных bytes. Extra entry, bad CRC, truncation
+  и corrupt compressed bytes отклоняются. Small/large benchmark повторён этим verifier.
+- R7: producer применяет минимум snapshot ZIP/delivery/captured general-file caps и
+  записывает его в manifest policy; manifest учитывает также текущий file cap. Fetch
+  сохраняет повторную проверку текущего `FS_MAX_FILE_SIZE`. Оба более строгих cap дают
+  bounded failure без manifest/ready artifacts.
+- Acceptance gaps закрыты отдельными сценариями: HTTP response loss после принятого
+  submit с recovery тем же idempotency key; cancel до и после artifact rename;
+  independent CSV round-trip через принудительные part boundaries; cancel/fetch при
+  суженном доступе до и после restart; poor-compression runner утверждает отсутствие
+  manifest, ready и partial artifacts.
+- Проверки: targeted snapshot suite — 20/20 pass. Полный `npm run check` — 378 tests,
+  371 pass, 0 fail, 7 прежних Windows skips (POSIX inode/mode, POSIX 0222 и пять
+  symlink-permission сценариев). На перегруженном desktop host `tsx` до запуска tests
+  получил системный `uv_os_get_passwd ENOMEM`; полный check повторён с локальным
+  untracked fallback только для имени temp-cache `tsx`, после проверки dependency
+  восстановлена. Код/fixtures и результаты тестов workaround не менял.
+- Повторный benchmark: 100 000 rows — 15 788 947 raw B, 1 698 026 ZIP B, 4,041 s,
+  peak RSS 138 436 608 B; 3 000 000 rows — 478 889 517 raw B, 50 373 149 ZIP B,
+  11 parts, 173,841 s, peak RSS 238 374 912 B, heap 76 753 088 B, scratch
+  96 829 298 B. High-entropy 300k boundedly отказал без artifacts. Полные числа и
+  команды — в [benchmark report](../testing/snapshot-benchmark-2026-09-20.md).
+- Локальные follow-up commits: `009744ee` (runtime hardening), `16021c0c`
+  (regressions и verifier), `6af551fa` (documentation/evidence), `9dc36647`
+  (старый byte-extraction helper также пропущен через строгий verifier), `8a2bd089`
+  (assertion ожидает завершения asynchronous partial cleanup).
+- Live ChatGPT остаётся `pending` до повторного review и совместного запуска по
+  [protocol](../testing/snapshot-live.md). Локальные результаты не объявляются live PASS.
+- Состояние локального handoff: `ready for review`; push, PR и merge не выполнялись.
+
+### Доработка после повторного review `aee444c3`, 2026-09-20
+
+- В ветку обычным merge включён точный локальный `main` commit `aee444c3`; merge
+  commit `fe7d0939`. Центральная доска вручную не менялась.
+- R8: ошибка удаления expired artifact при startup теперь логируется отдельно для
+  job и не отклоняет `initialize()`. Неудалённый файл остаётся в quota accounting;
+  cached initialization остаётся успешно завершённой, а следующая scheduled/manual
+  cleanup повторяет сериализованное удаление и освобождает charge ровно один раз.
+  Ошибки создания, canonical-проверки и чтения корня scratch по-прежнему фатальны.
+- Fetch проверяет истёкший TTL до занятия read slot и не читает retained bytes и не
+  превращает пользовательский `NOT_FOUND` в ошибку фонового удаления. Завершение
+  уже начатого до TTL чтения сохраняет прежнюю cleanup-on-release семантику.
+- Regression параметризован для одноразовых `EACCES` и `EPERM`: два вызова
+  `initialize()` успешны без повторной загрузки metadata, expired artifact остаётся
+  недоступным и charged, обычная новая job проходит, quota probe блокируется, затем
+  cleanup удаляет artifact, освобождает квоту, повторный probe проходит и `close()`
+  завершается. Отдельный negative test сохраняет fatal startup для scratch-файла.
+- Verifier теперь сравнивает CSV header в callback parser до первой data row.
+  Correct empty snapshot принимается, empty snapshot с неверным header отклоняется.
+  Response-loss recovery и отдельный настоящий SDK call timeout оба переиспользуют
+  принятую job по idempotency key и ожидают её terminal `completed` state.
+- Проверки: targeted snapshot suite — 22/22 pass; `npm run check:static` — PASS;
+  полный `npm run check` — 380 tests, 373 pass, 0 fail, 7 прежних Windows skips.
+  Из-за известного host-сбоя `tsx/uv_os_get_passwd ENOMEM` проверки выполнялись с
+  временным fallback только в ignored dependency; после прогонов dependency
+  восстановлена byte-for-byte.
+- Из-за изменения verifier повторены pipeline benchmarks. 100 000 rows:
+  15 788 947 raw B, 1 698 026 ZIP B, 4,234 s, peak RSS 120 557 568 B; 3 000 000
+  rows: 478 889 517 raw B, 50 373 149 ZIP B, 11 parts, 126,193 s, peak RSS
+  236 859 392 B, heap 76 497 952 B, scratch 96 691 088 B. Оба результата
+  `verified: true`; unchanged walk/poor-compression профили не перезапускались.
+- Runtime/tests commit: `df89914f`. Live ChatGPT остаётся `pending` до принятия
+  повторного review и совместного synthetic запуска. Состояние локального handoff:
+  `ready for review`; push, PR и merge в main не выполнялись.
