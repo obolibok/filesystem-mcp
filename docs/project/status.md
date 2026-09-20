@@ -12,7 +12,7 @@
 | 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)    | done     | 002           | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3                                                  |
 | 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)            | done     | 002, 002-live | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                                                                   |
 | 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md)  | done     | 002-tool      | `003 - compressed snapshot`; принят через [PR #4](https://github.com/obolibok/filesystem-mcp/pull/4); code review, live и CI PASS |
-| 004      | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md) | active   | 003           | `codex/004-selected-originals-bundle`; worktree `025a`; пользователь подтвердил создание задачи и выполнение работы               |
+| 004      | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md) | review   | 003           | `codex/004-selected-originals-bundle`; head `7d8a7575`; CHANGES_REQUESTED: R1–R8, включая два P1                                  |
 | 005      | Контролируемое повторение предметного исследования                      | proposed | 004           | Планирование + пользователь                                                                                                       |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -23,14 +23,17 @@
 
 ## Текущий следующий шаг
 
-Пользователь разрешил подготовить и запустить 004. [Карточка](../tasks/004-selected-originals-bundle.md)
-готова: ИИ передаёт явный набор файлов из подпапок одного guarded root; producer
-собирает целые originals в независимые ZIP-части, manifest фиксирует provenance,
-per-file hashes и пропуски. Используется общий jobs/artifacts lifecycle из 003.
+Code review 004 на head `7d8a757546ac62a8efda7ab8f042d8230b032670` —
+**CHANGES_REQUESTED**: [отчёт с воспроизведениями](../testing/004-review-2026-09-20.md).
+Независимый полный check — 395 tests, 388 pass, 0 fail, 7 прежних skips;
+малый stdio MCP ZIP/XLS опыт и legacy snapshot lifecycle probe — PASS.
+Дополнительные synthetic проверки подтвердили восемь дефектов, включая обход
+source policy через scratch и аварийное завершение процесса на ZIP input error.
 
-Карточка опубликована в main; пользователь подтвердил, что задача создана и работа
-идёт. Исполнитель готовит код, локальные проверки и live runbook; целевой ChatGPT
-опыт и интеграция следуют после code review. Данные запуска записаны ниже.
+Следующий шаг — исправления R1–R8 в существующей рабочей ветке 004, собственные
+regressions для новых producer paths и повторное code review. Live ChatGPT опыт
+и merge этой версии не приняты. Runtime/tracked tests review не менял; результаты
+и ожидаемые исправления сохранены в Git. Push/PR/merge ветки 004 не выполнялись.
 
 ## Запуск 004, 2026-09-20
 
