@@ -192,13 +192,34 @@ Push, PR и merge оставить планированию до отдельн�
 
 ## Work record
 
-Заполняет исполнитель. До запуска: не начато.
+Реализация начата 2026-09-20.
 
-- Base и branch:
-- Контракт tools, schema/manifest и defaults:
-- Что изменилось и почему:
-- Команды, результаты, среда и skips:
-- Benchmark (walk отдельно от metadata pipeline):
-- Live evidence / что ожидает пользователя:
-- Выполненные и оставшиеся acceptance:
-- Ограничения и handoff:
+- Base и branch: `ce4f22b4f9ca453d915100c3206363d96dc6d208`,
+  `codex/003-compressed-snapshot`, отдельный worktree приложения.
+- Контракт tools, schema/manifest и defaults: выбраны `snapshot`, `job_status`,
+  `cancel_job`, `get_artifact`. `snapshot` принимает обязательные `path` и
+  `idempotencyKey`, а также `includeHidden` / `includeIgnored`; status/cancel/fetch
+  принимают opaque ID и повторно проверяют доступ к canonical source root. CSV v1:
+  UTF-8 без BOM, CRLF, RFC 4180 quoting, header
+  `RootId,RelativePath,Name,Extension,Length,LastWriteTime`; relative paths всегда
+  POSIX, timestamp — ISO 8601 UTC. Manifest JSON v1 является отдельным immutable
+  artifact и перечисляет ZIP-части. Defaults до benchmark: raw CSV part 45 MiB,
+  ZIP artifact/delivery 8 MiB, record 1 MiB, 128 parts/job, 512 MiB/job,
+  1 running + 4 queued jobs, 60 minutes/job, TTL 24 hours, scratch quota 1 GiB,
+  2 concurrent artifact reads. Настройки задаются отдельными `FS_SNAPSHOT_*`
+  variables; MB/MiB в документации не смешиваются.
+- Что изменилось и почему: работа продолжается. Общий disk-backed manager будет
+  endpoint/process scoped и producer-neutral, чтобы 004 добавил producer, а не
+  второй lifecycle. Metadata фиксируется атомарно; restart сохраняет completed
+  artifacts и переводит queued/running в `interrupted`, без автоматического resume.
+  Scratch выбирается оператором (`FS_SNAPSHOT_DIR`) либо создаётся в системном temp,
+  никогда не добавляется в source roots; совпадающее/вложенное source дерево
+  отклоняется, чтобы snapshot не перечислял собственные результаты.
+- Команды, результаты, среда и skips: pending.
+- Benchmark (walk отдельно от metadata pipeline): pending.
+- Live evidence / что ожидает пользователя: после локальной реализации pending
+  целевой synthetic ChatGPT прогон; SDK/local delivery не будет отмечен как live PASS.
+- Выполненные и оставшиеся acceptance: pending.
+- Ограничения и handoff: source snapshot не атомарен; v1 не читает и не хеширует
+  содержимое originals, не разыменовывает symlink/junction, не возобновляет job после
+  restart и не заявляет multi-user isolation.
