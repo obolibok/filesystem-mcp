@@ -11,7 +11,7 @@
 | 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)         | done     | 001           | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live |
 | 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)   | done     | 002           | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3      |
 | 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)           | done     | 002, 002-live | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                       |
-| 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md) | review   | 002-tool      | `codex/003-compressed-snapshot`; head `e0ec8cdc`; changes requested                   |
+| 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md) | review   | 002-tool      | `codex/003-compressed-snapshot`; head `b9a919af`; R1–R7 закрыты, R8 changes requested |
 | 004      | Bundle выбранных originals на основе jobs/artifacts                    | proposed | 003           | Последовательно после 003; общий механизм повторно не реализуется                     |
 | 005      | Контролируемое повторение предметного исследования                     | proposed | 004           | Планирование + пользователь                                                           |
 
@@ -23,20 +23,22 @@
 
 ## Текущий следующий шаг
 
-Локальная реализация 003 передана на ревью. Проверен head
-`e0ec8cdcefc38bf9a060dd08ce23e933ef2a5faf` ветки `codex/003-compressed-snapshot`
-от базы `ce4f22b4f9ca453d915100c3206363d96dc6d208`. Результат — **changes requested**:
-[замечания, воспроизведения и постановка на доработку](../testing/003-review-2026-09-20.md).
+Повторно проверена 003: head `b9a919afa77364e0995a8a730d04272446b13804` ветки
+`codex/003-compressed-snapshot`; planning main `bc6724fb` включён merge-коммитом
+`ec6cf8a9`. Исходные R1–R7 исправлены. Результат — **changes requested**:
+[повторное ревью и постановка на R8](../testing/003-review-r2-2026-09-20.md).
+[Первое ревью](../testing/003-review-2026-09-20.md) сохраняет исторические замечания.
 
-Независимый полный `npm run check` после форматирования двух унаследованных
-Markdown-файлов: 367 tests, 360 pass, 0 fail, 7 прежних skips. Runtime не менялся.
-Форматирование исправляет планирование. Найдены ошибки ограниченности памяти
-обхода с `.gitignore`, обработки ZIP failures, дисковой квоты при cleanup/restart,
-walk-depth cap и независимого verifier. До исправлений локальная приёмка не завершена.
+Независимый полный `npm run check` на точном новом head с чистыми зависимостями:
+378 tests, 371 pass, 0 fail, 7 прежних skips. Runtime/dependencies не менялись.
+Воспроизведена одна новая регрессия: временная ошибка удаления expired artifact
+при startup оставляет manager.initialize в постоянном failure и блокирует
+MCP endpoint. Требуется сохранить учёт bytes, позволить запуск и повторить cleanup.
+Два неблокирующих уточнения verifier/HTTP evidence также записаны в отчёте.
 
-Следующий шаг: доработка в той же задаче 003, повторное review, затем synthetic
-live ChatGPT прогон с пользователем. Целевой PASS остаётся pending и не подменяется
-локальными проверками. 004 остаётся proposed, последовательно после принятия 003.
+Следующий шаг: исправление R8 в той же задаче 003, короткое повторное review,
+затем synthetic live ChatGPT прогон с пользователем. Целевой PASS остаётся pending
+и не подменяется локальными проверками. 004 остаётся proposed, после принятия 003.
 
 ## Запуск 003, 2026-09-20
 
