@@ -11,7 +11,7 @@
 | 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)         | done     | 001           | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live                     |
 | 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)   | done     | 002           | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3                          |
 | 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)           | done     | 002, 002-live | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                                           |
-| 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md) | review   | 002-tool      | `003 - compressed snapshot`; `codex/003-compressed-snapshot`; `9ff20792`; local review PASS, live pending |
+| 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md) | review   | 002-tool      | `003 - compressed snapshot`; `codex/003-compressed-snapshot`; `9ff20792`; review/smoke/main PASS; upper pending |
 | 004      | Bundle выбранных originals на основе jobs/artifacts                    | proposed | 003           | Последовательно после 003; общий механизм повторно не реализуется                                         |
 | 005      | Контролируемое повторение предметного исследования                     | proposed | 004           | Планирование + пользователь                                                                               |
 
@@ -31,18 +31,20 @@
 380 tests, 373 pass, 0 fail, 7 прежних Windows skips.
 
 Пользователь разрешил synthetic live ChatGPT опыт: [текущий протокол](../testing/003-live-2026-09-20.md).
-Туннель запущен, readiness PASS. Пользователь подтвердил материализацию manifest/ZIP,
-проверку hashes/распаковки и 12 строк малого smoke; скриншот согласован с live job.
-Большие synthetic fixtures подготовлены и независимо проверены локально:
-main — 21011 файлов, три ZIP около 5,53 / 5,53 / 1,11 MB;
-upper — 13852 файла, один ZIP около 7,80 MB.
-Следующий шаг — получить в ChatGPT все части main, проверить полный эталон путей
-и повторную выдачу, затем пройти upper. Точные измерения и границы evidence —
-в текущем протоколе; большой локальный PASS не заменяет целевую проверку.
+Малый smoke и большой main в ChatGPT — PASS по подтверждению пользователя и
+предоставленному отчёту. Main: 21011 уникальных путей, 103801018 B CSV,
+три ZIP около 5,53 / 5,53 / 1,11 MB; все части материализованы, SHA-256/CRC/CSV
+и независимый эталон совпали, повторная доставка большой части побайтово идентична.
+Submit около 2,660 s, серверное выполнение 40,982 s; reuse/conflict подтверждены.
+Планирование сверило live job и hashes фактических серверных артефактов с отчётом.
+Следующий шаг — отдельный upper: 13852 файла, один ZIP около 7,80 MB;
+fixture и локальная проверка готовы. Затем итоговая приёмка и интеграция 003.
+Границы evidence и точные измерения — в текущем протоколе. Опыт не проверяет
+обход миллионов файлов или job длительностью 20–30 минут.
 Исполнитель: `003 - compressed snapshot`, task
 `01a0be9c-0f01-7c42-8abb-a6ff550e1532`.
 
-Полная целевая приёмка остаётся pending до большого прогона. 003 ещё
+Полная целевая приёмка остаётся pending до upper и завершения протокола. 003 ещё
 не интегрирована в main, поэтому общий статус остаётся review. Push/PR/merge
 не выполнялись. 004 остаётся proposed до целевой проверки и приёмки 003.
 
