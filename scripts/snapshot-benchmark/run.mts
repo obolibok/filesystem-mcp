@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -110,8 +110,9 @@ async function createWalkFixture(root: string, count: number): Promise<Set<strin
 
 async function run(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  const root = await mkdtemp(join(tmpdir(), 'fsmcp-snapshot-source-'));
-  const scratch = await mkdtemp(join(tmpdir(), 'fsmcp-snapshot-scratch-'));
+  // Match the snapshot tool's canonical roots when calling the pipeline directly.
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'fsmcp-snapshot-source-')));
+  const scratch = await realpath(await mkdtemp(join(tmpdir(), 'fsmcp-snapshot-scratch-')));
   const guard = new PathGuard();
   guard.initialize(await resolveAllowedDirectoriesState([root]));
   const fs = new GuardedFileSystem(guard);

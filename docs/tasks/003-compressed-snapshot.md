@@ -368,3 +368,14 @@ Push, PR и merge оставить планированию до отдельн�
   0 FAIL / 0 skips. Настоящие 8.3 aliases работают; scratch не попадает в snapshot;
   реальные leaf/ancestor junction отвергаются до mkdir.
 - Подробности и CI evidence: [протокол интеграции](../testing/003-integration-2026-09-20.md).
+
+### Canonical fixtures после повторного CI, 2026-09-20
+
+- Runtime startup fix прошёл CI. Четыре оставшихся Windows failures относились
+  к short-path fixtures: direct pipeline обходил canonical normalization tool,
+  а unlink fault injection сравнивал разные spellings одного scratch.
+- Исправлены пять direct-pipeline roots, два scratch для fault injection и
+  аналогичные roots benchmark. Runtime и assertions не менялись.
+- Настоящий short TEMP: snapshot 27/27 PASS; весь runner — 385 tests, 378 pass,
+  0 fail, 7 прежних skips; walk benchmark 21000 rows — `verified: true`.
+  Fail-before/pass-after и ссылки на CI сохранены в протоколе интеграции.

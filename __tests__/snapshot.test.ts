@@ -396,7 +396,8 @@ describe('snapshot jobs and artifacts', () => {
   });
 
   it('records inaccessible and disappearing files without failing the bounded walk', async () => {
-    const root = await createTestRoot();
+    // Direct pipeline fixtures use the canonical root supplied by the snapshot tool.
+    const root = await realpath(await createTestRoot());
     const scratch = await createTestRoot();
     await writeTestFile(root, 'ok.txt', 'ok');
     await writeTestFile(root, 'denied.txt', 'denied');
@@ -450,7 +451,7 @@ describe('snapshot jobs and artifacts', () => {
   });
 
   it('preserves nested gitignore negation after repeated cache refreshes', async () => {
-    const root = await createTestRoot();
+    const root = await realpath(await createTestRoot());
     const scratch = await createTestRoot();
     await writeFile(join(root, '.gitignore'), 'ignored/*\n!ignored/keep/\n', 'utf8');
     await mkdir(join(root, 'ignored', 'keep'), { recursive: true });
@@ -492,7 +493,7 @@ describe('snapshot jobs and artifacts', () => {
   });
 
   it('fails the job when the configured walk-depth cap is exceeded', async () => {
-    const root = await createTestRoot();
+    const root = await realpath(await createTestRoot());
     const scratch = await createTestRoot();
     let directory = root;
     for (let depth = 0; depth < 10; depth += 1) {
@@ -998,7 +999,8 @@ describe('snapshot jobs and artifacts', () => {
 
   it('reconciles an orphan final artifact safely after a failed deletion and restart', async () => {
     const root = await createTestRoot();
-    const scratch = await createTestRoot();
+    // Fault injection compares against the manager's canonical storage paths.
+    const scratch = await realpath(await createTestRoot());
     const guard = await makeGuard([root]);
     const quota = 1024 * 1024;
     const jobId = randomUUID();
@@ -1085,7 +1087,8 @@ describe('snapshot jobs and artifacts', () => {
   it('keeps startup available when expired artifact deletion is temporarily blocked', async () => {
     for (const code of ['EACCES', 'EPERM'] as const) {
       const root = await createTestRoot();
-      const scratch = await createTestRoot();
+      // Fault injection compares against the manager's canonical storage paths.
+      const scratch = await realpath(await createTestRoot());
       const guard = await makeGuard([root]);
       const quota = 256 * 1024;
       const artifactBytes = Buffer.alloc(64 * 1024, 0x64);
@@ -1361,7 +1364,7 @@ describe('snapshot jobs and artifacts', () => {
   });
 
   it('fails boundedly on ZIP cap, scratch quota, and synthetic ENOSPC', async () => {
-    const root = await createTestRoot();
+    const root = await realpath(await createTestRoot());
     const scratch = await createTestRoot();
     const guard = await makeGuard([root]);
     const fs = new GuardedFileSystem(guard);
@@ -1695,7 +1698,7 @@ describe('snapshot jobs and artifacts', () => {
   });
 
   it('expires artifacts explicitly and denies status after source access narrows', async () => {
-    const root = await createTestRoot();
+    const root = await realpath(await createTestRoot());
     const otherRoot = await createTestRoot();
     const scratch = await createTestRoot();
     await writeTestFile(root, 'probe.txt', 'probe');
