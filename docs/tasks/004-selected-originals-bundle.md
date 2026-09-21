@@ -292,3 +292,29 @@ Push/PR/merge и release оставь планированию до отдель
   верхний предел принимающего host этим не заявляется. Результаты строго
   `LOCAL_ONLY_NOT_CHATGPT`; пошаговый опыт, teardown и форма evidence находятся в
   `docs/testing/bundle-live.md`. Production данные, ключи и tunnel не использовались.
+
+### Исправления review, 2026-09-21
+
+Main commit `8b8c7dd8` опубликовал независимый review со статусом
+`CHANGES_REQUESTED` и замечаниями R1–R8. Все восемь исправлены в implementation
+commit `8d9655e9516156332950abf6f6d40e78b1081e7e`; статус задачи исполнителя —
+**ready for re-review**.
+
+- R1/R7: scratch metadata/artifacts нельзя выбрать через canonical/8.3/junction
+  aliases; каждый существующий selector component проверяется даже при missing leaf.
+- R2/R3: ZIP producer владеет lazy streams, перенаправляет input error в failed job,
+  закрывает streams при split/cancel/error; faulted job не завершает server.
+- R4: scratch I/O error fatal и не маскируется как inaccessible source outcome.
+- R5: idempotent reuse перед status summary повторно авторизует root/selectors до и
+  после restart, сохраняя reuse после обычного удаления разрешённого source.
+- R6: raw original соблюдает общий `FS_MAX_FILE_SIZE`, delivery cap остаётся отдельным.
+- R8: local harness canonicalizes destination/ancestor до любой записи; verifier
+  проверяет file-to-part provenance и tampered-link negative control.
+- Дополнительно закрыты Windows-invalid wildcard/superscript device names, добавлен
+  Linux FIFO regression и исправлен найденный volume profile multi-chunk buffer reuse.
+
+Финальная локальная проверка: `npm run check` — 401 tests, 393 pass, 0 fail,
+8 platform skips; bundle — 15 pass и 1 Linux-only FIFO skip в обычном и настоящем
+Windows 8.3 TEMP прогонах; stdio verifier и 7 MiB volume — PASS. Полная evidence:
+`docs/testing/004-fixes-2026-09-21.md`. Remote CI и целевой ChatGPT live ещё не
+запускались; push/PR/merge/release и `docs/project/status.md` не выполнялись.
