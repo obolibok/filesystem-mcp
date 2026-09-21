@@ -12,7 +12,7 @@
 | 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)    | done     | 002           | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3                                                  |
 | 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)            | done     | 002, 002-live | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                                                                   |
 | 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md)  | done     | 002-tool      | `003 - compressed snapshot`; принят через [PR #4](https://github.com/obolibok/filesystem-mcp/pull/4); code review, live и CI PASS |
-| 004      | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md) | review   | 003           | `codex/004-selected-originals-bundle`; head `2b58b99b`; повторное review: остатки R3/R4 (P2), остальные закрыты                   |
+| 004      | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md) | review   | 003           | `codex/004-selected-originals-bundle`; head `82e8d187`; CODE_REVIEW_PASS, R1–R8 закрыты; следующий шаг — live                     |
 | 005      | Контролируемое повторение предметного исследования                      | proposed | 004           | Планирование + пользователь                                                                                                       |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -23,22 +23,22 @@
 
 ## Текущий следующий шаг
 
-Повторное code review 004 на head `2b58b99bad2e8d08423bb134e084ca1f4a3ecfe2` —
-**CHANGES_REQUESTED**: [отчёт R2 с воспроизведениями](../testing/004-review-r2-2026-09-21.md).
-R1, R2, R5, R6, R7, R8 закрыты, включая оба P1. Остались два P2: R3 — внутренние
-compression streams после остановки освобождаются только при GC; R4 — частичная
-запись ZIP и отказ удаления оставляют bytes вне учёта scratch quota. Исходный
-source FD leak и неверная классификация capture storage error исправлены.
+Code review 004 на head `82e8d18756e1787f41379720b5c5dd6f29fe42ca` —
+**PASS**: [отчёт третьего раунда](../testing/004-review-r3-2026-09-21.md).
+Остаточные R3/R4 закрыты: compression chain явно завершается без ожидания GC,
+а частичная запись ZIP сохраняет резерв до фактического удаления bytes.
+С учётом [предыдущего review](../testing/004-review-r2-2026-09-21.md) закрыты R1–R8.
 
-Независимый полный check — 401 tests, 393 pass, 0 fail, 8 skips (семь прежних и
-Linux-only FIFO). Свежий stdio MCP ZIP/XLS опыт, независимый verifier и объёмный
-прогон 7 × 1 MiB — PASS. Два остаточных случая воспроизведены отдельными probes.
-[Первое review](../testing/004-review-2026-09-20.md) сохраняется как история.
+Независимый полный check — 403 tests, 395 pass, 0 fail, 8 прежних/platform skips.
+Свежая stdio MCP доставка ZIP/XLS, независимый verifier, объёмный прогон 7 × 1 MiB
+и отдельные probes для split/cancel/error/quota recovery — PASS.
+Все эти результаты — LOCAL_ONLY_NOT_CHATGPT; remote CI и POSIX FIFO ещё не проверены.
 
-Следующий шаг — завершить R3/R4 в существующей ветке 004, добавить regressions,
-полный check и повторное review. Live ChatGPT опыт и merge этой версии не приняты.
-Runtime/tracked tests review не менял; результаты и условия исправления сохранены
-в Git. Push/PR/merge ветки 004 не выполнялись.
+Следующий шаг — целевой synthetic live ChatGPT опыт по bundle-live.md из ветки 004:
+manifest + все ZIP, per-file bytes/hashes, nested ZIP/XLS, повторная выдача части,
+фиксация результатов и teardown. После live — отдельная интеграция и CI.
+Задача остаётся review до окончательной приёмки. Runtime/tracked tests review
+не менял; push/PR/merge ветки 004 и запуск tunnel не выполнялись.
 
 ## Запуск 004, 2026-09-20
 
