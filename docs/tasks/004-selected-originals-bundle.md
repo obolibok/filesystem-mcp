@@ -318,3 +318,26 @@ commit `8d9655e9516156332950abf6f6d40e78b1081e7e`; статус задачи и�
 Windows 8.3 TEMP прогонах; stdio verifier и 7 MiB volume — PASS. Полная evidence:
 `docs/testing/004-fixes-2026-09-21.md`. Remote CI и целевой ChatGPT live ещё не
 запускались; push/PR/merge/release и `docs/project/status.md` не выполнялись.
+
+### Исправления повторного review, 2026-09-21
+
+Main commit `7b9a3b88e90d29126ac92cb39587984c09c593e1` опубликовал повторное
+review: R1, R2, R5–R8 закрыты, остаточные R3/R4 получили P2. Оба исправлены в
+implementation commit `edb33cadb53c9be7c582a361f1bd038ceb5c55a3`; статус
+исполнителя — **ready for review R3**.
+
+- R3: producer теперь владеет не только source/output, но и созданными `yazl`
+  intermediate streams, явно уничтожает всю CRC/counter/`DeflateRaw` chain и
+  дожидается `finished()` при oversized/split/cancel/error. Regression удерживает
+  сильные ссылки на compressors восьми последовательных 8 MiB jobs и проверяет
+  `destroyed && closed` без GC, затем успешную job на том же manager.
+- R4: отдельный `zipReservedBytes` сохраняет резерв всего chunk после partial write;
+  резерв снимается только после успешного удаления partial. Synthetic short write
+  8192 B + EACCES write/unlink сохраняет bytes под quota, блокирует следующую job и
+  освобождает резерв после lifecycle cleanup, после чего тот же workload проходит.
+
+Финальная локальная проверка: `npm run check` — 403 tests, 395 pass, 0 fail,
+8 прежних/platform skips; bundle — 17 pass и 1 Linux-only FIFO skip. Повторные
+stdio MCP + Python verifier и volume 7 × 1 MiB — PASS. Полная evidence:
+`docs/testing/004-fixes-r2-2026-09-21.md`. Remote CI, POSIX FIFO и целевой ChatGPT
+live не запускались; центральная доска, push/PR/merge/release не изменялись.

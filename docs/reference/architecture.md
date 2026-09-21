@@ -170,11 +170,12 @@ bytes; удаление root или сужение policy закрывает д�
 multi-user isolation этим не заявляется. Один scratch каталог имеет одного владельца-
 процесс; параллельным экземплярам нужны разные каталоги. Metadata сохраняется atomic
 rename; quota учитывает spool, готовые artifacts и job metadata. Bundle ZIP producer
-владеет input streams, перенаправляет их ошибки в job failure и дожидается закрытия
-при split/cancel/error. Он применяет минимум ZIP/delivery/captured general-file caps,
-а fetch повторно проверяет текущий
-`FS_MAX_FILE_SIZE`. Cleanup защищает активное чтение и освобождает quota только после
-фактического удаления bytes.
+владеет input/output и всей внутренней CRC/counter/compression chain, перенаправляет
+input errors в job failure и дожидается закрытия при split/cancel/error. Резерв
+частично записанного ZIP сохраняется до фактического удаления partial. Producer
+применяет минимум ZIP/delivery/captured general-file caps, а fetch повторно
+проверяет текущий `FS_MAX_FILE_SIZE`. Cleanup защищает активное чтение и освобождает
+quota только после фактического удаления bytes.
 
 Stored job `schemaVersion: 1` сохранён: bundle добавляет новые kind/counters и
 optional authorization paths, а прежние snapshot job JSON читаются без миграции.
