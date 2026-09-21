@@ -33,7 +33,9 @@
   [интеграция 003](testing/003-integration-2026-09-20.md) — Windows fixes и финальный CI.
 - [Bundle local](testing/bundle-local-2026-09-20.md): stdio MCP, independent
   ZIP/XLS verifier, multipart volume и Windows 8.3; [live protocol](testing/bundle-live.md) —
-  пошаговая целевая проверка после code review.
+  пошаговая целевая проверка после code review;
+  [live results](testing/004-live-2026-09-21.md) — ZIP/XLS и multipart в ChatGPT;
+  [интеграция 004](testing/004-integration-2026-09-21.md) — независимая приёмка и CI.
 - [Исправления review 004](testing/004-fixes-2026-09-21.md): R1–R8 regressions,
   повторные harness/volume/8.3 evidence и ограничения перед повторным review.
 - [Исправления повторного review 004](testing/004-fixes-r2-2026-09-21.md): явное
