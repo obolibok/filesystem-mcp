@@ -2490,17 +2490,19 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   // record rendering as `additionalProperties: {}` — no validation keyword, so
   // it told a client nothing about what to pass back. Spelling out the three
   // fields it actually carries costs +42.
-  // Task 003 adds four compact job/artifact tools to both profiles. The
-  // read-only wire grew from eight to twelve tools and measured 13252 chars;
-  // 13500 leaves 248 chars of drift budget without weakening the full profile.
+  // Task 003 adds four compact job/artifact tools to both profiles. Task 004
+  // adds the explicit bundle schema while reusing the other three lifecycle
+  // tools: full/read-only are now 19/13 tools and measure 24980/14900 chars.
+  // The read-only ceiling leaves 300 chars of drift budget; the full ceiling
+  // already had enough room and is unchanged.
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
     const BUDGET_CHARS = 26_900;
-    const BUDGET_CHARS_READ_ONLY = 13_500;
+    const BUDGET_CHARS_READ_ONLY = 15_200;
 
     const full = await createTestClientPair([tmpDir]);
     try {
       const { tools } = await full.client.listTools();
-      assert.strictEqual(tools.length, 18, 'tool count changed; update the budget deliberately');
+      assert.strictEqual(tools.length, 19, 'tool count changed; update the budget deliberately');
       const size = JSON.stringify(tools).length;
       assert.ok(
         size <= BUDGET_CHARS,
@@ -2513,6 +2515,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const ro = await createTestClientPair([tmpDir], { readOnly: true });
     try {
       const { tools } = await ro.client.listTools();
+      assert.strictEqual(tools.length, 13, 'tool count changed; update the budget deliberately');
       const size = JSON.stringify(tools).length;
       assert.ok(
         size <= BUDGET_CHARS_READ_ONLY,

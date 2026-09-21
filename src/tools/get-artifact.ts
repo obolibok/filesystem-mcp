@@ -9,14 +9,14 @@ import { defineTool, type ToolCtx } from './define.js';
 const GetArtifactInputSchema = z.strictObject({
   artifactId: z
     .uuid()
-    .describe('Opaque artifact ID from job_status or the snapshot manifest; pass unchanged.'),
+    .describe('Opaque artifact ID from job_status or a job manifest; pass unchanged.'),
 });
 
 const GetArtifactOutputSchema = z.strictObject({
   artifactId: z.string(),
   jobId: z.string(),
   name: z.string(),
-  kind: z.enum(['manifest', 'snapshot-part']),
+  kind: z.enum(['manifest', 'snapshot-part', 'bundle-part']),
   size: NonNegInt,
   encodedSize: NonNegInt,
   sha256: Sha256Hex,
@@ -27,9 +27,9 @@ const GetArtifactOutputSchema = z.strictObject({
 
 export const GET_ARTIFACT = defineTool({
   name: 'get_artifact',
-  title: 'Get Snapshot Artifact',
+  title: 'Get Job Artifact',
   description:
-    'Return one immutable ready manifest or ZIP part by opaque artifact ID as a standard MCP embedded resource plus matching resource link. Current source-root access and separate delivery limits are rechecked on every call.',
+    'Return one immutable ready snapshot or bundle manifest/ZIP part by opaque artifact ID as a standard MCP embedded resource plus matching resource link. Current source access and delivery limits are rechecked on every call.',
   input: GetArtifactInputSchema,
   output: GetArtifactOutputSchema,
   annotations: {

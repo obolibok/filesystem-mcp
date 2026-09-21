@@ -20,6 +20,7 @@ import { Logger } from './observability.js';
 import { findProjectRoot, isUnsafeCwdPath, resolveConfiguredDirs } from './path-discovery.js';
 import {
   getReservedDeviceNameForPath,
+  isPathInsideDirectory,
   isPathWithinDirectories,
   isSamePath,
   isWindowsDriveRelativePath,
@@ -259,6 +260,52 @@ export class PathGuard {
   }
 
   /**
+   * Reject a link in any existing component below one already-canonical root.
+   * Unlike realpath(finalPath), this still detects a junction/symlink when the
+   * final leaf is missing. Bundle selectors use it to preserve no-follow
+   * semantics without treating an ordinary missing leaf as a policy failure.
+   */
+  async assertNoSymlinkComponents(
+    rootPath: string,
+    requestedPath: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const root = normalizePath(rootPath);
+    const requested = this.validateAccessAndSensitivity(requestedPath).normalizedRequested;
+    if (!isSamePath(root, requested) && !isPathInsideDirectory(root, requested)) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Selected path escapes its bundle source root',
+        requestedPath,
+      );
+    }
+
+    const suffix = relative(root, requested);
+    if (!suffix) return;
+    let current = root;
+    for (const segment of suffix.split(/[\\/]/u)) {
+      if (!segment) continue;
+      signal?.throwIfAborted();
+      current = join(current, segment);
+      let component: Stats;
+      try {
+        component = await withAbort(lstat(current), signal);
+      } catch (error) {
+        rethrowIfAborted(error);
+        if (isNodeError(error) && error.code === 'ENOENT') return;
+        throw error;
+      }
+      if (component.isSymbolicLink()) {
+        throw new FsError(
+          ErrorCode.ACCESS_DENIED,
+          'Bundle selectors must not contain symlink or junction aliases',
+          requestedPath,
+        );
+      }
+    }
+  }
+
+  /**
    * True when a grant must never admit `targetDir` — an unsafe path (home,
    * /etc, C:\Windows, ...). Checked on the lexical path AND on the one it
    * resolves to: `resolveAllowedDirectoriesState` pushes each root's realpath
@@ -413,6 +460,16 @@ export class PathGuard {
     this.assertNotSensitiveFile(requestedPath, requestedPath);
     this.assertNotSensitiveFile(result.normalizedRequested, requestedPath);
     return result;
+  }
+
+  /**
+   * Re-check current lexical root and sensitive-path policy without requiring
+   * the target to still exist. Durable artifacts use this after originals have
+   * been removed or changed: access may narrow, but fetch must not re-read the
+   * source merely to authorize already captured immutable bytes.
+   */
+  assertPathAllowed(requestedPath: string): void {
+    this.validateAccessAndSensitivity(requestedPath);
   }
 
   // Synchronous since the access-grant round-trip moved to the executor's

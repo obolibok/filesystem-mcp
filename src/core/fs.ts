@@ -415,6 +415,58 @@ export class GuardedFileSystem {
   }
 
   /**
+   * Open a regular original without following a link in any selected path
+   * component. The caller owns the handle and can compare handle.stat() before
+   * and after streaming to detect a replacement or concurrent write.
+   */
+  async openOriginal(
+    filePath: string,
+    options?: {
+      signal?: AbortSignal;
+      root?: string;
+      rejectPath?: (path: string) => boolean;
+    },
+  ): Promise<{ handle: FileHandle; stats: Stats; validPath: string }> {
+    if (options?.root) {
+      await this.pathGuard.assertNoSymlinkComponents(options.root, filePath, options.signal);
+    }
+    const details = await this.pathGuard.validateExistingPathDetailed(filePath);
+    if (details.isSymlink) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Bundle selectors must not contain symlink or junction aliases',
+        filePath,
+      );
+    }
+    if (
+      options?.rejectPath?.(details.requestedPath) ||
+      options?.rejectPath?.(details.resolvedPath)
+    ) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Bundle selectors cannot read job scratch',
+        filePath,
+      );
+    }
+    options?.signal?.throwIfAborted();
+    const pathStats = await withAbort(fsLstat(details.resolvedPath), options?.signal);
+    if (!pathStats.isFile()) {
+      throw new FsError(ErrorCode.NOT_FILE, 'Bundle selector is not a regular file', filePath);
+    }
+    const handle = await fsOpen(details.resolvedPath, 'r');
+    try {
+      const stats = await withAbort(handle.stat(), options?.signal);
+      if (!stats.isFile()) {
+        throw new FsError(ErrorCode.NOT_FILE, 'Bundle selector is not a regular file', filePath);
+      }
+      return { handle, stats, validPath: details.resolvedPath };
+    } catch (error) {
+      await handle.close().catch(() => undefined);
+      throw error;
+    }
+  }
+
+  /**
    * Open one guarded directory for a bounded streaming walk. The caller owns
    * the returned handle and must close it (async iteration closes it too).
    */

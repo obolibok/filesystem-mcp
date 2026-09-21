@@ -4,6 +4,8 @@ import { resolve } from 'node:path';
 
 import { getMaxTextFileSize, MIB, parseEnvInt } from './util.js';
 
+export const BUNDLE_SCHEMA_MAX_FILES = 10_000;
+
 export interface SnapshotConfig {
   readonly scratchDirectory: string;
   readonly maxRecordBytes: number;
@@ -22,6 +24,12 @@ export interface SnapshotConfig {
   readonly scratchQuotaBytes: number;
   readonly maxConcurrentReads: number;
   readonly maxWalkDepth: number;
+  readonly maxBundleFiles: number;
+  readonly maxBundleSelectionBytes: number;
+  readonly maxBundleFileBytes: number;
+  readonly maxBundleRawPartBytes: number;
+  readonly maxBundleJobRawBytes: number;
+  readonly maxBundleManifestBytes: number;
   readonly cleanupIntervalMs: number;
   readonly ephemeralScratch: boolean;
 }
@@ -67,6 +75,32 @@ export function getSnapshotConfig(): SnapshotConfig {
     ),
     maxConcurrentReads: parseEnvInt('FS_SNAPSHOT_MAX_CONCURRENT_READS', 2, 1, 32),
     maxWalkDepth: parseEnvInt('FS_SNAPSHOT_MAX_WALK_DEPTH', 256, 8, 4096),
+    maxBundleFiles: parseEnvInt('FS_BUNDLE_MAX_FILES', 1000, 1, BUNDLE_SCHEMA_MAX_FILES),
+    maxBundleSelectionBytes: parseEnvInt(
+      'FS_BUNDLE_MAX_SELECTION_BYTES',
+      256 * 1024,
+      1024,
+      16 * MIB,
+    ),
+    maxBundleFileBytes: parseEnvInt('FS_BUNDLE_MAX_FILE_BYTES', 64 * MIB, 64 * 1024, 1024 * MIB),
+    maxBundleRawPartBytes: parseEnvInt(
+      'FS_BUNDLE_MAX_RAW_PART_BYTES',
+      64 * MIB,
+      64 * 1024,
+      1024 * MIB,
+    ),
+    maxBundleJobRawBytes: parseEnvInt(
+      'FS_BUNDLE_MAX_JOB_RAW_BYTES',
+      512 * MIB,
+      MIB,
+      16 * 1024 * MIB,
+    ),
+    maxBundleManifestBytes: parseEnvInt(
+      'FS_BUNDLE_MAX_MANIFEST_BYTES',
+      4 * MIB,
+      64 * 1024,
+      100 * MIB,
+    ),
     cleanupIntervalMs: parseEnvInt(
       'FS_SNAPSHOT_CLEANUP_INTERVAL_MS',
       60 * 1000,

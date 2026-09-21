@@ -1,6 +1,6 @@
 import * as z from 'zod/v4';
 
-import type { StoredJob } from '../core/job-types.js';
+import type { JobCounters, StoredJob } from '../core/job-types.js';
 import { JOB_STATES } from '../core/job-types.js';
 import { IsoDateTime, NonNegInt, Sha256Hex } from '../core/schema.js';
 
@@ -21,6 +21,21 @@ const SnapshotCountersSchema = z.strictObject({
   parts: NonNegInt,
 });
 
+const BundleCountersSchema = z.strictObject({
+  requested: NonNegInt,
+  included: NonNegInt,
+  skipped: NonNegInt,
+  missing: NonNegInt,
+  inaccessible: NonNegInt,
+  changed: NonNegInt,
+  special: NonNegInt,
+  tooLarge: NonNegInt,
+  sourceBytes: NonNegInt,
+  zipBytes: NonNegInt,
+  parts: NonNegInt,
+  errors: NonNegInt,
+});
+
 const ErrorSampleSchema = z.strictObject({
   code: z.string(),
   path: z.string().optional(),
@@ -29,7 +44,7 @@ const ErrorSampleSchema = z.strictObject({
 
 const ArtifactSummarySchema = z.strictObject({
   artifactId: z.string(),
-  kind: z.enum(['manifest', 'snapshot-part']),
+  kind: z.enum(['manifest', 'snapshot-part', 'bundle-part']),
   name: z.string(),
   size: NonNegInt,
   sha256: Sha256Hex,
@@ -50,7 +65,7 @@ export const JobStatusOutputSchema = z.strictObject({
   resultExpired: z.boolean(),
   resultExpiresAt: IsoDateTime.optional(),
   stopReason: z.string().optional(),
-  counters: SnapshotCountersSchema,
+  counters: z.union([SnapshotCountersSchema, BundleCountersSchema]),
   errors: z.array(ErrorSampleSchema),
   manifestArtifactId: z.string().optional(),
   artifacts: z.array(ArtifactSummarySchema),
@@ -58,7 +73,7 @@ export const JobStatusOutputSchema = z.strictObject({
 
 export type JobStatusValue = z.infer<typeof JobStatusOutputSchema>;
 
-export function jobStatusValue(job: StoredJob): JobStatusValue {
+export function jobStatusValue(job: StoredJob<JobCounters>): JobStatusValue {
   const start = Date.parse(job.startedAt ?? job.createdAt);
   const end = job.finishedAt ? Date.parse(job.finishedAt) : Date.now();
   return {
@@ -90,5 +105,5 @@ export function jobStatusValue(job: StoredJob): JobStatusValue {
 }
 
 export const JobIdInputSchema = z.strictObject({
-  jobId: z.uuid().describe('Opaque job ID returned by snapshot; pass unchanged.'),
+  jobId: z.uuid().describe('Opaque job ID returned by snapshot or bundle; pass unchanged.'),
 });

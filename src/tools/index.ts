@@ -4,6 +4,7 @@ import type { ArtifactJobManager } from '../core/job-manager.js';
 import type { PageSnapshotStore } from '../core/page-store.js';
 import type { PathGuard } from '../core/path.js';
 import type { ResourceStore } from '../core/store.js';
+import { BUNDLE } from './bundle.js';
 import { CANCEL_JOB } from './cancel-job.js';
 import { CREATE } from './create.js';
 import type { DefinedTool } from './define.js';
@@ -39,6 +40,7 @@ export const ALL_TOOLS = [
   FIND_FILES,
   GET_FILE,
   STAT,
+  BUNDLE,
   SNAPSHOT,
   JOB_STATUS,
   CANCEL_JOB,
@@ -61,6 +63,7 @@ export function registeredTools(readOnly: boolean): readonly DefinedTool[] {
 // longer listed by hand anywhere, so their names reach callers through
 // MUTATING_TOOL_NAMES and ALL_TOOLS instead.
 export {
+  BUNDLE,
   CANCEL_JOB,
   FIND_FILES,
   GET_ARTIFACT,

@@ -1,5 +1,10 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": ["__tests__/**/*.test.ts", "scripts/snapshot-benchmark/run.mts"],
+  "entry": [
+    "__tests__/**/*.test.ts",
+    "scripts/snapshot-benchmark/run.mts",
+    "scripts/bundle-check/volume.mts"
+  ],
+  "ignoreBinaries": ["mkfifo"],
   "project": ["src/**/*.ts", "__tests__/helpers.ts", "scripts/**/*.mts"]
 }
