@@ -421,8 +421,15 @@ export class GuardedFileSystem {
    */
   async openOriginal(
     filePath: string,
-    options?: { signal?: AbortSignal },
+    options?: {
+      signal?: AbortSignal;
+      root?: string;
+      rejectPath?: (path: string) => boolean;
+    },
   ): Promise<{ handle: FileHandle; stats: Stats; validPath: string }> {
+    if (options?.root) {
+      await this.pathGuard.assertNoSymlinkComponents(options.root, filePath, options.signal);
+    }
     const details = await this.pathGuard.validateExistingPathDetailed(filePath);
     if (details.isSymlink) {
       throw new FsError(
@@ -431,7 +438,21 @@ export class GuardedFileSystem {
         filePath,
       );
     }
+    if (
+      options?.rejectPath?.(details.requestedPath) ||
+      options?.rejectPath?.(details.resolvedPath)
+    ) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Bundle selectors cannot read job scratch',
+        filePath,
+      );
+    }
     options?.signal?.throwIfAborted();
+    const pathStats = await withAbort(fsLstat(details.resolvedPath), options?.signal);
+    if (!pathStats.isFile()) {
+      throw new FsError(ErrorCode.NOT_FILE, 'Bundle selector is not a regular file', filePath);
+    }
     const handle = await fsOpen(details.resolvedPath, 'r');
     try {
       const stats = await withAbort(handle.stat(), options?.signal);

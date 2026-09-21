@@ -48,6 +48,20 @@ def safe_relative(entry_name: str) -> Path:
     return Path(*relative.parts)
 
 
+def assert_provenance(file_records: dict, entry_parts: dict) -> None:
+    for relative_path, record in file_records.items():
+        observed = entry_parts.get(relative_path)
+        if observed is None:
+            raise RuntimeError(f"Missing part provenance: {relative_path}")
+        expected = {
+            "artifactId": record["partArtifactId"],
+            "name": record["partName"],
+            "archiveEntry": record["archiveEntry"],
+        }
+        if observed != expected:
+            raise RuntimeError(f"Part provenance mismatch: {relative_path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--fixture-manifest", type=Path, required=True)
@@ -76,7 +90,12 @@ def main() -> None:
 
     args.delivery_dir.mkdir(parents=True, exist_ok=True)
     extracted: dict[str, bytes] = {}
+    entry_parts: dict[str, dict[str, str]] = {}
     part_checks = []
+    part_ids = [part["artifactId"] for part in bundle["parts"]]
+    part_names = [part["name"] for part in bundle["parts"]]
+    if len(part_ids) != len(set(part_ids)) or len(part_names) != len(set(part_names)):
+        raise RuntimeError("Duplicate bundle part identity")
     for part in bundle["parts"]:
         part_path = args.artifacts_dir / part["name"]
         part_bytes = part_path.read_bytes()
@@ -98,6 +117,11 @@ def main() -> None:
                 content = archive.read(entry_name)
                 raw_bytes += len(content)
                 extracted[relative_text] = content
+                entry_parts[relative_text] = {
+                    "artifactId": part["artifactId"],
+                    "name": part["name"],
+                    "archiveEntry": entry_name,
+                }
                 destination = (args.delivery_dir / relative).resolve()
                 delivery_root = args.delivery_dir.resolve()
                 if destination != delivery_root and delivery_root not in destination.parents:
@@ -133,6 +157,17 @@ def main() -> None:
         if record["archiveEntry"] != f"files/{relative_path}":
             raise RuntimeError(f"Archive provenance mismatch: {relative_path}")
         original_checks[relative_path] = {**actual, "status": "PASS"}
+
+    assert_provenance(file_records, entry_parts)
+    tampered_records = {path: dict(record) for path, record in file_records.items()}
+    tampered_path = next(iter(tampered_records))
+    tampered_records[tampered_path]["partArtifactId"] = "negative-control-wrong-part"
+    try:
+        assert_provenance(tampered_records, entry_parts)
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("Provenance negative control unexpectedly passed")
 
     repeat_files = list(args.artifacts_dir.glob("*.zip.repeat"))
     if len(repeat_files) != 1:
@@ -176,6 +211,7 @@ def main() -> None:
         "reader": f"Python {xlrd.__version__=} plus stdlib zipfile/hashlib",
         "parts": part_checks,
         "originals": original_checks,
+        "provenance": {"mapping": "PASS", "negativeControl": "PASS"},
         "nestedZip": zip_checks,
         "xlsCells": xls_checks,
         "repeatedFetch": {"file": repeat_files[0].name, "status": "PASS"},

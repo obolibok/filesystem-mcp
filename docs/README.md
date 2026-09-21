@@ -34,6 +34,8 @@
 - [Bundle local](testing/bundle-local-2026-09-20.md): stdio MCP, independent
   ZIP/XLS verifier, multipart volume и Windows 8.3; [live protocol](testing/bundle-live.md) —
   пошаговая целевая проверка после code review.
+- [Исправления review 004](testing/004-fixes-2026-09-21.md): R1–R8 regressions,
+  повторные harness/volume/8.3 evidence и ограничения перед повторным review.
 - [Архитектура, форматы и лимиты](reference/architecture.md): карта владельцев кода
   и текущие возможности и ограничения.
 - [Baseline от 19 сентября](testing/baseline-2026-09-19.md): проверенные наблюдения,

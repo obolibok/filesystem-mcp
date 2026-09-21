@@ -15,7 +15,9 @@ import { BUNDLE_SCHEMA_MAX_FILES } from '../core/snapshot-config.js';
 import { defineTool, type ToolCtx } from './define.js';
 import { JobStatusOutputSchema, jobStatusValue } from './job-shared.js';
 
-const WINDOWS_DEVICE_RE = /^(?:con|prn|aux|nul|clock\$|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
+const WINDOWS_DEVICE_RE =
+  /^(?:con|prn|aux|nul|clock\$|com(?:[1-9]|[¹²³])|lpt(?:[1-9]|[¹²³]))(?:\..*)?$/iu;
+const WINDOWS_INVALID_NAME_RE = /[<>"|?*]/u;
 
 function hasControlCharacter(value: string): boolean {
   for (const character of value) {
@@ -43,6 +45,7 @@ const RelativePath = z
       value.endsWith('/') ||
       value.includes('\\') ||
       value.includes(':') ||
+      WINDOWS_INVALID_NAME_RE.test(value) ||
       hasControlCharacter(value) ||
       segments.some(
         (segment) =>
@@ -161,6 +164,15 @@ export const BUNDLE = defineTool({
     const authorizationPaths = selections.map((file) =>
       join(sourceRoot, ...file.relativePath.split('/')),
     );
+    for (const authorizationPath of authorizationPaths) {
+      if (ctx.jobManager.isScratchPath(authorizationPath)) {
+        throw new FsError(
+          ErrorCode.ACCESS_DENIED,
+          'Bundle selectors cannot read job scratch',
+          authorizationPath,
+        );
+      }
+    }
     for (let index = 0; index < authorizationPaths.length; index += 1) {
       if (
         authorizationPaths
@@ -183,6 +195,7 @@ export const BUNDLE = defineTool({
       fingerprint: fingerprintJobInput(normalized),
       sourceRoot,
       sourceRootId,
+      reuseGuard: ctx.fs.pathGuard,
       input: { files: selections },
       authorizationPaths,
       counters: emptyBundleCounters(selections.length),

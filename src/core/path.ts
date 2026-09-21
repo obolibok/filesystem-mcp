@@ -20,6 +20,7 @@ import { Logger } from './observability.js';
 import { findProjectRoot, isUnsafeCwdPath, resolveConfiguredDirs } from './path-discovery.js';
 import {
   getReservedDeviceNameForPath,
+  isPathInsideDirectory,
   isPathWithinDirectories,
   isSamePath,
   isWindowsDriveRelativePath,
@@ -256,6 +257,52 @@ export class PathGuard {
   async validateExistingPath(requestedPath: string): Promise<ValidatedPath> {
     const details = await this.validateExistingPathDetailed(requestedPath);
     return details.resolvedPath as ValidatedPath;
+  }
+
+  /**
+   * Reject a link in any existing component below one already-canonical root.
+   * Unlike realpath(finalPath), this still detects a junction/symlink when the
+   * final leaf is missing. Bundle selectors use it to preserve no-follow
+   * semantics without treating an ordinary missing leaf as a policy failure.
+   */
+  async assertNoSymlinkComponents(
+    rootPath: string,
+    requestedPath: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const root = normalizePath(rootPath);
+    const requested = this.validateAccessAndSensitivity(requestedPath).normalizedRequested;
+    if (!isSamePath(root, requested) && !isPathInsideDirectory(root, requested)) {
+      throw new FsError(
+        ErrorCode.ACCESS_DENIED,
+        'Selected path escapes its bundle source root',
+        requestedPath,
+      );
+    }
+
+    const suffix = relative(root, requested);
+    if (!suffix) return;
+    let current = root;
+    for (const segment of suffix.split(/[\\/]/u)) {
+      if (!segment) continue;
+      signal?.throwIfAborted();
+      current = join(current, segment);
+      let component: Stats;
+      try {
+        component = await withAbort(lstat(current), signal);
+      } catch (error) {
+        rethrowIfAborted(error);
+        if (isNodeError(error) && error.code === 'ENOENT') return;
+        throw error;
+      }
+      if (component.isSymbolicLink()) {
+        throw new FsError(
+          ErrorCode.ACCESS_DENIED,
+          'Bundle selectors must not contain symlink or junction aliases',
+          requestedPath,
+        );
+      }
+    }
   }
 
   /**

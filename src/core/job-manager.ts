@@ -47,6 +47,8 @@ export interface SubmitJobInput<Counters extends JobCounters = SnapshotCounters>
   readonly sourceRootId: string;
   readonly input: Record<string, unknown>;
   readonly authorizationPaths?: readonly string[];
+  /** Re-check current policy before returning metadata for an idempotent reuse. */
+  readonly reuseGuard?: PathGuard;
   readonly counters?: Counters;
   readonly run: (ctx: JobRunContext<Counters>) => Promise<string>;
 }
@@ -385,6 +387,7 @@ export class ArtifactJobManager {
             'Idempotency key is already bound to different normalized job parameters',
           );
         }
+        if (input.reuseGuard) await this.#authorize(prior, input.reuseGuard);
         return { job: prior as StoredJob<Counters>, reused: true };
       }
     }

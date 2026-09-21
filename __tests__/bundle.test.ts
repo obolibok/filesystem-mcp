@@ -1,10 +1,20 @@
 import type { CallToolResult } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { appendFile, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
+import {
+  appendFile,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  stat,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
+import type { Readable } from 'node:stream';
 import { describe, it } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -145,6 +155,18 @@ async function waitForToolJob(
   }
 }
 
+async function assertBundleRejectedOrFailed(
+  client: Awaited<ReturnType<typeof createTestClientPair>>['client'],
+  result: CallToolResult,
+): Promise<void> {
+  if (result.isError) return;
+  const jobId = meta(result).job?.jobId;
+  assert(jobId, 'unsafe bundle neither failed submission nor returned a job');
+  const terminal = await waitForToolJob(client, jobId);
+  assert.equal(meta(terminal).state, 'failed', firstTextBlock(terminal).text);
+  assert.equal(meta(terminal).artifacts?.length, 0);
+}
+
 async function waitForStoredBundle(
   manager: ArtifactJobManager,
   guard: Awaited<ReturnType<typeof makeGuard>>,
@@ -245,6 +267,10 @@ describe('selected originals bundle', () => {
         'inside.txt': Buffer.from('nested original\n'),
         'binary.bin': Buffer.from([0, 1, 2, 255]),
       });
+      const multiChunk = Buffer.alloc(3 * 64 * 1024 + 17);
+      for (let index = 0; index < multiChunk.length; index += 1) {
+        multiChunk[index] = (index * 31 + Math.floor(index / (64 * 1024))) % 256;
+      }
       const expected = new Map<string, Buffer>([
         ['Daum/shared.bin', Buffer.from([0, 255, 1, 2, 3])],
         ['Inoplacer/shared.bin', Buffer.from('other basename\r\n')],
@@ -252,6 +278,7 @@ describe('selected originals bundle', () => {
         ['empty.bin', Buffer.alloc(0)],
         ['archives/nested.zip', nestedZip],
         ['office/legacy.xls', Buffer.from('d0cf11e0a1b11ae1', 'hex')],
+        ['large/multi-chunk.bin', multiChunk],
       ]);
       for (const [relativePath, bytes] of expected) await writeBytes(root, relativePath, bytes);
       await writeBytes(root, 'unselected/secret.bin', Buffer.from('must not be included'));
@@ -476,28 +503,129 @@ describe('selected originals bundle', () => {
       maxBundleJobRawBytes: 4096,
       maxBundleManifestBytes: 16 * 1024,
     });
+    const zipSources: Readable[] = [];
     try {
-      const submitted = await submitDirectBundle(
-        manager,
-        fs,
-        root,
-        ['one.bin', 'two.bin', 'oversized.bin'].map((relativePath) => ({ relativePath })),
-      );
-      const completed = await waitForStoredBundle(manager, guard, submitted.jobId);
-      assert.equal(completed.state, 'completed');
-      assert.equal(completed.complete, false);
-      assert.equal(completed.counters.included, 2);
-      assert.equal(completed.counters.tooLarge, 1);
-      assert.equal(completed.counters.parts, 2);
-      for (const artifact of completed.artifacts.filter(
-        (candidate) => candidate.kind === 'bundle-part',
-      )) {
-        assert(artifact.size <= 700);
-        const entries = await unzipAll(
-          (await manager.getArtifact(artifact.artifactId, guard)).bytes,
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const submitted = await submitDirectBundle(
+          manager,
+          fs,
+          root,
+          ['one.bin', 'two.bin', 'oversized.bin'].map((relativePath) => ({ relativePath })),
+          { onZipSource: (source) => zipSources.push(source) },
         );
-        assert.equal(entries.size, 1);
+        const completed = await waitForStoredBundle(manager, guard, submitted.jobId);
+        assert.equal(completed.state, 'completed');
+        assert.equal(completed.complete, false);
+        assert.equal(completed.counters.included, 2);
+        assert.equal(completed.counters.tooLarge, 1);
+        assert.equal(completed.counters.parts, 2);
+        for (const artifact of completed.artifacts.filter(
+          (candidate) => candidate.kind === 'bundle-part',
+        )) {
+          assert(artifact.size <= 700);
+          const entries = await unzipAll(
+            (await manager.getArtifact(artifact.artifactId, guard)).bytes,
+          );
+          assert.equal(entries.size, 1);
+        }
+        assert(
+          (await readdir(manager.jobDirectory(completed.jobId))).every(
+            (entry) => !entry.endsWith('.partial'),
+          ),
+        );
       }
+      assert(zipSources.length > 0);
+      assert(
+        zipSources.every((source) => source.destroyed),
+        'ZIP source stream remained open',
+      );
+    } finally {
+      await manager.close();
+      await cleanupTestRoot(root);
+      await cleanupTestRoot(scratch);
+    }
+  });
+
+  it('contains a missing ZIP spool as a failed job and keeps the manager usable', async () => {
+    const root = await createTestRoot();
+    const scratch = await createTestRoot();
+    await writeBytes(root, 'fault.bin', randomBytes(4096));
+    await writeBytes(root, 'healthy.bin', Buffer.from('healthy after ZIP failure'));
+    const guard = await makeGuard([root]);
+    const fs = new GuardedFileSystem(guard);
+    const manager = new ArtifactJobManager({
+      ...getSnapshotConfig(),
+      scratchDirectory: scratch,
+      ephemeralScratch: false,
+    });
+    try {
+      const faulted = await submitDirectBundle(manager, fs, root, [{ relativePath: 'fault.bin' }], {
+        beforeCompress: async (_files, tempPaths) => {
+          const tempPath = tempPaths[0];
+          assert(tempPath);
+          await unlink(tempPath);
+        },
+      });
+      const failed = await waitForStoredBundle(manager, guard, faulted.jobId);
+      assert.equal(failed.state, 'failed');
+      assert.equal(failed.complete, false);
+      assert.equal(failed.artifacts.length, 0);
+      assert.match(failed.stopReason ?? '', /ENOENT|no such file/u);
+      assert(
+        (await readdir(manager.jobDirectory(failed.jobId))).every(
+          (entry) => !entry.endsWith('.partial'),
+        ),
+      );
+
+      const healthy = await submitDirectBundle(manager, fs, root, [
+        { relativePath: 'healthy.bin' },
+      ]);
+      const completed = await waitForStoredBundle(manager, guard, healthy.jobId);
+      assert.equal(completed.state, 'completed');
+      assert.equal(completed.complete, true);
+    } finally {
+      await manager.close();
+      await cleanupTestRoot(root);
+      await cleanupTestRoot(scratch);
+    }
+  });
+
+  it('treats scratch capture write errors as fatal storage failures', async () => {
+    const root = await createTestRoot();
+    const scratch = await createTestRoot();
+    await writeBytes(root, 'fault.bin', randomBytes(4096));
+    await writeBytes(root, 'healthy.bin', Buffer.from('healthy after storage failure'));
+    const guard = await makeGuard([root]);
+    const fs = new GuardedFileSystem(guard);
+    const manager = new ArtifactJobManager({
+      ...getSnapshotConfig(),
+      scratchDirectory: scratch,
+      ephemeralScratch: false,
+    });
+    try {
+      const faulted = await submitDirectBundle(manager, fs, root, [{ relativePath: 'fault.bin' }], {
+        beforeCaptureWrite: async () => {
+          throw Object.assign(new Error('synthetic scratch write denial'), { code: 'EACCES' });
+        },
+      });
+      const failed = await waitForStoredBundle(manager, guard, faulted.jobId);
+      assert.equal(failed.state, 'failed');
+      assert.equal(failed.complete, false);
+      assert.equal(failed.counters.inaccessible, 0);
+      assert.equal(failed.artifacts.length, 0);
+      assert.match(failed.stopReason ?? '', /scratch write denial/u);
+      assert(
+        (await readdir(manager.jobDirectory(failed.jobId))).every(
+          (entry) => !entry.endsWith('.partial'),
+        ),
+      );
+
+      const healthy = await submitDirectBundle(manager, fs, root, [
+        { relativePath: 'healthy.bin' },
+      ]);
+      const completed = await waitForStoredBundle(manager, guard, healthy.jobId);
+      assert.equal(completed.state, 'completed');
+      assert.equal(completed.complete, true);
     } finally {
       await manager.close();
       await cleanupTestRoot(root);
@@ -507,9 +635,17 @@ describe('selected originals bundle', () => {
 
   it('rejects unsafe/colliding selectors and fails closed on a junction path', async (t) => {
     const root = await createTestRoot();
-    const harness = await createTestClientPair([root], { readOnly: true });
+    const junctionTarget = await createTestRoot();
+    const harness = await createTestClientPair([root, junctionTarget], { readOnly: true });
     try {
-      for (const relativePath of ['../escape.bin', 'C:/drive.bin', 'name:ads', 'back\\slash']) {
+      for (const relativePath of [
+        '../escape.bin',
+        'C:/drive.bin',
+        'name:ads',
+        'back\\slash',
+        'wild?.bin',
+        'COM¹.bin',
+      ]) {
         const result = await harness.client.callTool({
           name: 'bundle',
           arguments: {
@@ -530,10 +666,10 @@ describe('selected originals bundle', () => {
       });
       assert.equal(duplicate.isError, true);
 
-      const target = join(root, 'target');
-      await mkdir(target);
-      await writeFile(join(target, 'inside.bin'), Buffer.from('inside'));
-      if (!(await trySymlink(target, join(root, 'alias'), () => t.skip(), 'junction'))) return;
+      await writeFile(join(junctionTarget, 'inside.bin'), Buffer.from('inside'));
+      await writeFile(join(root, 'kept.bin'), Buffer.from('kept'));
+      if (!(await trySymlink(junctionTarget, join(root, 'alias'), () => t.skip(), 'junction')))
+        return;
       const submitted = await harness.client.callTool({
         name: 'bundle',
         arguments: {
@@ -548,8 +684,96 @@ describe('selected originals bundle', () => {
       assert.equal(meta(failed).state, 'failed');
       assert.equal(meta(failed).artifacts?.length, 0);
       assert.match(meta(failed).stopReason ?? '', /symlink|junction/u);
+
+      const missingUnderJunction = await harness.client.callTool({
+        name: 'bundle',
+        arguments: {
+          path: root,
+          idempotencyKey: `junction-missing-${randomUUID()}`,
+          files: [{ relativePath: 'kept.bin' }, { relativePath: 'alias/missing.bin' }],
+        },
+      });
+      await assertBundleRejectedOrFailed(harness.client, missingUnderJunction);
     } finally {
       await harness.close();
+      await cleanupTestRoot(root);
+      await cleanupTestRoot(junctionTarget);
+    }
+  });
+
+  it('rejects scratch metadata and ready artifacts through canonical and alias selectors', async () => {
+    const root = await createTestRoot();
+    const scratch = join(root, 'bundle scratch with long name');
+    const previousScratch = process.env['FS_SNAPSHOT_DIR'];
+    process.env['FS_SNAPSHOT_DIR'] = scratch;
+    await writeBytes(root, 'original.bin', Buffer.from('source policy bytes'));
+    const harness = await createTestClientPair([root], { readOnly: true });
+    try {
+      const submitted = await harness.client.callTool({
+        name: 'bundle',
+        arguments: {
+          path: root,
+          idempotencyKey: `scratch-source-${randomUUID()}`,
+          files: [{ relativePath: 'original.bin' }],
+        },
+      });
+      const jobId = meta(submitted).job?.jobId;
+      assert(jobId);
+      const completed = await waitForToolJob(harness.client, jobId);
+      assert.equal(meta(completed).state, 'completed');
+      const partId = meta(completed).artifacts?.find(
+        (artifact) => artifact.kind === 'bundle-part',
+      )?.artifactId;
+      assert(partId);
+
+      for (const relativePath of [
+        `${basename(scratch)}/${jobId}/job.json`,
+        `${basename(scratch)}/${jobId}/${partId}.zip`,
+      ]) {
+        const rejected = await harness.client.callTool({
+          name: 'bundle',
+          arguments: {
+            path: root,
+            idempotencyKey: `scratch-canonical-${randomUUID()}`,
+            files: [{ relativePath }],
+          },
+        });
+        await assertBundleRejectedOrFailed(harness.client, rejected);
+      }
+
+      if (process.platform === 'win32') {
+        const shortScratch = windowsShortPath(scratch);
+        const rejectedShort = await harness.client.callTool({
+          name: 'bundle',
+          arguments: {
+            path: root,
+            idempotencyKey: `scratch-short-${randomUUID()}`,
+            files: [{ relativePath: `${basename(shortScratch)}/${jobId}/job.json` }],
+          },
+        });
+        await assertBundleRejectedOrFailed(harness.client, rejectedShort);
+      }
+
+      const alias = join(root, 'scratch-alias');
+      if (await trySymlink(scratch, alias, () => undefined, 'junction')) {
+        const rejectedAlias = await harness.client.callTool({
+          name: 'bundle',
+          arguments: {
+            path: root,
+            idempotencyKey: `scratch-alias-${randomUUID()}`,
+            files: [{ relativePath: `scratch-alias/${jobId}/${partId}.zip` }],
+          },
+        });
+        await assertBundleRejectedOrFailed(harness.client, rejectedAlias);
+      }
+      assert.deepEqual(
+        await readFile(join(root, 'original.bin')),
+        Buffer.from('source policy bytes'),
+      );
+    } finally {
+      await harness.close();
+      if (previousScratch === undefined) Reflect.deleteProperty(process.env, 'FS_SNAPSHOT_DIR');
+      else process.env['FS_SNAPSHOT_DIR'] = previousScratch;
       await cleanupTestRoot(root);
     }
   });
@@ -592,6 +816,65 @@ describe('selected originals bundle', () => {
       } else {
         process.env['FS_BUNDLE_MAX_SELECTION_BYTES'] = previousBytes;
       }
+    }
+  });
+
+  it('enforces the general source-file cap independently from compressed delivery size', async () => {
+    const root = await createTestRoot();
+    const rejectedScratch = await createTestRoot();
+    const admittedScratch = await createTestRoot();
+    await writeBytes(root, 'compressible.bin', Buffer.alloc(128 * 1024, 0x41));
+    const guard = await makeGuard([root]);
+    const fs = new GuardedFileSystem(guard);
+    const baseConfig = {
+      ...getSnapshotConfig(),
+      ephemeralScratch: false,
+      maxZipBytes: 64 * 1024,
+      maxDeliveryBytes: 64 * 1024,
+      maxBundleFileBytes: 256 * 1024,
+      maxBundleRawPartBytes: 256 * 1024,
+      maxBundleJobRawBytes: 1024 * 1024,
+      maxBundleManifestBytes: 64 * 1024,
+    };
+    const rejectedManager = new ArtifactJobManager({
+      ...baseConfig,
+      scratchDirectory: rejectedScratch,
+      maxFileSizeBytes: 64 * 1024,
+    });
+    const admittedManager = new ArtifactJobManager({
+      ...baseConfig,
+      scratchDirectory: admittedScratch,
+      maxFileSizeBytes: 256 * 1024,
+    });
+    try {
+      const rejected = await submitDirectBundle(rejectedManager, fs, root, [
+        { relativePath: 'compressible.bin' },
+      ]);
+      const incomplete = await waitForStoredBundle(rejectedManager, guard, rejected.jobId);
+      assert.equal(incomplete.state, 'completed');
+      assert.equal(incomplete.complete, false);
+      assert.equal(incomplete.counters.tooLarge, 1);
+      assert.equal(
+        incomplete.artifacts.filter((artifact) => artifact.kind === 'bundle-part').length,
+        0,
+      );
+
+      const admitted = await submitDirectBundle(admittedManager, fs, root, [
+        { relativePath: 'compressible.bin' },
+      ]);
+      const complete = await waitForStoredBundle(admittedManager, guard, admitted.jobId);
+      assert.equal(complete.state, 'completed');
+      assert.equal(complete.complete, true);
+      assert.equal(complete.counters.sourceBytes, 128 * 1024);
+      const part = complete.artifacts.find((artifact) => artifact.kind === 'bundle-part');
+      assert(part);
+      assert(part.size < baseConfig.maxDeliveryBytes);
+    } finally {
+      await rejectedManager.close();
+      await admittedManager.close();
+      await cleanupTestRoot(root);
+      await cleanupTestRoot(rejectedScratch);
+      await cleanupTestRoot(admittedScratch);
     }
   });
 
@@ -676,42 +959,85 @@ describe('selected originals bundle', () => {
     }
   });
 
-  it('keeps immutable bytes after source deletion but honors narrowed selected-path policy after restart', async () => {
+  it('authorizes idempotent reuse before returning status, including after restart', async () => {
     const root = await createTestRoot();
     const scratch = await createTestRoot();
     const selected = await writeBytes(root, 'selected.bin', Buffer.from('immutable bytes'));
+    const sourceRoot = await realpath(root);
+    const selections: BundleSelection[] = [{ relativePath: 'selected.bin' }];
+    const idempotencyKey = `reuse-auth-${randomUUID()}`;
+    const fingerprint = fingerprintJobInput({ kind: 'bundle', sourceRoot, files: selections });
     const initialGuard = await makeGuard([root]);
     const manager = new ArtifactJobManager({
       ...getSnapshotConfig(),
       scratchDirectory: scratch,
       ephemeralScratch: false,
     });
-    let artifactId: string;
-    try {
-      const submitted = await submitDirectBundle(
-        manager,
-        new GuardedFileSystem(initialGuard),
-        root,
-        [{ relativePath: 'selected.bin' }],
-      );
-      const completed = await waitForStoredBundle(manager, initialGuard, submitted.jobId);
-      artifactId =
-        completed.artifacts.find((artifact) => artifact.kind === 'bundle-part')?.artifactId ?? '';
-      assert(artifactId);
-    } finally {
-      await manager.close();
-    }
-    await unlink(selected);
-    const restarted = new ArtifactJobManager({
-      ...getSnapshotConfig(),
-      scratchDirectory: scratch,
-      ephemeralScratch: false,
+    const submitInput = (
+      reuseGuard: Awaited<ReturnType<typeof makeGuard>>,
+      run: Parameters<ArtifactJobManager['submit']>[0]['run'],
+    ) => ({
+      kind: 'bundle',
+      idempotencyKey,
+      fingerprint,
+      sourceRoot,
+      sourceRootId: 'root-reuse-test',
+      input: { files: selections },
+      authorizationPaths: [selected],
+      reuseGuard,
+      counters: emptyBundleCounters(1),
+      run,
     });
+    let restarted: ArtifactJobManager | undefined;
     const previousDenylist = process.env['FS_DENYLIST'];
     try {
-      assert((await restarted.getArtifact(artifactId, await makeGuard([root]))).bytes.length > 0);
+      const fs = new GuardedFileSystem(initialGuard);
+      const submitted = await manager.submit(
+        submitInput(initialGuard, async (ctx) =>
+          runBundlePipeline(fs, sourceRoot, selections, ctx),
+        ),
+      );
+      const completed = await waitForStoredBundle(manager, initialGuard, submitted.job.jobId);
+      const artifactId =
+        completed.artifacts.find((artifact) => artifact.kind === 'bundle-part')?.artifactId ?? '';
+      assert(artifactId);
+      await unlink(selected);
+
+      const allowedAfterDelete = await makeGuard([root]);
+      const reused = await manager.submit(
+        submitInput(allowedAfterDelete, async () => {
+          throw new Error('reused job must not rerun');
+        }),
+      );
+      assert.equal(reused.reused, true);
+      assert.equal(reused.job.jobId, completed.jobId);
+      assert((await manager.getArtifact(artifactId, allowedAfterDelete)).bytes.length > 0);
+
       process.env['FS_DENYLIST'] = 'selected.bin';
       const narrowedGuard = await makeGuard([root]);
+      await assert.rejects(
+        manager.submit(
+          submitInput(narrowedGuard, async () => {
+            throw new Error('unauthorized reuse must not rerun');
+          }),
+        ),
+        /Sensitive file blocked/u,
+      );
+
+      await manager.close();
+      restarted = new ArtifactJobManager({
+        ...getSnapshotConfig(),
+        scratchDirectory: scratch,
+        ephemeralScratch: false,
+      });
+      await assert.rejects(
+        restarted.submit(
+          submitInput(narrowedGuard, async () => {
+            throw new Error('restarted unauthorized reuse must not rerun');
+          }),
+        ),
+        /Sensitive file blocked/u,
+      );
       await assert.rejects(
         restarted.getArtifact(artifactId, narrowedGuard),
         /Sensitive file blocked/u,
@@ -719,7 +1045,8 @@ describe('selected originals bundle', () => {
     } finally {
       if (previousDenylist === undefined) Reflect.deleteProperty(process.env, 'FS_DENYLIST');
       else process.env['FS_DENYLIST'] = previousDenylist;
-      await restarted.close();
+      await manager.close();
+      await restarted?.close();
       await cleanupTestRoot(root);
       await cleanupTestRoot(scratch);
     }
@@ -755,4 +1082,76 @@ describe('selected originals bundle', () => {
       }
     },
   );
+
+  it(
+    'classifies a POSIX FIFO as special without opening the blocking source',
+    { skip: process.platform === 'win32' },
+    async () => {
+      const root = await createTestRoot();
+      const scratch = await createTestRoot();
+      const fifo = join(root, 'source.fifo');
+      execFileSync('mkfifo', [fifo], { windowsHide: true });
+      const guard = await makeGuard([root]);
+      const manager = new ArtifactJobManager({
+        ...getSnapshotConfig(),
+        scratchDirectory: scratch,
+        ephemeralScratch: false,
+      });
+      try {
+        const submitted = await submitDirectBundle(manager, new GuardedFileSystem(guard), root, [
+          { relativePath: 'source.fifo' },
+        ]);
+        const completed = await waitForStoredBundle(manager, guard, submitted.jobId);
+        assert.equal(completed.state, 'completed');
+        assert.equal(completed.complete, false);
+        assert.equal(completed.counters.special, 1);
+        assert.equal(
+          completed.artifacts.filter((artifact) => artifact.kind === 'bundle-part').length,
+          0,
+        );
+      } finally {
+        await manager.close();
+        await cleanupTestRoot(root);
+        await cleanupTestRoot(scratch);
+      }
+    },
+  );
+
+  it('local harness rejects canonical, junction, and 8.3 output aliases into source', async () => {
+    const container = await createTestRoot();
+    const source = join(container, 'bundle harness source with long name');
+    const scratch = join(container, 'safe scratch');
+    const sentinel = Buffer.from('source must remain untouched');
+    await mkdir(source);
+    await writeFile(join(source, 'sentinel.bin'), sentinel);
+    const script = join(process.cwd(), 'scripts', 'bundle-check', 'local-mcp-check.mjs');
+
+    const expectSafetyRejection = (delivery: string): void => {
+      const result = spawnSync(
+        process.execPath,
+        [script, '--fixture-root', source, '--delivery-dir', delivery, '--scratch-dir', scratch],
+        { encoding: 'utf8', windowsHide: true, timeout: 10_000 },
+      );
+      assert.notEqual(result.status, 0, 'unsafe harness output unexpectedly succeeded');
+      assert.match(result.stderr, /delivery directory must be outside/u);
+    };
+
+    try {
+      expectSafetyRejection(join(source, 'direct-output'));
+
+      const alias = join(container, 'source-output-alias');
+      if (await trySymlink(source, alias, () => undefined, 'junction')) {
+        expectSafetyRejection(join(alias, 'junction-output'));
+      }
+
+      if (process.platform === 'win32') {
+        expectSafetyRejection(join(windowsShortPath(source), 'short-output'));
+      }
+
+      assert.deepEqual(await readdir(source), ['sentinel.bin']);
+      assert.deepEqual(await readFile(join(source, 'sentinel.bin')), sentinel);
+    } finally {
+      await cleanupTestRoot(container);
+    }
+  });
 });

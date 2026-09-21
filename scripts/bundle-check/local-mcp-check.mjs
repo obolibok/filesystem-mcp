@@ -3,7 +3,7 @@ import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotoc
 
 import assert from 'node:assert/strict';
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
-import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 
 function parseArgs(argv) {
@@ -36,6 +36,23 @@ function assertOutside(source, candidate, label) {
   );
 }
 
+async function resolveDestination(candidate) {
+  let current = resolve(candidate);
+  const missing = [];
+  for (;;) {
+    try {
+      const existing = await realpath(current);
+      return resolve(existing, ...missing.reverse());
+    } catch (error) {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
+      const parent = dirname(current);
+      if (parent === current) throw error;
+      missing.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
 function structured(result) {
   return result.structuredContent ?? result._meta;
 }
@@ -62,10 +79,12 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const repoRoot = resolve(import.meta.dirname, '..', '..');
   const fixtureRoot = await realpath(options.fixtureRoot);
-  assertOutside(fixtureRoot, options.deliveryDir, 'delivery directory');
-  assertOutside(fixtureRoot, options.scratchDir, 'scratch directory');
-  await mkdir(options.deliveryDir, { recursive: true });
-  await mkdir(options.scratchDir, { recursive: true });
+  const deliveryDir = await resolveDestination(options.deliveryDir);
+  const scratchDir = await resolveDestination(options.scratchDir);
+  assertOutside(fixtureRoot, deliveryDir, 'delivery directory');
+  assertOutside(fixtureRoot, scratchDir, 'scratch directory');
+  await mkdir(deliveryDir, { recursive: true });
+  await mkdir(scratchDir, { recursive: true });
   const fixtureManifest = JSON.parse(await readFile(join(fixtureRoot, 'manifest.json'), 'utf8'));
   const selectedRecords = [fixtureManifest.originals.zip, fixtureManifest.originals.xls];
   const files = [];
@@ -87,7 +106,7 @@ async function main() {
       fixtureRoot,
     ],
     cwd: repoRoot,
-    env: { ...getDefaultEnvironment(), FS_SNAPSHOT_DIR: options.scratchDir },
+    env: { ...getDefaultEnvironment(), FS_SNAPSHOT_DIR: scratchDir },
   });
   const client = new Client(
     { name: 'bundle-local-check', version: '1.0.0' },
@@ -141,7 +160,7 @@ async function main() {
       arguments: { artifactId: status.manifestArtifactId },
     });
     const manifestBytes = embeddedBytes(manifestResponse);
-    await writeFile(join(options.deliveryDir, 'bundle-manifest.json'), manifestBytes);
+    await writeFile(join(deliveryDir, 'bundle-manifest.json'), manifestBytes);
     const bundleManifest = JSON.parse(manifestBytes.toString('utf8'));
     assert.equal(bundleManifest.complete, true);
     assert.deepEqual(
@@ -164,7 +183,7 @@ async function main() {
       const bytes = embeddedBytes(response);
       const fetchMs = Number((performance.now() - started).toFixed(1));
       assert.equal(bytes.length, part.zipBytes);
-      await writeFile(join(options.deliveryDir, basename(part.name)), bytes);
+      await writeFile(join(deliveryDir, basename(part.name)), bytes);
       report.artifacts.push({ name: part.name, bytes: bytes.length, fetchMs });
       if (!repeat || bytes.length > repeat.bytes.length) repeat = { part, bytes };
     }
@@ -176,14 +195,14 @@ async function main() {
       }),
     );
     assert.deepEqual(repeated, repeat.bytes);
-    await writeFile(join(options.deliveryDir, `${basename(repeat.part.name)}.repeat`), repeated);
+    await writeFile(join(deliveryDir, `${basename(repeat.part.name)}.repeat`), repeated);
     report.repeat = { name: repeat.part.name, bytes: repeated.length, equal: true };
     await writeFile(
-      join(options.deliveryDir, 'local-mcp-report.json'),
+      join(deliveryDir, 'local-mcp-report.json'),
       `${JSON.stringify(report, null, 2)}\n`,
       'utf8',
     );
-    process.stdout.write(`${join(options.deliveryDir, 'local-mcp-report.json')}\n`);
+    process.stdout.write(`${join(deliveryDir, 'local-mcp-report.json')}\n`);
   } finally {
     await client.close().catch(() => undefined);
   }

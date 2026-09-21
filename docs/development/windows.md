@@ -175,7 +175,9 @@ node --import tsx scripts/snapshot-benchmark/run.mts --mode walk --walk-files 60
 ZIP/delivery caps и `job_status`/`cancel_job`/`get_artifact`. Отдельные настройки
 `FS_BUNDLE_*` ограничивают file count/selection metadata, raw original, raw bytes
 ZIP candidate/job и внешний manifest; точные defaults перечислены в README.
-`FS_MAX_FILE_SIZE` продолжает ограничивать каждый готовый artifact при создании и fetch.
+`FS_MAX_FILE_SIZE` ограничивает и raw selected original до чтения, и каждый готовый
+artifact при создании/fetch. Хорошо сжимаемый original может превышать delivery cap,
+но не этот общий source cap.
 
 Быстрый runtime suite, настоящий stdio MCP и independent verifier:
 
@@ -191,8 +193,11 @@ node --import tsx scripts\bundle-check\volume.mts --output .tmp\bundle-volume.js
 ```
 
 `source`, `delivered`, `scratch` и `extracted` должны быть разными synthetic
-каталогами; последние три находятся вне source. Verifier проверяет точный entry set,
-ZIP CRC, SHA-256 и bytes originals, затем открывает вложенный ZIP и семь XLS cells.
+каталогами; последние три находятся вне source. Harness до записи canonicalizes
+существующий target или ближайший существующий ancestor, поэтому junction/8.3 alias
+в source отклоняется. Verifier проверяет точный entry set, ZIP CRC, SHA-256 и bytes
+originals, соответствие каждой записи artifact ID/name/entry, negative provenance
+control, затем открывает вложенный ZIP и семь XLS cells.
 Volume default создаёт 7 MiB плохо сжимаемых originals при 2 MiB raw-part/ZIP caps,
 проверяет все распакованные bytes и повторный fetch, записывает timings, peak RSS и
 peak scratch. Это LOCAL_ONLY; целевой ChatGPT опыт выполняется по

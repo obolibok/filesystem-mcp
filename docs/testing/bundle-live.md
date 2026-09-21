@@ -129,6 +129,6 @@ server caps, job/artifact IDs, timings, hashes, verifier evidence, skips и пр
 Не включать API key или абсолютные личные пути. Отличать client report от независимой
 сверки server scratch. Максимальный полученный ZIP — наблюдение, не предел host.
 
-После сбора evidence: убедиться, что terminal jobs нет, остановить принадлежащий
+После сбора evidence: убедиться, что незавершённых jobs нет, остановить принадлежащий
 этому опыту foreground tunnel/server, подтвердить `/readyz` недоступен. Synthetic
 fixture/scratch можно оставить локально до приёмки; не коммитить их.

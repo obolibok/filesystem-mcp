@@ -90,7 +90,7 @@ blob SDK-клиентом само по себе не доказывает ма�
 | Snapshot concurrency / queue / time   | 1 running / 4 queued / 60 минут                                                   | `core/job-manager.ts`           |
 | Snapshot scratch / result TTL         | 1 GiB / 24 часа от completed                                                      | `core/job-manager.ts`           |
 | Bundle selection                      | 1000 paths / 256 KiB metadata; schema ceiling 10000                               | `core/snapshot-config.ts`       |
-| Bundle original / raw ZIP candidate   | 64 MiB / 64 MiB                                                                   | `core/snapshot-config.ts`       |
+| Bundle original / raw ZIP candidate   | min(64 MiB, `FS_MAX_FILE_SIZE`) / 64 MiB                                          | `core/snapshot-config.ts`       |
 | Bundle raw job / external manifest    | 512 MiB / 4 MiB                                                                   | `core/snapshot-config.ts`       |
 
 Пагинация не отменяет cap/timeout первого обхода. Проверять `truncated`,
@@ -132,14 +132,18 @@ Snapshot не является атомарным filesystem snapshot: исче�
 жёсткий policy cap и приводит к `failed`, а не к partial completed результату.
 
 Bundle принимает только portable `/`-relative regular-file paths без globbing,
-absolute/drive/UNC/device/ADS/traversal и extraction collisions. Порядок выбора
+absolute/drive/UNC/device/ADS/traversal, Windows-invalid wildcard characters и
+extraction collisions. Порядок выбора
 не влияет на fingerprint; изменение paths или preconditions при том же key даёт
 conflict. Explicit selection не применяет discovery ignore rules. Guard проверяет
-root и каждый выбранный путь; symlink/junction в selector не разыменовывается.
+root и каждый выбранный путь; каждый существующий компонент проверяется отдельно,
+поэтому symlink/junction с отсутствующим leaf тоже является fatal unsafe selector.
 Worker потоково копирует bytes через `GuardedFileSystem` в manager-owned scratch,
 сверяет identity/size/mtime и optional expected metadata, затем упаковывает целые
 originals под `files/<relativePath>`. Один original не режется между частями.
-Закрытый ZIP проверяется против общего ZIP/delivery/`FS_MAX_FILE_SIZE` cap; группа
+Raw original сначала проверяется против минимума bundle file/raw-part и общего
+`FS_MAX_FILE_SIZE`. Закрытый ZIP отдельно проверяется против общего
+ZIP/delivery/`FS_MAX_FILE_SIZE` cap; группа
 при необходимости делится, а одиночный непомещающийся original получает `too_large`.
 
 Bundle manifest v1 (`filesystem-mcp.bundle-manifest`) — отдельный JSON artifact без
@@ -156,15 +160,19 @@ Scratch и его ancestors не могут быть symlink/junction; пров�
 до создания storage. Windows 8.3 spelling разрешён, после проверки manager
 использует canonical scratch для I/O, cleanup и исключения из source traversal.
 
-Source I/O остаётся в PathGuard/GuardedFileSystem. Scratch не становится source root,
-caller не выбирает output path, а status/cancel/fetch каждый раз проверяют текущий
-доступ к canonical source root и всем bundle selectors. Удаление/изменение отдельного
+Source I/O остаётся в PathGuard/GuardedFileSystem. Scratch и его metadata/artifacts
+нельзя выбрать как bundle source даже при вложении scratch в разрешённый root или
+доступе через canonical/8.3/link alias. Caller не выбирает output path, а
+status/cancel/fetch и idempotent reuse каждый раз проверяют текущий доступ к canonical
+source root и всем bundle selectors. Удаление/изменение отдельного
 original после completed не требует повторного source read и не меняет сохранённые
 bytes; удаление root или сужение policy закрывает доступ. Одна HTTP credential остаётся одним endpoint scope;
 multi-user isolation этим не заявляется. Один scratch каталог имеет одного владельца-
 процесс; параллельным экземплярам нужны разные каталоги. Metadata сохраняется atomic
-rename; quota учитывает spool, готовые artifacts и job metadata. ZIP producer применяет
-минимум ZIP/delivery/captured general-file caps, а fetch повторно проверяет текущий
+rename; quota учитывает spool, готовые artifacts и job metadata. Bundle ZIP producer
+владеет input streams, перенаправляет их ошибки в job failure и дожидается закрытия
+при split/cancel/error. Он применяет минимум ZIP/delivery/captured general-file caps,
+а fetch повторно проверяет текущий
 `FS_MAX_FILE_SIZE`. Cleanup защищает активное чтение и освобождает quota только после
 фактического удаления bytes.
 

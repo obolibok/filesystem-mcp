@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { Stats } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Readable } from 'node:stream';
+import { Readable } from 'node:stream';
+import { finished } from 'node:stream/promises';
 
 import { ZipFile } from 'yazl';
 
@@ -64,7 +66,12 @@ export interface BundlePipelineHooks {
     selection: BundleSelection,
     validPath: string,
   ) => Promise<void>;
-  readonly beforeCompress?: (files: readonly BundleSelection[]) => Promise<void>;
+  readonly beforeCaptureWrite?: (selection: BundleSelection, tempPath: string) => Promise<void>;
+  readonly beforeCompress?: (
+    files: readonly BundleSelection[],
+    tempPaths: readonly string[],
+  ) => Promise<void>;
+  readonly onZipSource?: (source: Readable, selection: BundleSelection) => void;
 }
 
 class ClosedZipTooLargeError extends Error {
@@ -106,12 +113,17 @@ function classifyRecoverable(error: unknown): 'missing' | 'inaccessible' | 'spec
     return undefined;
   }
   if (!isNodeError(error)) return undefined;
-  if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return 'missing';
+  if (error.code === 'ENOENT') return 'missing';
+  if (error.code === 'ENOTDIR') return 'special';
   if (error.code === 'EACCES' || error.code === 'EPERM' || error.code === 'EBUSY') {
     return 'inaccessible';
   }
   if (error.code === 'EISDIR') return 'special';
   return undefined;
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 function skipResult(
@@ -151,9 +163,20 @@ async function captureOriginal(
   hooks: BundlePipelineHooks,
 ): Promise<StagedOriginal | SkippedResult> {
   const absolutePath = join(root, ...selection.relativePath.split('/'));
+  if (ctx.isScratchPath(absolutePath)) {
+    throw new FsError(
+      ErrorCode.ACCESS_DENIED,
+      'Bundle selectors cannot read job scratch',
+      selection.relativePath,
+    );
+  }
   let opened: Awaited<ReturnType<GuardedFileSystem['openOriginal']>>;
   try {
-    opened = await fs.openOriginal(absolutePath, { signal: ctx.signal });
+    opened = await fs.openOriginal(absolutePath, {
+      signal: ctx.signal,
+      root,
+      rejectPath: (path) => ctx.isScratchPath(path),
+    });
   } catch (error) {
     const status = classifyRecoverable(error);
     if (!status) throw error;
@@ -168,6 +191,38 @@ async function captureOriginal(
 
   const { handle, stats: before, validPath } = opened;
   const observedBefore = metadata(before);
+  let output: FileHandle | undefined;
+  let tempPath: string | undefined;
+  let reservedBytes = 0;
+
+  const closeOutput = async (): Promise<void> => {
+    const current = output;
+    output = undefined;
+    if (current) await current.close();
+  };
+
+  const discardCapture = async (): Promise<void> => {
+    const failures: unknown[] = [];
+    try {
+      await closeOutput();
+    } catch (error) {
+      failures.push(error);
+    }
+    if (tempPath) {
+      const currentPath = tempPath;
+      try {
+        await ctx.removeTemp(currentPath, reservedBytes);
+        tempPath = undefined;
+        reservedBytes = 0;
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'Could not discard captured bundle scratch bytes');
+    }
+  };
+
   try {
     if (selection.expected && !expectedMatches(selection.expected, observedBefore)) {
       return skipResult(
@@ -179,7 +234,11 @@ async function captureOriginal(
         { observed: { before: observedBefore } },
       );
     }
-    const fileLimit = Math.min(ctx.config.maxBundleFileBytes, ctx.config.maxBundleRawPartBytes);
+    const fileLimit = Math.min(
+      ctx.config.maxBundleFileBytes,
+      ctx.config.maxBundleRawPartBytes,
+      ctx.config.maxFileSizeBytes,
+    );
     if (before.size > fileLimit) {
       return skipResult(
         ctx,
@@ -194,19 +253,39 @@ async function captureOriginal(
       throw new FsError(ErrorCode.TOO_LARGE, 'Bundle job raw-byte limit exceeded');
     }
 
-    const tempPath = ctx.tempPath('bundle-original.partial');
-    const output = await open(tempPath, 'wx', 0o600);
+    tempPath = ctx.tempPath('bundle-original.partial');
+    output = await open(tempPath, 'wx', 0o600);
     const hash = createHash('sha256');
     const chunk = Buffer.alloc(Math.min(CAPTURE_CHUNK_BYTES, Math.max(1, before.size + 1)));
     let written = 0;
     try {
       for (;;) {
         ctx.signal.throwIfAborted();
-        const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+        let bytesRead: number;
+        try {
+          ({ bytesRead } = await handle.read(chunk, 0, chunk.length, null));
+        } catch (error) {
+          const status = classifyRecoverable(error);
+          if (!status) throw error;
+          await discardCapture();
+          const code =
+            status === 'missing'
+              ? ErrorCode.NOT_FOUND
+              : status === 'special'
+                ? ErrorCode.NOT_FILE
+                : ErrorCode.PERMISSION_DENIED;
+          return skipResult(
+            ctx,
+            selection,
+            status,
+            code,
+            error instanceof Error ? error.message : code,
+            { observed: { before: observedBefore } },
+          );
+        }
         if (bytesRead === 0) break;
         if (written + bytesRead > fileLimit) {
-          await output.close();
-          await ctx.removeTemp(tempPath, written);
+          await discardCapture();
           return skipResult(
             ctx,
             selection,
@@ -217,16 +296,13 @@ async function captureOriginal(
           );
         }
         ctx.reserveDisk(bytesRead);
-        try {
-          let offset = 0;
-          while (offset < bytesRead) {
-            const result = await output.write(chunk, offset, bytesRead - offset);
-            if (result.bytesWritten === 0) throw new Error('Bundle capture write made no progress');
-            offset += result.bytesWritten;
-          }
-        } catch (error) {
-          ctx.releaseDisk(bytesRead);
-          throw error;
+        reservedBytes += bytesRead;
+        await hooks.beforeCaptureWrite?.(selection, tempPath);
+        let offset = 0;
+        while (offset < bytesRead) {
+          const result = await output.write(chunk, offset, bytesRead - offset);
+          if (result.bytesWritten === 0) throw new Error('Bundle capture write made no progress');
+          offset += result.bytesWritten;
         }
         hash.update(chunk.subarray(0, bytesRead));
         written += bytesRead;
@@ -239,8 +315,7 @@ async function captureOriginal(
       } catch (error) {
         const status = classifyRecoverable(error);
         if (!status) throw error;
-        await output.close();
-        await ctx.removeTemp(tempPath, written);
+        await discardCapture();
         return skipResult(
           ctx,
           selection,
@@ -267,8 +342,7 @@ async function captureOriginal(
         !sameIdentity(before, handleAfter) ||
         !sameIdentity(before, pathAfter.stats)
       ) {
-        await output.close();
-        await ctx.removeTemp(tempPath, written);
+        await discardCapture();
         return skipResult(
           ctx,
           selection,
@@ -278,7 +352,7 @@ async function captureOriginal(
           { observed: { before: observedBefore, after: observedAfter } },
         );
       }
-      await output.close();
+      await closeOutput();
       const archiveEntry = `files/${selection.relativePath}`;
       return {
         selection,
@@ -297,28 +371,43 @@ async function captureOriginal(
         },
       };
     } catch (error) {
-      await output.close().catch(() => undefined);
-      await ctx.removeTemp(tempPath, written).catch(() => undefined);
-      const status = classifyRecoverable(error);
-      if (!status) throw error;
-      const code =
-        status === 'missing'
-          ? ErrorCode.NOT_FOUND
-          : status === 'special'
-            ? ErrorCode.NOT_FILE
-            : ErrorCode.PERMISSION_DENIED;
-      return skipResult(
-        ctx,
-        selection,
-        status,
-        code,
-        error instanceof Error ? error.message : code,
-        { observed: { before: observedBefore } },
-      );
+      try {
+        await discardCapture();
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [asError(error), asError(cleanupError)],
+          'Bundle capture failed and its scratch cleanup also failed',
+          { cause: cleanupError },
+        );
+      }
+      throw error;
     }
   } finally {
     await handle.close().catch(() => undefined);
   }
+}
+
+function createScratchSource(file: StagedOriginal, ctx: JobRunContext): Readable {
+  return Readable.from(
+    (async function* readScratch(): AsyncGenerator<Buffer> {
+      const handle = await open(file.tempPath, 'r');
+      const chunk = Buffer.alloc(CAPTURE_CHUNK_BYTES);
+      try {
+        for (;;) {
+          ctx.signal.throwIfAborted();
+          const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+          if (bytesRead === 0) return;
+          // Readable.from/yazl may retain a yielded chunk while requesting the
+          // next one. Copy only this bounded slice so the next handle.read
+          // cannot mutate bytes still in compression.
+          yield Buffer.from(chunk.subarray(0, bytesRead));
+        }
+      } finally {
+        await handle.close();
+      }
+    })(),
+    { objectMode: false },
+  );
 }
 
 async function writeClosedZip(
@@ -330,11 +419,15 @@ async function writeClosedZip(
   if (partNumber > ctx.config.maxParts) {
     throw new FsError(ErrorCode.TOO_LARGE, 'Bundle part-count limit exceeded');
   }
-  await hooks.beforeCompress?.(staged.map((file) => file.selection));
+  await hooks.beforeCompress?.(
+    staged.map((file) => file.selection),
+    staged.map((file) => file.tempPath),
+  );
   const zipPath = ctx.tempPath(`bundle-${String(partNumber).padStart(5, '0')}.zip`);
   const zipHandle = await open(zipPath, 'wx', 0o600);
   const zip = new ZipFile();
   const output = zip.outputStream as Readable;
+  const sources: Readable[] = [];
   const hash = createHash('sha256');
   const limit = Math.min(
     ctx.config.maxZipBytes,
@@ -342,14 +435,27 @@ async function writeClosedZip(
     ctx.config.maxFileSizeBytes,
   );
   let zipBytes = 0;
+  const onZipError = (error: Error): void => {
+    output.destroy(error);
+  };
+  zip.on('error', onZipError);
   for (const file of staged) {
-    zip.addFile(file.tempPath, file.result.archiveEntry, {
+    const source = createScratchSource(file, ctx);
+    const onSourceError = (error: Error): void => {
+      zip.emit('error', error);
+    };
+    source.on('error', onSourceError);
+    sources.push(source);
+    hooks.onZipSource?.(source, file.selection);
+    zip.addReadStream(source, file.result.archiveEntry, {
       mtime: ZIP_EPOCH,
       mode: 0o600,
-      compress: true,
+      compressionLevel: 6,
+      size: file.size,
     });
   }
   zip.end();
+  let failure: Error | undefined;
   try {
     for await (const rawChunk of output as AsyncIterable<Buffer | Uint8Array>) {
       ctx.signal.throwIfAborted();
@@ -371,12 +477,43 @@ async function writeClosedZip(
       zipBytes += chunk.length;
     }
   } catch (error) {
-    output.destroy();
-    await zipHandle.close().catch(() => undefined);
-    await ctx.removeTemp(zipPath, zipBytes).catch(() => undefined);
-    throw error;
+    failure = asError(error);
   }
-  await zipHandle.close();
+  output.destroy(failure instanceof Error ? failure : undefined);
+  for (const source of sources) source.destroy();
+  const settled = await Promise.allSettled([
+    finished(output, { cleanup: true }),
+    ...sources.map((source) => finished(source, { cleanup: true })),
+  ]);
+  zip.off('error', onZipError);
+  const rejected = settled.find((result) => result.status === 'rejected');
+  failure ??= rejected?.status === 'rejected' ? asError(rejected.reason) : undefined;
+  try {
+    await zipHandle.close();
+  } catch (error) {
+    const closeError = asError(error);
+    failure = failure
+      ? new AggregateError(
+          [failure, closeError],
+          'Bundle ZIP failed while closing scratch output',
+          {
+            cause: closeError,
+          },
+        )
+      : closeError;
+  }
+  if (failure) {
+    try {
+      await ctx.removeTemp(zipPath, zipBytes);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [failure, asError(cleanupError)],
+        'Bundle ZIP failed and its scratch cleanup also failed',
+        { cause: cleanupError },
+      );
+    }
+    throw failure;
+  }
   return ctx.commitArtifact(zipPath, {
     kind: 'bundle-part',
     name: `bundle-${String(partNumber).padStart(5, '0')}.zip`,
