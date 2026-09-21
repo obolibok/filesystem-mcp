@@ -546,6 +546,164 @@ describe('selected originals bundle', () => {
     }
   });
 
+  it('closes every internal compression stream after repeated oversized ZIP attempts', async () => {
+    const root = await createTestRoot();
+    const scratch = await createTestRoot();
+    await writeBytes(root, 'oversized.bin', randomBytes(8 * 1024 * 1024));
+    await writeBytes(root, 'healthy.bin', Buffer.from('healthy after repeated ZIP splits'));
+    const guard = await makeGuard([root]);
+    const fs = new GuardedFileSystem(guard);
+    const manager = new ArtifactJobManager({
+      ...getSnapshotConfig(),
+      scratchDirectory: scratch,
+      ephemeralScratch: false,
+      maxZipBytes: 64 * 1024,
+      maxDeliveryBytes: 16 * 1024 * 1024,
+      maxFileSizeBytes: 16 * 1024 * 1024,
+      maxBundleFileBytes: 16 * 1024 * 1024,
+      maxBundleRawPartBytes: 16 * 1024 * 1024,
+      maxBundleJobRawBytes: 16 * 1024 * 1024,
+      maxBundleManifestBytes: 64 * 1024,
+    });
+    const compressors: (NodeJS.ReadWriteStream & {
+      readonly closed: boolean;
+      readonly destroyed: boolean;
+    })[] = [];
+    try {
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const submitted = await submitDirectBundle(
+          manager,
+          fs,
+          root,
+          [{ relativePath: 'oversized.bin' }],
+          {
+            onZipPipelineStream: (stream) => {
+              if (stream.constructor.name === 'DeflateRaw') {
+                compressors.push(
+                  stream as NodeJS.ReadWriteStream & {
+                    readonly closed: boolean;
+                    readonly destroyed: boolean;
+                  },
+                );
+              }
+            },
+          },
+        );
+        const completed = await waitForStoredBundle(manager, guard, submitted.jobId);
+        assert.equal(completed.state, 'completed');
+        assert.equal(completed.counters.included, 0);
+        assert.equal(completed.counters.tooLarge, 1);
+        assert.equal(compressors.length, attempt + 1);
+        assert.equal(compressors.at(-1)?.destroyed, true);
+        assert.equal(compressors.at(-1)?.closed, true);
+      }
+      assert(
+        compressors.every((compressor) => compressor.destroyed && compressor.closed),
+        'internal compressor remained alive without a GC cycle',
+      );
+
+      const healthy = await submitDirectBundle(manager, fs, root, [
+        { relativePath: 'healthy.bin' },
+      ]);
+      const completed = await waitForStoredBundle(manager, guard, healthy.jobId);
+      assert.equal(completed.state, 'completed');
+      assert.equal(completed.complete, true);
+      assert.equal(completed.counters.parts, 1);
+      assert(completed.counters.zipBytes <= 64 * 1024);
+    } finally {
+      await manager.close();
+      await cleanupTestRoot(root);
+      await cleanupTestRoot(scratch);
+    }
+  });
+
+  it('retains a failed partial ZIP reservation until the partial is removed', async () => {
+    const root = await createTestRoot();
+    const scratch = await createTestRoot();
+    await writeBytes(root, 'fault.bin', randomBytes(1024 * 1024));
+    await writeBytes(root, 'quota-probe.bin', Buffer.alloc(1_085_000));
+    const guard = await makeGuard([root]);
+    const fs = new GuardedFileSystem(guard);
+    let allowZipCleanup = false;
+    const retainedZipPaths = new Set<string>();
+    const manager = new ArtifactJobManager(
+      {
+        ...getSnapshotConfig(),
+        scratchDirectory: scratch,
+        ephemeralScratch: false,
+        cleanupIntervalMs: 60_000,
+        resultTtlMs: 20,
+        scratchQuotaBytes: 1_100_000,
+        maxZipBytes: 2 * 1024 * 1024,
+        maxDeliveryBytes: 2 * 1024 * 1024,
+        maxFileSizeBytes: 2 * 1024 * 1024,
+        maxBundleFileBytes: 2 * 1024 * 1024,
+        maxBundleRawPartBytes: 2 * 1024 * 1024,
+        maxBundleJobRawBytes: 2 * 1024 * 1024,
+        maxBundleManifestBytes: 64 * 1024,
+        maxJobArtifactBytes: 4 * 1024 * 1024,
+      },
+      {
+        unlinkFile: async (path) => {
+          if (!allowZipCleanup && path.endsWith('.zip.partial')) {
+            retainedZipPaths.add(path);
+            throw Object.assign(new Error('synthetic ZIP cleanup denial'), { code: 'EACCES' });
+          }
+          await unlink(path);
+        },
+      },
+    );
+    let shortWriteCompleted = false;
+    try {
+      const faulted = await submitDirectBundle(manager, fs, root, [{ relativePath: 'fault.bin' }], {
+        writeZipChunk: async (handle, chunk, offset, length) => {
+          if (!shortWriteCompleted && length > 8192) {
+            const result = await handle.write(chunk, offset, 8192);
+            shortWriteCompleted = true;
+            return result;
+          }
+          if (shortWriteCompleted) {
+            throw Object.assign(new Error('synthetic ZIP write denial'), { code: 'EACCES' });
+          }
+          return handle.write(chunk, offset, length);
+        },
+      });
+      const failed = await waitForStoredBundle(manager, guard, faulted.jobId);
+      assert.equal(failed.state, 'failed');
+      assert.equal(failed.artifacts.length, 0);
+      assert.match(failed.stopReason ?? '', /ZIP failed and its scratch cleanup also failed/u);
+      assert.equal(shortWriteCompleted, true);
+      assert.equal(retainedZipPaths.size, 1);
+      const retainedPath = [...retainedZipPaths][0];
+      assert(retainedPath);
+      assert((await stat(retainedPath)).size >= 8192);
+
+      const blocked = await submitDirectBundle(manager, fs, root, [
+        { relativePath: 'quota-probe.bin' },
+      ]);
+      const quotaFailure = await waitForStoredBundle(manager, guard, blocked.jobId);
+      assert.equal(quotaFailure.state, 'failed');
+      assert.match(quotaFailure.stopReason ?? '', /scratch quota exceeded/u);
+
+      allowZipCleanup = true;
+      await delay(50);
+      await manager.cleanupExpired();
+      await assert.rejects(stat(retainedPath), { code: 'ENOENT' });
+
+      const recovered = await submitDirectBundle(manager, fs, root, [
+        { relativePath: 'quota-probe.bin' },
+      ]);
+      const completed = await waitForStoredBundle(manager, guard, recovered.jobId);
+      assert.equal(completed.state, 'completed');
+      assert.equal(completed.complete, true);
+    } finally {
+      allowZipCleanup = true;
+      await manager.close();
+      await cleanupTestRoot(root);
+      await cleanupTestRoot(scratch);
+    }
+  });
+
   it('contains a missing ZIP spool as a failed job and keeps the manager usable', async () => {
     const root = await createTestRoot();
     const scratch = await createTestRoot();

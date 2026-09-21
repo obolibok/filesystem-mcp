@@ -17,6 +17,8 @@ import { isSamePath } from './path-utils.js';
 const CAPTURE_CHUNK_BYTES = 64 * 1024;
 const ZIP_EPOCH = new Date('1980-01-01T00:00:00.000Z');
 
+type OwnedPipelineStream = NodeJS.ReadWriteStream & { destroy(error?: Error): void };
+
 interface BundleExpected {
   readonly size: number;
   readonly lastWriteTime: string;
@@ -72,6 +74,16 @@ export interface BundlePipelineHooks {
     tempPaths: readonly string[],
   ) => Promise<void>;
   readonly onZipSource?: (source: Readable, selection: BundleSelection) => void;
+  readonly onZipPipelineStream?: (
+    stream: NodeJS.ReadWriteStream,
+    selection: BundleSelection,
+  ) => void;
+  readonly writeZipChunk?: (
+    handle: FileHandle,
+    chunk: Buffer,
+    offset: number,
+    length: number,
+  ) => Promise<{ bytesWritten: number }>;
 }
 
 class ClosedZipTooLargeError extends Error {
@@ -410,6 +422,38 @@ function createScratchSource(file: StagedOriginal, ctx: JobRunContext): Readable
   );
 }
 
+function observePipeChain(
+  source: NodeJS.ReadableStream,
+  observe: (stream: OwnedPipelineStream) => void,
+): void {
+  // yazl creates its CRC/counter/DeflateRaw chain inside addReadStream() and does
+  // not expose those streams. Instrument this owned source's synchronous pipe
+  // chain so abort/split cleanup can close every intermediate, not just its ends.
+  const instrumented = new WeakSet<object>();
+  const instrument = (stream: NodeJS.ReadableStream): void => {
+    if (instrumented.has(stream)) return;
+    instrumented.add(stream);
+    const originalPipe = stream.pipe.bind(stream);
+    stream.pipe = <T extends NodeJS.WritableStream>(
+      destination: T,
+      options?: { end?: boolean },
+    ): T => {
+      if (
+        'pipe' in destination &&
+        typeof destination.pipe === 'function' &&
+        'destroy' in destination &&
+        typeof destination.destroy === 'function'
+      ) {
+        const chained = destination as T & NodeJS.ReadableStream & OwnedPipelineStream;
+        observe(chained);
+        instrument(chained);
+      }
+      return originalPipe(destination, options);
+    };
+  };
+  instrument(source);
+}
+
 async function writeClosedZip(
   staged: readonly StagedOriginal[],
   partNumber: number,
@@ -428,6 +472,7 @@ async function writeClosedZip(
   const zip = new ZipFile();
   const output = zip.outputStream as Readable;
   const sources: Readable[] = [];
+  const pipelineStreams = new Set<OwnedPipelineStream>();
   const hash = createHash('sha256');
   const limit = Math.min(
     ctx.config.maxZipBytes,
@@ -435,12 +480,17 @@ async function writeClosedZip(
     ctx.config.maxFileSizeBytes,
   );
   let zipBytes = 0;
+  let zipReservedBytes = 0;
   const onZipError = (error: Error): void => {
     output.destroy(error);
   };
   zip.on('error', onZipError);
   for (const file of staged) {
     const source = createScratchSource(file, ctx);
+    observePipeChain(source, (stream) => {
+      pipelineStreams.add(stream);
+      hooks.onZipPipelineStream?.(stream, file.selection);
+    });
     const onSourceError = (error: Error): void => {
       zip.emit('error', error);
     };
@@ -462,16 +512,14 @@ async function writeClosedZip(
       const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
       if (zipBytes + chunk.length > limit) throw new ClosedZipTooLargeError(limit);
       ctx.reserveDisk(chunk.length);
-      try {
-        let offset = 0;
-        while (offset < chunk.length) {
-          const result = await zipHandle.write(chunk, offset, chunk.length - offset);
-          if (result.bytesWritten === 0) throw new Error('Bundle ZIP write made no progress');
-          offset += result.bytesWritten;
-        }
-      } catch (error) {
-        ctx.releaseDisk(chunk.length);
-        throw error;
+      zipReservedBytes += chunk.length;
+      let offset = 0;
+      while (offset < chunk.length) {
+        const result = hooks.writeZipChunk
+          ? await hooks.writeZipChunk(zipHandle, chunk, offset, chunk.length - offset)
+          : await zipHandle.write(chunk, offset, chunk.length - offset);
+        if (result.bytesWritten === 0) throw new Error('Bundle ZIP write made no progress');
+        offset += result.bytesWritten;
       }
       hash.update(chunk);
       zipBytes += chunk.length;
@@ -479,12 +527,14 @@ async function writeClosedZip(
   } catch (error) {
     failure = asError(error);
   }
+  const ownedStreams = [
+    ...new Set<Readable | OwnedPipelineStream>([output, ...sources, ...pipelineStreams]),
+  ];
+  const completions = ownedStreams.map((stream) => finished(stream, { cleanup: true }));
   output.destroy(failure instanceof Error ? failure : undefined);
   for (const source of sources) source.destroy();
-  const settled = await Promise.allSettled([
-    finished(output, { cleanup: true }),
-    ...sources.map((source) => finished(source, { cleanup: true })),
-  ]);
+  for (const stream of pipelineStreams) stream.destroy();
+  const settled = await Promise.allSettled(completions);
   zip.off('error', onZipError);
   const rejected = settled.find((result) => result.status === 'rejected');
   failure ??= rejected?.status === 'rejected' ? asError(rejected.reason) : undefined;
@@ -504,7 +554,7 @@ async function writeClosedZip(
   }
   if (failure) {
     try {
-      await ctx.removeTemp(zipPath, zipBytes);
+      await ctx.removeTemp(zipPath, zipReservedBytes);
     } catch (cleanupError) {
       throw new AggregateError(
         [failure, asError(cleanupError)],
