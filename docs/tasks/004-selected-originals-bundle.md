@@ -201,23 +201,23 @@ platform skips и отличать локальные результаты от 
 
 ## Acceptance
 
-- [ ] Tool bundle принимает явный bounded набор, не добавляет невыбранные файлы;
+- [x] Tool bundle принимает явный bounded набор, не добавляет невыбранные файлы;
       reorder/retry/idempotency/conflict и собственная отмена job проверены.
-- [ ] Несколько подпапок, одинаковые basename, Unicode и binary/XLS/ZIP originals
+- [x] Несколько подпапок, одинаковые basename, Unicode и binary/XLS/ZIP originals
       проходят независимую проверку точных bytes и manifest provenance.
-- [ ] Самостоятельные ZIP-части и manifest укладываются в реальные caps; single
+- [x] Самостоятельные ZIP-части и manifest укладываются в реальные caps; single
       oversized, poor compression, duplicate/unsafe paths дают ожидаемый результат.
-- [ ] Missing/inaccessible/changed и optional expected metadata дают полную отчётность,
+- [x] Missing/inaccessible/changed и optional expected metadata дают полную отчётность,
       complete=false при любом пропуске; all-skipped не превращается в пустой успех.
-- [ ] Guard/read-only, symlink/junction/ADS/traversal, scratch separation и narrowing
+- [x] Guard/read-only, symlink/junction/ADS/traversal, scratch separation и narrowing
       текущего доступа защищают submit и сохранённые artifacts; source не изменяется.
-- [ ] Deadline/cancel/timeout/disconnect, storage failure/quota, restart/TTL/active read
+- [x] Deadline/cancel/timeout/disconnect, storage failure/quota, restart/TTL/active read
       сохраняют общий lifecycle; старые snapshot jobs и snapshots не регрессируют.
-- [ ] Локальный MCP harness с независимым verifier, повторной выдачей и multi-part
+- [x] Локальный MCP harness с независимым verifier, повторной выдачей и multi-part
       проходит; объёмный профиль и Windows short paths проверены и описаны.
-- [ ] Полный check PASS; reference/config/tool instructions/Windows runbook обновлены,
+- [x] Полный check PASS; reference/config/tool instructions/Windows runbook обновлены,
       Work record содержит base/head, решения, команды, results/skips и ограничения.
-- [ ] Подготовлена пошаговая инструкция synthetic live ChatGPT опыта с manifest,
+- [x] Подготовлена пошаговая инструкция synthetic live ChatGPT опыта с manifest,
       всеми ZIP, распаковкой, per-file hashes и повторной выдачей; локальный результат
       явно отмечен LOCAL_ONLY. Целевой live PASS записывается только после опыта.
 
@@ -246,11 +246,98 @@ Push/PR/merge и release оставь планированию до отдель
 
 ## Work record
 
-Заполняет исполнитель. До начала реализации: не начато.
+Исполнитель: Codex, 2026-09-20. Статус: **ready for review**.
 
-- Base и branch:
-- Что изменилось и почему:
-- Решения и отклонения от плана:
-- Команды, результаты, среда и skips:
-- Выполненные и оставшиеся acceptance:
-- Риски, live handoff и состояние ready for review:
+- Base и branch: `51149b06d3112cb374559cc71b5438dbcbbe55ae`,
+  `codex/004-selected-originals-bundle`; implementation/evidence head до этого
+  Work record — `a40d7934f76ebf94b8a1ecf0468a3f7aa39738e5`. Итоговый tip с самим Work record
+  фиксируется отдельным локальным commit и передаётся в handoff.
+- Что изменилось и почему: добавлены public `bundle`, guarded chunked capture,
+  bounded spool и closed-ZIP splitting, внешний manifest v1 с provenance/outcomes,
+  bundle counters/config, текущая policy-проверка всех selectors и общий lifecycle
+  status/cancel/fetch/restart. Snapshot stored schemaVersion 1, API и manifest v1
+  сохранены. Добавлены 10 regression tests, stdio MCP harness, независимый Python
+  ZIP/XLS verifier, volume profile, local evidence и post-review live protocol.
+- Решения и отклонения от плана: один существующий manager и общие
+  `FS_SNAPSHOT_*` lifecycle/ZIP/delivery/quota/TTL caps; новые `FS_BUNDLE_*` только
+  для selection/capture/manifest. Portable extraction names отклоняются до job,
+  явный набор сортируется для fingerprint. Whole originals спулируются через
+  `GuardedFileSystem`, ZIP-группа делится после проверки фактического закрытого
+  размера, single oversized становится `too_large`; all-skipped публикует только
+  manifest. Абсолютный root в manifest не записывается. Новая ZIP-зависимость не
+  добавлялась, версии не менялись. Существенных отклонений от карточки нет.
+- Команды, результаты, среда и skips: Windows, Node `v24.15.0`, npm `11.12.1`,
+  Python `3.12.3`; выполнены `npm ci`, `npm run check`, отдельные bundle/snapshot
+  suites, `node scripts\\bundle-check\\local-mcp-check.mjs ...`, pinned
+  `verify_bundle.py` и `node --import tsx scripts\\bundle-check\\volume.mts ...`.
+  Финальный `npm run check`: 395 tests, 388 pass, 0 fail, 7 skip; static/build/types/
+  eslint/prettier/knip PASS. Bundle: 10/10 без skips в обычном и настоящем 8.3 TEMP
+  (`...\\BUF3C7~1`) прогонах; snapshot: 27/27. Реальный junction fail-closed и short
+  source root PASS. Семь общих skips — POSIX inode/mode и Windows file-symlink cases
+  без привилегии; bundle skips отсутствуют. Первый sandbox-запуск Node/tsx получил
+  системный `uv_os_get_passwd ENOMEM`, обязательный check повторён вне sandbox и PASS;
+  pinned Python install аналогично потребовал разрешённый network-доступ.
+- Локальная evidence: stdio submit/build 16,4/34,5 ms, 6335 B originals, manifest
+  3022 B, ZIP 1633 B, byte-equal repeat; independent nested ZIP/XLS/hash verification
+  PASS. Volume: 7 × 1 MiB, 7 частей по 1 049 084 B, build 438,4 ms, fetch 25,4 ms,
+  peak RSS 140 083 200 B, sampled scratch 9 410 665 B, independent bytes PASS.
+  Полные детали и оговорки — в `docs/testing/bundle-local-2026-09-20.md`.
+- Выполненные и оставшиеся acceptance: все локальные acceptance выше выполнены.
+  Shared storage/quota/TTL/active-read/restart regressions проверены существующим
+  snapshot suite после обобщения manager. Remote Windows/Ubuntu CI и целевой ChatGPT
+  live опыт не запускались; это намеренно оставлено planning после review.
+- Риски и live handoff: metadata interval не обнаруживает запись с восстановленными
+  size/mtime; Windows inaccessible outcome проверен synthetic EACCES, а file symlink
+  зависит от runner privilege. Проверенный local artifact — 1 049 084 B; фактический
+  верхний предел принимающего host этим не заявляется. Результаты строго
+  `LOCAL_ONLY_NOT_CHATGPT`; пошаговый опыт, teardown и форма evidence находятся в
+  `docs/testing/bundle-live.md`. Production данные, ключи и tunnel не использовались.
+
+### Исправления review, 2026-09-21
+
+Main commit `8b8c7dd8` опубликовал независимый review со статусом
+`CHANGES_REQUESTED` и замечаниями R1–R8. Все восемь исправлены в implementation
+commit `8d9655e9516156332950abf6f6d40e78b1081e7e`; статус задачи исполнителя —
+**ready for re-review**.
+
+- R1/R7: scratch metadata/artifacts нельзя выбрать через canonical/8.3/junction
+  aliases; каждый существующий selector component проверяется даже при missing leaf.
+- R2/R3: ZIP producer владеет lazy streams, перенаправляет input error в failed job,
+  закрывает streams при split/cancel/error; faulted job не завершает server.
+- R4: scratch I/O error fatal и не маскируется как inaccessible source outcome.
+- R5: idempotent reuse перед status summary повторно авторизует root/selectors до и
+  после restart, сохраняя reuse после обычного удаления разрешённого source.
+- R6: raw original соблюдает общий `FS_MAX_FILE_SIZE`, delivery cap остаётся отдельным.
+- R8: local harness canonicalizes destination/ancestor до любой записи; verifier
+  проверяет file-to-part provenance и tampered-link negative control.
+- Дополнительно закрыты Windows-invalid wildcard/superscript device names, добавлен
+  Linux FIFO regression и исправлен найденный volume profile multi-chunk buffer reuse.
+
+Финальная локальная проверка: `npm run check` — 401 tests, 393 pass, 0 fail,
+8 platform skips; bundle — 15 pass и 1 Linux-only FIFO skip в обычном и настоящем
+Windows 8.3 TEMP прогонах; stdio verifier и 7 MiB volume — PASS. Полная evidence:
+`docs/testing/004-fixes-2026-09-21.md`. Remote CI и целевой ChatGPT live ещё не
+запускались; push/PR/merge/release и `docs/project/status.md` не выполнялись.
+
+### Исправления повторного review, 2026-09-21
+
+Main commit `7b9a3b88e90d29126ac92cb39587984c09c593e1` опубликовал повторное
+review: R1, R2, R5–R8 закрыты, остаточные R3/R4 получили P2. Оба исправлены в
+implementation commit `edb33cadb53c9be7c582a361f1bd038ceb5c55a3`; статус
+исполнителя — **ready for review R3**.
+
+- R3: producer теперь владеет не только source/output, но и созданными `yazl`
+  intermediate streams, явно уничтожает всю CRC/counter/`DeflateRaw` chain и
+  дожидается `finished()` при oversized/split/cancel/error. Regression удерживает
+  сильные ссылки на compressors восьми последовательных 8 MiB jobs и проверяет
+  `destroyed && closed` без GC, затем успешную job на том же manager.
+- R4: отдельный `zipReservedBytes` сохраняет резерв всего chunk после partial write;
+  резерв снимается только после успешного удаления partial. Synthetic short write
+  8192 B + EACCES write/unlink сохраняет bytes под quota, блокирует следующую job и
+  освобождает резерв после lifecycle cleanup, после чего тот же workload проходит.
+
+Финальная локальная проверка: `npm run check` — 403 tests, 395 pass, 0 fail,
+8 прежних/platform skips; bundle — 17 pass и 1 Linux-only FIFO skip. Повторные
+stdio MCP + Python verifier и volume 7 × 1 MiB — PASS. Полная evidence:
+`docs/testing/004-fixes-r2-2026-09-21.md`. Remote CI, POSIX FIFO и целевой ChatGPT
+live не запускались; центральная доска, push/PR/merge/release не изменялись.

@@ -12,8 +12,8 @@
 | 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)    | done     | 002             | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3                                                  |
 | 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)            | done     | 002, 002-live   | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                                                                   |
 | 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md)  | done     | 002-tool        | `003 - compressed snapshot`; принят через [PR #4](https://github.com/obolibok/filesystem-mcp/pull/4); code review, live и CI PASS |
-| 004      | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md) | review   | 003             | `codex/004-selected-originals-bundle`; head `82e8d187`; CODE_REVIEW_PASS, R1–R8 закрыты; следующий шаг — live                     |
-| 004-live | [Живой bundle Windows/ChatGPT](../tasks/004-live-windows-chatgpt.md)    | active   | 004 review PASS | GPT-5.6-Sol / xhigh; worktree 4090; пользователь подтвердил запуск                                                                |
+| 004      | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md) | review   | 003             | Code review и live PASS; codex/004-integration, общий check и CI                                                                  |
+| 004-live | [Живой bundle Windows/ChatGPT](../tasks/004-live-windows-chatgpt.md)    | review   | 004 review PASS | Live и graceful teardown PASS; evidence принята, ожидает интеграции                                                               |
 | 005      | Контролируемое повторение предметного исследования                      | proposed | 004             | Планирование + пользователь                                                                                                       |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -24,22 +24,22 @@
 
 ## Текущий следующий шаг
 
-Code review 004 на head `82e8d18756e1787f41379720b5c5dd6f29fe42ca` —
-**PASS**: [отчёт третьего раунда](../testing/004-review-r3-2026-09-21.md).
-Остаточные R3/R4 закрыты: compression chain явно завершается без ожидания GC,
-а частичная запись ZIP сохраняет резерв до фактического удаления bytes.
-С учётом [предыдущего review](../testing/004-review-r2-2026-09-21.md) закрыты R1–R8.
+Code review 004 и живой ChatGPT опыт — **PASS**. Runtime
+`82e8d18756e1787f41379720b5c5dd6f29fe42ca` сохраняется без изменений.
+[Live-отчёт](../testing/004-live-2026-09-21.md) и
+[независимая приёмка](../testing/004-integration-2026-09-21.md) подтверждают малый
+ZIP/XLS, multipart 7 × 1 MiB, reuse/conflict/repeated largest и partial/missing.
+Hashes сверены с server scratch; source hash-tree неизменён. Ctrl+C завершил tunnel
+штатно, PID отсутствует и readyz недоступен. Причина старого зависания не установлена.
 
-Независимый полный check — 403 tests, 395 pass, 0 fail, 8 прежних/platform skips.
-Свежая stdio MCP доставка ZIP/XLS, независимый verifier, объёмный прогон 7 × 1 MiB
-и отдельные probes для split/cancel/error/quota recovery — PASS.
-Все эти результаты — LOCAL_ONLY_NOT_CHATGPT; remote CI и POSIX FIFO ещё не проверены.
-
-Следующий шаг — отдельная [задача 004-live](../tasks/004-live-windows-chatgpt.md), GPT-5.6-Sol / xhigh:
-manifest + все ZIP, per-file bytes/hashes, nested ZIP/XLS, повторная выдача части,
-фиксация результатов и teardown. После live — отдельная интеграция и CI.
-Задача остаётся review до окончательной приёмки. Runtime/tracked tests review
-не менял; push/PR/merge ветки 004 и запуск tunnel не выполнялись.
+Исполнитель: `004-live - Windows ChatGPT bundle`, task
+`01a0c45b-e972-71f3-9177-2801312cd01f`; итоговый commit
+`edbe2c2f77463d0ec3e4b694595f84c4266b7da3`.
+Интеграционная ветка `codex/004-integration` объединяет код, evidence и planning docs.
+В новом live helper исправлена проверка destinations через junction/8.3 alias;
+добавлены 6 regressions. Server runtime не менялся; повторный live для этой
+тестовой/документационной дельты не требуется. Следующий шаг — общий check, CI
+Windows/Ubuntu и приёмка PR перед main merge. 005 ещё не назначена.
 
 ## Запуск 004-live, 2026-09-21
 
@@ -51,8 +51,8 @@ manifest + все ZIP, per-file bytes/hashes, nested ZIP/XLS, повторная
 Приложение создало worktree `4090`; его HEAD и наличие карточки независимо проверены.
 Create вернул `client-new-thread:165e79d3-f649-40e8-b524-f4a12a98078d` (pending ID,
 не task ID для API). Затем пользователь подтвердил, что исполнитель работает.
-Список задач пока не вернул фактический ID нового исполнителя; повторно создавать
-задачу не нужно.
+При приёмке список задач подтвердил ID `01a0c45b-e972-71f3-9177-2801312cd01f`
+и название `004-live - Windows ChatGPT bundle`. Pending ID сохранён как история запуска.
 
 Prompt поручает в собственном worktree создать `codex/004-live-windows-chatgpt`,
 объединить docs-базу с reviewed runtime `82e8d18756e1787f41379720b5c5dd6f29fe42ca`

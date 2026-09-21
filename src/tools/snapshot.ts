@@ -64,6 +64,7 @@ export const SNAPSHOT = defineTool({
       fingerprint: fingerprintJobInput(normalized),
       sourceRoot,
       sourceRootId,
+      reuseGuard: ctx.fs.pathGuard,
       input: {
         includeHidden: args.includeHidden,
         includeIgnored: args.includeIgnored,

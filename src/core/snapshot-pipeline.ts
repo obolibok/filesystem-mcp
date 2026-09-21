@@ -12,7 +12,7 @@ import { ZipFile } from 'yazl';
 import { ErrorCode, FsError, isFsError, isNodeError } from './errors.js';
 import type { GuardedFileSystem } from './fs.js';
 import type { JobRunContext } from './job-manager.js';
-import type { StoredArtifact } from './job-types.js';
+import type { SnapshotCounters, StoredArtifact } from './job-types.js';
 import { toPosixRelative } from './path.js';
 import { getMaxTextFileSize } from './util.js';
 
@@ -43,6 +43,10 @@ export interface SnapshotPipelineHooks {
 }
 
 const IGNORE_CACHE_REFRESH_TESTS = 256;
+
+function snapshotCounters(ctx: JobRunContext): SnapshotCounters {
+  return ctx.job.counters as SnapshotCounters;
+}
 
 const DEFAULT_IGNORED_DIRECTORIES = new Set([
   'node_modules',
@@ -143,9 +147,9 @@ function classifyWalkError(ctx: JobRunContext, error: unknown, path: string): vo
   if (!isRecoverableWalkError(error)) throw error;
   const code = error instanceof FsError ? error.code : isNodeError(error) ? error.code : undefined;
   if (code === ErrorCode.NOT_FOUND || code === 'ENOENT') {
-    ctx.job.counters.disappearedSkipped += 1;
+    snapshotCounters(ctx).disappearedSkipped += 1;
   } else {
-    ctx.job.counters.inaccessibleSkipped += 1;
+    snapshotCounters(ctx).inaccessibleSkipped += 1;
   }
   ctx.addError(error, path);
 }
@@ -210,31 +214,31 @@ async function* walkSnapshotRecords(
       classifyWalkError(ctx, error, absoluteDirectory);
       return;
     }
-    ctx.job.counters.directoriesVisited += 1;
+    snapshotCounters(ctx).directoriesVisited += 1;
     try {
       for await (const entry of directory) {
         ctx.signal.throwIfAborted();
-        ctx.job.counters.entriesSeen += 1;
+        snapshotCounters(ctx).entriesSeen += 1;
         const absolutePath = join(absoluteDirectory, entry.name);
         const relativePath = toPosixRelative(root, absolutePath);
         if (ctx.runtime.job.state !== 'running') ctx.signal.throwIfAborted();
         if (ctx.isScratchPath(absolutePath)) {
-          ctx.job.counters.scratchExcluded += 1;
+          snapshotCounters(ctx).scratchExcluded += 1;
           continue;
         }
         if (!options.includeHidden && entry.name.startsWith('.')) {
-          ctx.job.counters.hiddenExcluded += 1;
+          snapshotCounters(ctx).hiddenExcluded += 1;
           continue;
         }
         if (
           !options.includeIgnored &&
           (isDefaultIgnored(entry) || ignoredByRules(relativePath, entry.isDirectory(), rules))
         ) {
-          ctx.job.counters.ignoredExcluded += 1;
+          snapshotCounters(ctx).ignoredExcluded += 1;
           continue;
         }
         if (entry.isSymbolicLink()) {
-          ctx.job.counters.symlinksSkipped += 1;
+          snapshotCounters(ctx).symlinksSkipped += 1;
           continue;
         }
         if (entry.isDirectory()) {
@@ -242,17 +246,17 @@ async function* walkSnapshotRecords(
           continue;
         }
         if (!entry.isFile()) {
-          ctx.job.counters.specialSkipped += 1;
+          snapshotCounters(ctx).specialSkipped += 1;
           continue;
         }
         try {
           const detail = await fs.statDetailed(absolutePath, { signal: ctx.signal });
           if (detail.isSymlink) {
-            ctx.job.counters.symlinksSkipped += 1;
+            snapshotCounters(ctx).symlinksSkipped += 1;
             continue;
           }
           if (!detail.stats.isFile()) {
-            ctx.job.counters.specialSkipped += 1;
+            snapshotCounters(ctx).specialSkipped += 1;
             continue;
           }
           yield {
@@ -298,7 +302,7 @@ async function writeBuffer(part: OpenPart, bytes: Buffer, ctx: JobRunContext): P
       offset += result.bytesWritten;
     }
     part.rawBytes += bytes.length;
-    ctx.job.counters.rawCsvBytes += bytes.length;
+    snapshotCounters(ctx).rawCsvBytes += bytes.length;
   } catch (error) {
     ctx.releaseDisk(bytes.length);
     throw error;
@@ -313,7 +317,7 @@ async function openPart(number: number, ctx: JobRunContext): Promise<OpenPart> {
   const handle = await open(rawPath, 'wx', 0o600);
   const part: OpenPart = { number, rawPath, handle, rows: 0, rawBytes: 0, closed: false };
   if (
-    ctx.job.counters.rawCsvBytes + Buffer.byteLength(SNAPSHOT_CSV_HEADER) >
+    snapshotCounters(ctx).rawCsvBytes + Buffer.byteLength(SNAPSHOT_CSV_HEADER) >
     ctx.config.maxJobRawBytes
   ) {
     await handle.close();
@@ -398,8 +402,8 @@ async function finalizePart(
     rows: part.rows,
     rawBytes: part.rawBytes,
   });
-  ctx.job.counters.zipBytes += zipBytes;
-  ctx.job.counters.parts += 1;
+  snapshotCounters(ctx).zipBytes += zipBytes;
+  snapshotCounters(ctx).parts += 1;
   await ctx.removeTemp(part.rawPath, part.rawBytes);
   return artifact;
 }
@@ -433,13 +437,13 @@ export async function writeSnapshotFromRecords(
         part = await openPart(part.number + 1, ctx);
         await ctx.setPhase('walking');
       }
-      if (ctx.job.counters.rawCsvBytes + row.length > ctx.config.maxJobRawBytes) {
+      if (snapshotCounters(ctx).rawCsvBytes + row.length > ctx.config.maxJobRawBytes) {
         throw new FsError(ErrorCode.TOO_LARGE, 'Snapshot job raw CSV byte limit exceeded');
       }
       await writeBuffer(part, row, ctx);
       part.rows += 1;
-      ctx.job.counters.filesWritten += 1;
-      if (ctx.job.counters.filesWritten % 10_000 === 0) await ctx.checkpoint();
+      snapshotCounters(ctx).filesWritten += 1;
+      if (snapshotCounters(ctx).filesWritten % 10_000 === 0) await ctx.checkpoint();
     }
     parts.push(await finalizePart(part, ctx, hooks));
   } finally {

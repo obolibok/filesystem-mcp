@@ -233,6 +233,16 @@ All tools are scoped to the configured roots. Call `list_roots` first to discove
 | `read`     | Read a text file. Supports head/tail and line ranges. Accepts `paths[]` for batches.                         |
 | `get_file` | Return one original file as a byte-exact MCP embedded resource plus a resource link, subject to read limits. |
 
+#### Durable jobs
+
+| Tool           | Description                                                                                                                                                               |
+| :------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `snapshot`     | Submit a background metadata inventory for one guarded directory.                                                                                                         |
+| `bundle`       | Submit a background capture of one explicit bounded set of relative file paths under one guarded directory; no globbing or recursive directory expansion.                 |
+| `job_status`   | Poll bounded progress, counters, errors, expiry, and artifact IDs for a snapshot or bundle job.                                                                           |
+| `cancel_job`   | Cancel queued/running work and discard incomplete artifacts; source files are not changed.                                                                                |
+| `get_artifact` | Return one immutable manifest or independent ZIP part as an MCP embedded resource plus resource link; current source policy and delivery limits are checked on each call. |
+
 #### Write
 
 | Tool           | Description                                                                                                                                                                                                          |
@@ -442,6 +452,12 @@ Flags take precedence when both are set.
 | `FS_SNAPSHOT_MAX_CONCURRENT_READS`   | Concurrent buffered artifact fetches (default 2).                                                                                                                                                           |
 | `FS_SNAPSHOT_MAX_WALK_DEPTH`         | Maximum open directory depth during a walk (default 256); exceeding it fails the job rather than truncating silently.                                                                                       |
 | `FS_SNAPSHOT_CLEANUP_INTERVAL_MS`    | Expiry cleanup interval (default 60000).                                                                                                                                                                    |
+| `FS_BUNDLE_MAX_FILES`                | Maximum selected relative paths in one bundle (default 1000; absolute schema ceiling 10000).                                                                                                                |
+| `FS_BUNDLE_MAX_SELECTION_BYTES`      | Maximum UTF-8 JSON bytes for the normalized selected paths and optional preconditions (default 262144).                                                                                                     |
+| `FS_BUNDLE_MAX_FILE_BYTES`           | Bundle-specific raw cap per original (default 67108864 = 64 MiB); the effective source cap also includes `FS_BUNDLE_MAX_RAW_PART_BYTES` and `FS_MAX_FILE_SIZE`.                                             |
+| `FS_BUNDLE_MAX_RAW_PART_BYTES`       | Maximum summed raw original bytes assigned to one ZIP candidate (default 67108864 = 64 MiB); closed ZIP caps are still enforced independently.                                                              |
+| `FS_BUNDLE_MAX_JOB_RAW_BYTES`        | Maximum captured raw original bytes across one bundle (default 536870912 = 512 MiB).                                                                                                                        |
+| `FS_BUNDLE_MAX_MANIFEST_BYTES`       | Maximum external bundle manifest bytes (default 4194304 = 4 MiB); delivery and `FS_MAX_FILE_SIZE` caps also apply.                                                                                          |
 | `NO_COLOR`                           | Any value disables ANSI color output.                                                                                                                                                                       |
 | `FS_REQUEST_STATE_KEY`               | HMAC key sealing `input_required` requestState across retry rounds. Optional (random per boot if unset); set it, at >=32 bytes UTF-8, to keep in-flight rounds alive across a restart.                      |
 

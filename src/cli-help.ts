@@ -136,11 +136,15 @@ const ENV_HELP: HelpRow[] = [
   { flags: 'FS_SEARCH_TIMEOUT_MS', desc: 'Search timeout in ms (default 5000, 100–60000)' },
   {
     flags: 'FS_SNAPSHOT_DIR',
-    desc: 'Durable snapshot job/artifact scratch directory (separate from source roots)',
+    desc: 'Durable snapshot/bundle job scratch directory (separate from source roots)',
   },
   {
     flags: 'FS_SNAPSHOT_*',
-    desc: 'Snapshot CSV/ZIP/delivery/job/scratch/TTL limits; see README configuration reference',
+    desc: 'Snapshot plus shared ZIP/delivery/job/scratch/TTL limits; see README',
+  },
+  {
+    flags: 'FS_BUNDLE_*',
+    desc: 'Bundle selection/file/raw-part/job/manifest limits; see README configuration reference',
   },
   { flags: 'NO_COLOR', desc: 'Any value disables ANSI color output' },
   {
