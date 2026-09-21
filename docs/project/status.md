@@ -4,16 +4,17 @@
 Это единая доска интеграционного статуса. Coding-чаты записывают свою работу в
 карточках задач, а планирование обновляет эту таблицу после review/интеграции.
 
-| ID       | Работа                                                                  | Статус   | Зависит от    | Назначение                                                                                                                        |
-| -------- | ----------------------------------------------------------------------- | -------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| 000      | Подготовка контекста и правил работы                                    | done     | —             | Планирующий чат; docs checkpoint                                                                                                  |
-| 001      | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)          | done     | 000           | `001 - baseline defects fix`; `codex/001-baseline-defects`                                                                        |
-| 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)          | done     | 001           | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live                                             |
-| 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)    | done     | 002           | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3                                                  |
-| 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)            | done     | 002, 002-live | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                                                                   |
-| 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md)  | done     | 002-tool      | `003 - compressed snapshot`; принят через [PR #4](https://github.com/obolibok/filesystem-mcp/pull/4); code review, live и CI PASS |
-| 004      | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md) | review   | 003           | `codex/004-selected-originals-bundle`; head `82e8d187`; CODE_REVIEW_PASS, R1–R8 закрыты; следующий шаг — live                     |
-| 005      | Контролируемое повторение предметного исследования                      | proposed | 004           | Планирование + пользователь                                                                                                       |
+| ID       | Работа                                                                  | Статус   | Зависит от      | Назначение                                                                                                                        |
+| -------- | ----------------------------------------------------------------------- | -------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 000      | Подготовка контекста и правил работы                                    | done     | —               | Планирующий чат; docs checkpoint                                                                                                  |
+| 001      | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)          | done     | 000             | `001 - baseline defects fix`; `codex/001-baseline-defects`                                                                        |
+| 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)          | done     | 001             | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live                                             |
+| 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)    | done     | 002             | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3                                                  |
+| 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)            | done     | 002, 002-live   | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                                                                   |
+| 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md)  | done     | 002-tool        | `003 - compressed snapshot`; принят через [PR #4](https://github.com/obolibok/filesystem-mcp/pull/4); code review, live и CI PASS |
+| 004      | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md) | review   | 003             | `codex/004-selected-originals-bundle`; head `82e8d187`; CODE_REVIEW_PASS, R1–R8 закрыты; следующий шаг — live                     |
+| 004-live | [Живой bundle Windows/ChatGPT](../tasks/004-live-windows-chatgpt.md)    | ready    | 004 review PASS | GPT-5.6-Sol / xhigh; отдельный testing worktree; карточка готова к запуску                                                        |
+| 005      | Контролируемое повторение предметного исследования                      | proposed | 004             | Планирование + пользователь                                                                                                       |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
 готовы; `active` — назначен исполнитель; `review` — есть проверяемый результат;
@@ -34,7 +35,7 @@ Code review 004 на head `82e8d18756e1787f41379720b5c5dd6f29fe42ca` —
 и отдельные probes для split/cancel/error/quota recovery — PASS.
 Все эти результаты — LOCAL_ONLY_NOT_CHATGPT; remote CI и POSIX FIFO ещё не проверены.
 
-Следующий шаг — целевой synthetic live ChatGPT опыт по bundle-live.md из ветки 004:
+Следующий шаг — отдельная [задача 004-live](../tasks/004-live-windows-chatgpt.md), GPT-5.6-Sol / xhigh:
 manifest + все ZIP, per-file bytes/hashes, nested ZIP/XLS, повторная выдача части,
 фиксация результатов и teardown. После live — отдельная интеграция и CI.
 Задача остаётся review до окончательной приёмки. Runtime/tracked tests review
