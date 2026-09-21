@@ -3,7 +3,7 @@ import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotoc
 
 import assert from 'node:assert/strict';
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
-import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 
 const TWO_MIB = 2 * 1024 * 1024;
@@ -57,6 +57,23 @@ function assertOutside(source, candidate, label) {
   );
 }
 
+async function resolveDestination(candidate) {
+  let current = resolve(candidate);
+  const missing = [];
+  for (;;) {
+    try {
+      const existing = await realpath(current);
+      return resolve(existing, ...missing.reverse());
+    } catch (error) {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
+      const parent = dirname(current);
+      if (parent === current) throw error;
+      missing.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
 async function waitForTerminal(client, jobId) {
   const deadline = Date.now() + 120_000;
   for (;;) {
@@ -97,14 +114,16 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const repoRoot = resolve(import.meta.dirname, '..', '..');
   const fixtureRoot = await realpath(options.fixtureRoot);
-  assertOutside(fixtureRoot, options.deliveryDir, 'delivery directory');
-  assertOutside(fixtureRoot, options.scratchDir, 'scratch directory');
-  await mkdir(options.deliveryDir, { recursive: true });
-  await mkdir(options.scratchDir, { recursive: true });
+  const deliveryDir = await resolveDestination(options.deliveryDir);
+  const scratchDir = await resolveDestination(options.scratchDir);
+  assertOutside(fixtureRoot, deliveryDir, 'delivery directory');
+  assertOutside(fixtureRoot, scratchDir, 'scratch directory');
+  await mkdir(deliveryDir, { recursive: true });
+  await mkdir(scratchDir, { recursive: true });
   const files = await selectionsFor({ ...options, fixtureRoot });
   const environment = {
     ...getDefaultEnvironment(),
-    FS_SNAPSHOT_DIR: options.scratchDir,
+    FS_SNAPSHOT_DIR: scratchDir,
     FS_BUNDLE_MAX_RAW_PART_BYTES: String(TWO_MIB),
     FS_SNAPSHOT_MAX_ZIP_BYTES: String(TWO_MIB),
     FS_SNAPSHOT_MAX_DELIVERY_BYTES: String(TWO_MIB),
@@ -187,7 +206,7 @@ async function main() {
       arguments: { artifactId: status.manifestArtifactId },
     });
     const manifestBytes = embeddedBytes(manifestResponse);
-    const manifestPath = join(options.deliveryDir, 'bundle-manifest.json');
+    const manifestPath = join(deliveryDir, 'bundle-manifest.json');
     await writeFile(manifestPath, manifestBytes);
     const manifest = JSON.parse(manifestBytes.toString('utf8'));
     report.policy = manifest.policy;
@@ -203,7 +222,7 @@ async function main() {
       });
       const bytes = embeddedBytes(response);
       const fetchMs = Number((performance.now() - started).toFixed(1));
-      await writeFile(join(options.deliveryDir, basename(part.name)), bytes);
+      await writeFile(join(deliveryDir, basename(part.name)), bytes);
       report.artifacts.push({
         artifactId: part.artifactId,
         name: part.name,
@@ -223,15 +242,15 @@ async function main() {
       );
       assert.deepEqual(repeated, largest.bytes);
       const repeatName = `${basename(largest.part.name)}.repeat`;
-      await writeFile(join(options.deliveryDir, repeatName), repeated);
+      await writeFile(join(deliveryDir, repeatName), repeated);
       report.repeat = { name: repeatName, bytes: repeated.length, equal: true };
     }
     await writeFile(
-      join(options.deliveryDir, 'capture-report.json'),
+      join(deliveryDir, 'capture-report.json'),
       `${JSON.stringify(report, null, 2)}\n`,
       'utf8',
     );
-    process.stdout.write(`${join(options.deliveryDir, 'capture-report.json')}\n`);
+    process.stdout.write(`${join(deliveryDir, 'capture-report.json')}\n`);
   } finally {
     await client.close().catch(() => undefined);
   }
