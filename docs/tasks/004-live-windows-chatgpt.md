@@ -124,24 +124,41 @@ fixture/scratch можно сохранить локально для приём
 
 ## Acceptance и handoff
 
-- [ ] Testing HEAD и reviewed runtime сверены; профиль использует новую сборку.
-- [ ] Малый live ZIP/XLS: materialization, независимые bytes/hashes/CRC/cells PASS.
-- [ ] Multipart: получены все части, только selected originals, полный provenance.
-- [ ] Reorder reuse/conflict, repeated largest fetch и partial/missing outcome проверены.
-- [ ] Verifier code/JSON и timings сохранены; client evidence отделена от server сверки.
-- [ ] Source hash-tree неизменён; effective caps и максимальный доставленный ZIP записаны.
-- [ ] Teardown уложился в ограниченный сценарий; graceful/forced результат указан честно.
-- [ ] Обезличенный отчёт и Work record закоммичены; planning получает фактический SHA,
+- [x] Testing HEAD и reviewed runtime сверены; профиль использует новую сборку.
+- [x] Малый live ZIP/XLS: materialization, независимые bytes/hashes/CRC/cells PASS.
+- [x] Multipart: получены все части, только selected originals, полный provenance.
+- [x] Reorder reuse/conflict, repeated largest fetch и partial/missing outcome проверены.
+- [x] Verifier code/JSON и timings сохранены; client evidence отделена от server сверки.
+- [x] Source hash-tree неизменён; effective caps и максимальный доставленный ZIP записаны.
+- [x] Teardown уложился в ограниченный сценарий; graceful/forced результат указан честно.
+- [x] Обезличенный отчёт и Work record закоммичены; planning получает фактический SHA,
       локальные/live результаты и оставшиеся вопросы. Production/секретов в Git нет.
 
 ## Work record
 
-Заполняет исполнитель. До запуска: не начато.
+Статус исполнителя: **ready for review**. Подробные evidence и hashes:
+[live-отчёт](../testing/004-live-2026-09-21.md).
 
-- Base/testing branch/runtime SHA:
-- Подготовка, команды, effective caps и окружение:
-- Малый live / multipart / negative / repeat:
-- Verifier и независимая сверка evidence:
-- Timings, максимальный ZIP, пределы доказательства:
+- Base/testing branch/runtime SHA: base `bff8eba55d7efc6a5f59097b1a6690226ca1b727`,
+  reviewed runtime `82e8d18756e1787f41379720b5c5dd6f29fe42ca`, testing merge
+  `b543024e9d7b3ebfa5594785b4d9e4fce8678ea2`, запущенный head
+  `8fb9826f188debed8b64f2b4b91c8fd14084cb04`; runtime/config diff отсутствует.
+- Подготовка, команды, effective caps и окружение: `npm ci`, build/static и три
+  stdio preflight PASS; один read-only synthetic root, отдельный scratch, 2 MiB
+  part/ZIP/delivery/file caps, 8 MiB raw job и 16 MiB artifacts job.
+- Малый live / multipart / negative / repeat: PASS. Полные jobs 2/2 и 7/7;
+  reorder reuse и changed-selection conflict; крупнейшая часть повторно получена
+  отдельным вызовом и byte-equal; valid + missing штатно `completed/complete=false`.
+- Verifier и независимая сверка evidence: три ChatGPT verifier exit 0,
+  `overall_pass=true`; scripts/JSON сохранены локально с SHA-256. Client hashes
+  всех artifacts совпали с отдельной server-scratch сверкой.
+- Timings, максимальный ZIP, пределы доказательства: server build 36/420/21 ms;
+  client submit/fetch timings недоступны. Максимум 1049126 B — наблюдение выбранного
+  split profile, не предел host. Проверены synthetic 7 MiB, не production/load max.
 - Teardown, остановленные собственные процессы, состояние fixture/profile:
-- Итоговый commit, результаты и ограничения для planning:
+  все jobs terminal; один `Ctrl+C`, owned process exited, readyz недоступен,
+  `GRACEFUL_STOP_PASS`, force kill не применялся. Ignored fixture/scratch/profile/
+  client evidence сохранены локально для review.
+- Итоговый commit, результаты и ограничения для planning: docs commit — HEAD этой
+  ветки, точный SHA передаётся в handoff. Push/PR/main merge/центральная доска не
+  изменялись; runtime defect не найден, прежний teardown incident не воспроизведён.

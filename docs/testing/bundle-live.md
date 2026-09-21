@@ -97,6 +97,13 @@ tools, включая `bundle`. Не переиспользовать ещё р�
 7. Для наибольшей ZIP part выполнить новый `get_artifact`, сохранить вторую копию
    отдельно и сравнить полные bytes/SHA-256 с первой.
 
+Для отдельного negative case выбрать один существующий original и один обычный
+отсутствующий path. Ожидается `state=completed`, `complete=false`, included/missing
+1/1 и manifest records `included`/`missing`. Счётчик `errors=1` при этом ожидаем:
+он учитывает записанный `NOT_FOUND` для пропущенного selector и не означает
+`state=failed`. Такой результат подтверждает partial-семантику, но не считается
+полной доставкой обоих selectors.
+
 ## Независимая проверка в принимающей среде
 
 Verifier читает полученные файлы, а не server scratch. Он должен:
