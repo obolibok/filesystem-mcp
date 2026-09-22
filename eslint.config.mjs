@@ -20,6 +20,8 @@ export default tseslint.config(
     name: 'project/global-ignores',
     ignores: [
       'dist/**',
+      'out/**',
+      '.tmp/**',
       'dist-test/**',
       'coverage/**',
       'node_modules/**',

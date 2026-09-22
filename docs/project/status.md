@@ -1,20 +1,21 @@
 # Приоритеты и интеграция
 
-Владелец: планирующий чат. Обновлено: 2026-09-21.
+Владелец: планирующий чат. Обновлено: 2026-09-22.
 Это единая доска интеграционного статуса. Coding-чаты записывают свою работу в
 карточках задач, а планирование обновляет эту таблицу после review/интеграции.
 
-| ID       | Работа                                                                  | Статус   | Зависит от      | Назначение                                                                                                                        |
-| -------- | ----------------------------------------------------------------------- | -------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| 000      | Подготовка контекста и правил работы                                    | done     | —               | Планирующий чат; docs checkpoint                                                                                                  |
-| 001      | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)          | done     | 000             | `001 - baseline defects fix`; `codex/001-baseline-defects`                                                                        |
-| 002      | [Стенд доставки originals](../tasks/002-originals-delivery.md)          | done     | 001             | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live                                             |
-| 002-live | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)    | done     | 002             | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3                                                  |
-| 002-tool | [Выдача originals через tool](../tasks/002-tool-delivery.md)            | done     | 002, 002-live   | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                                                                   |
-| 003      | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md)  | done     | 002-tool        | `003 - compressed snapshot`; принят через [PR #4](https://github.com/obolibok/filesystem-mcp/pull/4); code review, live и CI PASS |
-| 004      | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md) | done     | 003             | Code review, live и CI PASS; принят через [PR #5](https://github.com/obolibok/filesystem-mcp/pull/5)                              |
-| 004-live | [Живой bundle Windows/ChatGPT](../tasks/004-live-windows-chatgpt.md)    | done     | 004 review PASS | Live и graceful teardown PASS; evidence принята и интегрирована в PR #5                                                           |
-| 005      | Контролируемое повторение предметного исследования                      | proposed | 004             | Планирование + пользователь                                                                                                       |
+| ID           | Работа                                                                  | Статус   | Зависит от      | Назначение                                                                                                                        |
+| ------------ | ----------------------------------------------------------------------- | -------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 000          | Подготовка контекста и правил работы                                    | done     | —               | Планирующий чат; docs checkpoint                                                                                                  |
+| 001          | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)          | done     | 000             | `001 - baseline defects fix`; `codex/001-baseline-defects`                                                                        |
+| 002          | [Стенд доставки originals](../tasks/002-originals-delivery.md)          | done     | 001             | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live                                             |
+| 002-live     | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)    | done     | 002             | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3                                                  |
+| 002-tool     | [Выдача originals через tool](../tasks/002-tool-delivery.md)            | done     | 002, 002-live   | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                                                                   |
+| 003          | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md)  | done     | 002-tool        | `003 - compressed snapshot`; принят через [PR #4](https://github.com/obolibok/filesystem-mcp/pull/4); code review, live и CI PASS |
+| 004          | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md) | done     | 003             | Code review, live и CI PASS; принят через [PR #5](https://github.com/obolibok/filesystem-mcp/pull/5)                              |
+| 004-live     | [Живой bundle Windows/ChatGPT](../tasks/004-live-windows-chatgpt.md)    | done     | 004 review PASS | Live и graceful teardown PASS; evidence принята и интегрирована в PR #5                                                           |
+| 004-portable | [Переносимый Windows-комплект](../tasks/004-portable-windows.md)        | done     | 004             | Planning; local acceptance и полный check PASS; Node/tunnel, инструкции, roots/TTL                                                |
+| 005          | Контролируемое повторение предметного исследования                      | proposed | 004             | Планирование + пользователь                                                                                                       |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
 готовы; `active` — назначен исполнитель; `review` — есть проверяемый результат;
@@ -24,12 +25,22 @@
 
 ## Текущий следующий шаг
 
-004 и 004-live приняты и интегрированы в `main` через
-[PR #5](https://github.com/obolibok/filesystem-mcp/pull/5).
-Следующее направление — 005: контролируемое повторение исследования Daum/Inoplacer
-из чистого чата. Ассистент сам исследует разрешённую выборку, выбирает originals и
-получает их через snapshot/bundle; результат сверяется с источниками и эталоном.
-Перед назначением нужно определить выборку, исходный вопрос и критерии приёмки.
+004 и 004-live приняты через [PR #5](https://github.com/obolibok/filesystem-mcp/pull/5).
+Перед предметным опытом пользователь запросил переносимую Windows-поставку.
+[004-portable](../tasks/004-portable-windows.md) подготовлена: автономные Node,
+MCP и tunnel-client, конфигурация нескольких roots, инструкция по tunnel/key/plugin,
+TTL/scratch и операторские команды. [Сборка и проверка](../development/windows-portable.md).
+Поставка создаётся в ignored out/; builder/templates и доказательства хранятся в Git.
+
+Windows 10 Pro x64 / PowerShell 5.1: 13 portable scenarios PASS, включая
+relocation с пробелами/Unicode, snapshot/bundle SHA/CRC/originals и local doctor.
+Полный npm run check: 409 tests, 401 pass, 0 fail, 8 platform/permission skips.
+Следующее действие пользователя — перенести комплект на VM, указать roots/tunnel_id
+и пройти вложенный smoke. Новая VM/Windows 11/SMB и новый cloud run не проверены
+этим локальным результатом. Ключ вводится локально; его нет в поставке.
+
+005 — контролируемое повторение исследования Daum/Inoplacer из чистого чата.
+Перед назначением определить выборку, исходный вопрос и критерии приёмки.
 005 остаётся proposed; новый исполнитель ещё не назначен.
 
 ## Приёмка 004 и 004-live, 2026-09-21

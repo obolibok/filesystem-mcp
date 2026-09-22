@@ -1,0 +1,3 @@
+Schwarzbeck portable MCP smoke sample.
+Unicode: Größe Антенна 日本語.
+This is synthetic data, not a production document.

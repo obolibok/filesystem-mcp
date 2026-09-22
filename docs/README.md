@@ -22,6 +22,8 @@
 - [Параллельная работа](development/parallel-work.md): worktrees, владение файлами,
   handoff и приёмка.
 - [Windows](development/windows.md): воспроизводимая установка и локальная проверка.
+- [Переносимый Windows-комплект](development/windows-portable.md): папка для VM,
+  операторская инструкция, roots, tunnel/plugin и сроки хранения.
 - [Originals delivery](testing/originals-delivery.md): проверенный локальный стенд,
   доказательства и ограничения; [tool delivery](testing/tool-originals-delivery.md) —
   фактически проверенный маршрут `get_file` в ChatGPT; [002-live](tasks/002-live-windows-chatgpt.md) —
