@@ -15,7 +15,7 @@
 | 004          | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md)  | done     | 003               | Code review, live и CI PASS; принят через [PR #5](https://github.com/obolibok/filesystem-mcp/pull/5)                              |
 | 004-live     | [Живой bundle Windows/ChatGPT](../tasks/004-live-windows-chatgpt.md)     | done     | 004 review PASS   | Live и graceful teardown PASS; evidence принята и интегрирована в PR #5                                                           |
 | 004-portable | [Переносимый Windows-комплект](../tasks/004-portable-windows.md)         | done     | 004               | Planning; local acceptance и полный check PASS; Node/tunnel, инструкции, roots/TTL                                                |
-| 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md) | review   | 003, 004-portable | GPT-6-Sol / Extra High; `codex/006-shared-snapshot-reuse`; code review и live PASS на fc031a02; интеграция ожидается                |
+| 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md) | review   | 003, 004-portable | GPT-6-Sol / Extra High; `codex/006-shared-snapshot-reuse`; code review и live PASS на fc031a02; интеграция ожидается              |
 | 005          | Контролируемое повторение предметного исследования                       | proposed | 004, 006          | Планирование + пользователь                                                                                                       |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
