@@ -42,6 +42,7 @@
   повторные harness/volume/8.3 evidence и ограничения перед повторным review.
 - [Исправления повторного review 004](testing/004-fixes-r2-2026-09-21.md): явное
   владение compression chain, quota-safe partial ZIP и проверки перед review R3.
+- [Code review 006](testing/006-review-2026-09-24.md): независимая проверка общего reuse снимков; живой опыт ещё предстоит.
 - [Архитектура, форматы и лимиты](reference/architecture.md): карта владельцев кода
   и текущие возможности и ограничения.
 - [Baseline от 19 сентября](testing/baseline-2026-09-19.md): проверенные наблюдения,
