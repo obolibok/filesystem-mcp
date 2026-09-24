@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  lstat,
   mkdir,
   readdir,
   readFile,
@@ -49,6 +50,7 @@ import {
 
 interface ToolMeta {
   reused?: boolean;
+  reason?: string;
   job?: StoredJob & { artifacts: { artifactId: string; kind: string }[] };
   state?: string;
   artifacts?: { artifactId: string; kind: string }[];
@@ -183,7 +185,734 @@ async function waitForTerminal(
   }
 }
 
+function deferred(): { promise: Promise<void>; release: () => void } {
+  let release = (): void => {};
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
+async function submitShared(
+  manager: ArtifactJobManager,
+  guard: Awaited<ReturnType<typeof makeGuard>>,
+  root: string,
+  run: NonNullable<Parameters<ArtifactJobManager['submit']>[0]['run']>,
+  options: { key?: string; maxAgeMs?: number; forceRefresh?: boolean; identity?: string } = {},
+) {
+  const maxAgeMs = options.maxAgeMs ?? 3_600_000;
+  const forceRefresh = options.forceRefresh ?? false;
+  return manager.submit({
+    kind: 'snapshot',
+    ...(options.key ? { idempotencyKey: options.key } : {}),
+    fingerprint: fingerprintJobInput({ kind: 'snapshot', root }),
+    automaticReuse: {
+      fingerprint: options.identity ?? 'shared-synthetic-v2',
+      policyFingerprint: await guard.snapshotPolicyFingerprint(),
+      configFingerprint: manager.snapshotConfigFingerprint(),
+      requestFingerprint: fingerprintJobInput({ root, maxAgeMs, forceRefresh }),
+      maxAgeMs,
+      forceRefresh,
+    },
+    sourceRoot: root,
+    sourceRootId: 'root-test',
+    reuseGuard: guard,
+    input: { includeHidden: false, includeIgnored: false },
+    run,
+  });
+}
+
 describe('snapshot jobs and artifacts', () => {
+  it('shares a completed snapshot across independent HTTP clients without another producer', async () => {
+    const root = await createTestRoot();
+    const scratch = await createTestRoot();
+    await writeTestFile(root, 'probe.txt', 'probe');
+    const http = await bootHttpTest([root], {
+      FS_SNAPSHOT_DIR: scratch,
+      FS_RATE_LIMIT_RPM: '10000',
+    });
+    try {
+      const firstClient = await http.makeClient('shared-first');
+      const secondClient = await http.makeClient('shared-second');
+      const [first, joined] = await Promise.all([
+        firstClient.callTool({ name: 'snapshot', arguments: { path: root } }),
+        secondClient.callTool({
+          name: 'snapshot',
+          arguments: { path: root, idempotencyKey: 'second-client-key' },
+        }),
+      ]);
+      assert.equal(first.isError, undefined, firstTextBlock(first).text);
+      assert.equal(joined.isError, undefined, firstTextBlock(joined).text);
+      const jobId = meta(first).job?.jobId;
+      assert(jobId);
+      assert.equal(meta(joined).job?.jobId, jobId);
+      assert.equal(new Set([meta(first).reason, meta(joined).reason]).has('created'), true);
+      const completed = await waitForTerminal(async () => {
+        const status = await secondClient.callTool({ name: 'job_status', arguments: { jobId } });
+        return meta(status) as StoredJob;
+      });
+      assert.equal(completed.state, 'completed');
+      await firstClient.close();
+      const freshClient = await http.makeClient('shared-fresh-chat');
+      const reused = await freshClient.callTool({ name: 'snapshot', arguments: { path: root } });
+      assert.equal(meta(reused).reason, 'completed_reuse');
+      assert.equal(meta(reused).job?.jobId, jobId);
+      const replay = await freshClient.callTool({
+        name: 'snapshot',
+        arguments: { path: root, idempotencyKey: 'second-client-key' },
+      });
+      assert.equal(meta(replay).reason, 'idempotent_replay');
+      const manifestId = completed.manifestArtifactId;
+      assert(manifestId);
+      const artifact = await freshClient.callTool({
+        name: 'get_artifact',
+        arguments: { artifactId: manifestId },
+      });
+      assert.equal(
+        createHash('sha256').update(embeddedBytes(artifact)).digest('hex'),
+        completed.artifacts.find((item) => item.artifactId === manifestId)?.sha256,
+      );
+      const jobs = (await readdir(scratch, { withFileTypes: true })).filter((entry) =>
+        entry.isDirectory(),
+      );
+      assert.equal(jobs.length, 1, 'one producer job persisted in scratch');
+    } finally {
+      await http.close();
+      await cleanupTestRoot(root);
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it('separates roots and meaningful flags while canonical aliases share a result', async (t) => {
+    const container = await createTestRoot();
+    const root = join(container, 'source');
+    const alias = join(container, 'alias');
+    const other = await createTestRoot();
+    const scratch = await createTestRoot();
+    await mkdir(root);
+    await writeTestFile(root, 'probe.txt', 'probe');
+    await writeTestFile(other, 'other.txt', 'other');
+    try {
+      await symlink(root, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EPERM' || code === 'EACCES' || code === 'UNKNOWN') {
+        t.skip(`directory alias unavailable: ${code}`);
+        await cleanupTestRoot(container);
+        await cleanupTestRoot(other);
+        await rm(scratch, { recursive: true, force: true });
+        return;
+      }
+      throw error;
+    }
+    const http = await bootHttpTest([root, alias, other], { FS_SNAPSHOT_DIR: scratch });
+    try {
+      const client = await http.makeClient('identity-a');
+      const a = await client.callTool({ name: 'snapshot', arguments: { path: root } });
+      const aId = meta(a).job?.jobId;
+      assert(aId);
+      const viaAlias = await client.callTool({ name: 'snapshot', arguments: { path: alias } });
+      assert.equal(meta(viaAlias).job?.jobId, aId);
+      assert.equal(meta(viaAlias).reused, true);
+      const hidden = await client.callTool({
+        name: 'snapshot',
+        arguments: { path: root, includeHidden: true },
+      });
+      const ignored = await client.callTool({
+        name: 'snapshot',
+        arguments: { path: root, includeIgnored: true },
+      });
+      const anotherRoot = await client.callTool({ name: 'snapshot', arguments: { path: other } });
+      const ids = [
+        aId,
+        meta(hidden).job?.jobId,
+        meta(ignored).job?.jobId,
+        meta(anotherRoot).job?.jobId,
+      ];
+      assert.equal(new Set(ids).size, 4);
+    } finally {
+      await http.close();
+      await cleanupTestRoot(container);
+      await cleanupTestRoot(other);
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it('joins in-flight work atomically, preserves forced retries, and reuses despite a full queue', async () => {
+    const root = await realpath(await createTestRoot());
+    const scratch = await createTestRoot();
+    const guard = await makeGuard([root]);
+    const gate = deferred();
+    const started = deferred();
+    let producers = 0;
+    const run = async (): Promise<string> => {
+      producers += 1;
+      started.release();
+      await gate.promise;
+      return '';
+    };
+    const manager = new ArtifactJobManager({
+      ...getSnapshotConfig(),
+      scratchDirectory: scratch,
+      ephemeralScratch: false,
+      maxRunningJobs: 1,
+      maxQueuedJobs: 1,
+    });
+    try {
+      const first = await submitShared(manager, guard, root, run);
+      await started.promise;
+      const requests = await Promise.all(
+        Array.from({ length: 12 }, (_, index) =>
+          submitShared(manager, guard, root, run, { key: `parallel-${index}` }),
+        ),
+      );
+      assert(
+        requests.every(
+          (result) => result.job.jobId === first.job.jobId && result.reason === 'inflight_reuse',
+        ),
+      );
+      assert.equal(producers, 1);
+      const second = await submitShared(manager, guard, root, run, { identity: 'different-flags' });
+      assert.equal(second.reason, 'created');
+      const fullQueueReuse = await submitShared(manager, guard, root, run);
+      assert.equal(fullQueueReuse.reason, 'inflight_reuse');
+      assert.equal(fullQueueReuse.job.jobId, first.job.jobId);
+      await assert.rejects(
+        submitShared(manager, guard, root, run, { key: 'forced-full-queue', forceRefresh: true }),
+        /queue is full/u,
+      );
+      gate.release();
+      await waitForTerminal(() => manager.getJob(first.job.jobId, guard));
+      await waitForTerminal(() => manager.getJob(second.job.jobId, guard));
+      assert.equal(producers, 2);
+      const refresh = await submitShared(manager, guard, root, run, {
+        key: 'forced-retry-key',
+        forceRefresh: true,
+      });
+      const retry = await submitShared(manager, guard, root, run, {
+        key: 'forced-retry-key',
+        forceRefresh: true,
+      });
+      assert.equal(retry.reason, 'idempotent_replay');
+      assert.equal(retry.job.jobId, refresh.job.jobId);
+      await waitForTerminal(() => manager.getJob(refresh.job.jobId, guard));
+      assert.equal(producers, 3);
+      await assert.rejects(
+        submitShared(manager, guard, root, run, { key: 'forced-retry-key', forceRefresh: false }),
+        /Idempotency key/u,
+      );
+    } finally {
+      gate.release();
+      await manager.close();
+      await rm(scratch, { recursive: true, force: true });
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('measures ready freshness from walk start, excludes zero age, and captures forced source changes', async () => {
+    const root = await realpath(await createTestRoot());
+    const scratch = await createTestRoot();
+    await writeTestFile(root, 'old.txt', 'old');
+    const guard = await makeGuard([root]);
+    const fs = new GuardedFileSystem(guard);
+    let now = 1_000_000;
+    let producers = 0;
+    const manager = new ArtifactJobManager(
+      {
+        ...getSnapshotConfig(),
+        scratchDirectory: scratch,
+        ephemeralScratch: false,
+        resultTtlMs: 8 * 60 * 60 * 1000,
+      },
+      { now: () => now },
+    );
+    const run = async (ctx: Parameters<typeof runSnapshotPipeline>[3]): Promise<string> => {
+      producers += 1;
+      return runSnapshotPipeline(fs, root, { includeHidden: false, includeIgnored: false }, ctx);
+    };
+    try {
+      const first = await submitShared(manager, guard, root, run);
+      const original = await waitForTerminal(() => manager.getJob(first.job.jobId, guard));
+      assert.equal(original.state, 'completed');
+      await writeTestFile(root, 'new.txt', 'new');
+      now += 3_600_000;
+      const boundary = await submitShared(manager, guard, root, run);
+      assert.equal(boundary.reason, 'completed_reuse');
+      assert.equal(boundary.job.resultExpiresAt, original.resultExpiresAt);
+      assert.equal(producers, 1);
+      const oldPart = original.artifacts.find((artifact) => artifact.kind === 'snapshot-part');
+      assert(oldPart);
+      const oldCsv = (
+        await unzipSingle((await manager.getArtifact(oldPart.artifactId, guard)).bytes)
+      ).bytes.toString('utf8');
+      assert.match(oldCsv, /old\.txt/u);
+      assert.doesNotMatch(oldCsv, /new\.txt/u);
+      const zeroAge = await submitShared(manager, guard, root, run, { maxAgeMs: 0 });
+      assert.equal(zeroAge.reason, 'created');
+      await waitForTerminal(() => manager.getJob(zeroAge.job.jobId, guard));
+      now += 1;
+      const stale = await submitShared(manager, guard, root, run);
+      assert.equal(stale.reason, 'completed_reuse');
+      assert.equal(stale.job.jobId, zeroAge.job.jobId);
+      const forced = await submitShared(manager, guard, root, run, {
+        forceRefresh: true,
+        key: 'forced-new-source',
+      });
+      assert.equal(forced.reason, 'created');
+      const refreshed = await waitForTerminal(() => manager.getJob(forced.job.jobId, guard));
+      const newPart = refreshed.artifacts.find((artifact) => artifact.kind === 'snapshot-part');
+      assert(newPart);
+      const newCsv = (
+        await unzipSingle((await manager.getArtifact(newPart.artifactId, guard)).bytes)
+      ).bytes.toString('utf8');
+      assert.match(newCsv, /new\.txt/u);
+      assert.equal(producers, 3);
+    } finally {
+      await manager.close();
+      await rm(scratch, { recursive: true, force: true });
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('restores ready reuse and joined keys, rejects changed policy, and keeps old-key replay', async () => {
+    const root = await realpath(await createTestRoot());
+    const other = await realpath(await createTestRoot());
+    const scratch = await createTestRoot();
+    await writeTestFile(root, 'probe.txt', 'probe');
+    const guard = await makeGuard([root]);
+    const fs = new GuardedFileSystem(guard);
+    const config = { ...getSnapshotConfig(), scratchDirectory: scratch, ephemeralScratch: false };
+    let producers = 0;
+    const run = async (ctx: Parameters<typeof runSnapshotPipeline>[3]): Promise<string> => {
+      producers += 1;
+      return runSnapshotPipeline(fs, root, { includeHidden: false, includeIgnored: false }, ctx);
+    };
+    const manager = new ArtifactJobManager(config);
+    let jobId = '';
+    let artifactId: string;
+    try {
+      const first = await submitShared(manager, guard, root, run, { key: 'first-key' });
+      jobId = first.job.jobId;
+      const completed = await waitForTerminal(() => manager.getJob(jobId, guard));
+      artifactId = completed.manifestArtifactId ?? '';
+      assert(artifactId);
+      const joined = await submitShared(manager, guard, root, run, { key: 'joined-key' });
+      assert.equal(joined.reason, 'completed_reuse');
+      assert.equal(producers, 1);
+    } finally {
+      await manager.close();
+    }
+    const restarted = new ArtifactJobManager(config);
+    try {
+      const replay = await submitShared(restarted, guard, root, run, { key: 'joined-key' });
+      assert.equal(replay.reason, 'idempotent_replay');
+      assert.equal(replay.job.jobId, jobId);
+      const ready = await submitShared(restarted, guard, root, run);
+      assert.equal(ready.reason, 'completed_reuse');
+      assert.equal(ready.job.jobId, jobId);
+      assert.equal(producers, 1);
+      const saturated = await restarted.getJob(jobId, guard);
+      saturated.keyBindings = Array.from({ length: 1024 }, (_, index) => ({
+        key: `synthetic-binding-${index}`,
+        requestFingerprint: 'synthetic',
+      }));
+      await assert.rejects(
+        submitShared(restarted, guard, root, run, { key: 'one-more-key' }),
+        /key-binding limit reached/u,
+      );
+      assert.equal(producers, 1);
+      await assert.rejects(
+        submitShared(restarted, guard, root, run, { key: 'joined-key', maxAgeMs: 0 }),
+        /Idempotency key/u,
+      );
+      const widened = await makeGuard([root, other]);
+      await assert.rejects(restarted.getJob(jobId, widened), /policy has changed/u);
+      await assert.rejects(restarted.getArtifact(artifactId, widened), /policy has changed/u);
+      await assert.rejects(
+        submitShared(restarted, widened, root, run, { key: 'joined-key' }),
+        /policy has changed/u,
+      );
+      const foreign = await makeGuard([other]);
+      await assert.rejects(restarted.getJob(jobId, foreign), /Outside allowed/u);
+    } finally {
+      await restarted.close();
+      await rm(scratch, { recursive: true, force: true });
+      await cleanupTestRoot(root);
+      await cleanupTestRoot(other);
+    }
+  });
+
+  it('does not reuse a just-finished long walk, partial result, or missing artifact', async () => {
+    const root = await realpath(await createTestRoot());
+    const scratch = await createTestRoot();
+    await writeTestFile(root, 'probe.txt', 'probe');
+    const guard = await makeGuard([root]);
+    const fs = new GuardedFileSystem(guard);
+    let now = 2_000_000;
+    let producers = 0;
+    const manager = new ArtifactJobManager(
+      {
+        ...getSnapshotConfig(),
+        scratchDirectory: scratch,
+        ephemeralScratch: false,
+        resultTtlMs: 8 * 60 * 60 * 1000,
+      },
+      { now: () => now },
+    );
+    const longRun = async (ctx: Parameters<typeof runSnapshotPipeline>[3]): Promise<string> => {
+      producers += 1;
+      now += 3_600_001;
+      return runSnapshotPipeline(fs, root, { includeHidden: false, includeIgnored: false }, ctx);
+    };
+    const normalRun = async (ctx: Parameters<typeof runSnapshotPipeline>[3]): Promise<string> => {
+      producers += 1;
+      return runSnapshotPipeline(fs, root, { includeHidden: false, includeIgnored: false }, ctx);
+    };
+    try {
+      const first = await submitShared(manager, guard, root, longRun);
+      await waitForTerminal(() => manager.getJob(first.job.jobId, guard));
+      const afterLongWalk = await submitShared(manager, guard, root, normalRun);
+      assert.equal(afterLongWalk.reason, 'created');
+      const fresh = await waitForTerminal(() => manager.getJob(afterLongWalk.job.jobId, guard));
+      assert.equal(producers, 2);
+      const manifest = fresh.artifacts.find((artifact) => artifact.kind === 'manifest');
+      assert(manifest);
+      await unlink(join(manager.jobDirectory(fresh.jobId), manifest.fileName));
+      const afterMissingArtifact = await submitShared(manager, guard, root, normalRun);
+      assert.equal(afterMissingArtifact.reason, 'created');
+      assert.notEqual(afterMissingArtifact.job.jobId, fresh.jobId);
+      await waitForTerminal(() => manager.getJob(afterMissingArtifact.job.jobId, guard));
+      const partial = await submitShared(
+        manager,
+        guard,
+        root,
+        async (ctx) => {
+          producers += 1;
+          ctx.addError(new Error('synthetic partial'));
+          return runSnapshotPipeline(
+            fs,
+            root,
+            { includeHidden: false, includeIgnored: false },
+            ctx,
+          );
+        },
+        { forceRefresh: true },
+      );
+      const partialJob = await waitForTerminal(() => manager.getJob(partial.job.jobId, guard));
+      assert.equal(partialJob.complete, false);
+      const failed = await submitShared(
+        manager,
+        guard,
+        root,
+        async () => {
+          producers += 1;
+          throw new Error('synthetic producer failure');
+        },
+        { forceRefresh: true },
+      );
+      assert.equal(
+        (await waitForTerminal(() => manager.getJob(failed.job.jobId, guard))).state,
+        'failed',
+      );
+      // The newer complete job remains eligible; partial and failed jobs cannot replace it.
+      const reused = await submitShared(manager, guard, root, normalRun);
+      assert.equal(reused.reason, 'completed_reuse');
+      assert.equal(reused.job.jobId, afterMissingArtifact.job.jobId);
+    } finally {
+      await manager.close();
+      await rm(scratch, { recursive: true, force: true });
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('bypasses in-flight work when forced and cleans joined-key bindings with expired jobs', async () => {
+    const root = await realpath(await createTestRoot());
+    const scratch = await createTestRoot();
+    const guard = await makeGuard([root]);
+    let now = 3_000_000;
+    const gate = deferred();
+    const started = deferred();
+    let producers = 0;
+    const run = async (): Promise<string> => {
+      producers += 1;
+      started.release();
+      await gate.promise;
+      return '';
+    };
+    const manager = new ArtifactJobManager(
+      {
+        ...getSnapshotConfig(),
+        scratchDirectory: scratch,
+        ephemeralScratch: false,
+        resultTtlMs: 1000,
+      },
+      { now: () => now },
+    );
+    try {
+      const first = await submitShared(manager, guard, root, run);
+      await started.promise;
+      const joined = await submitShared(manager, guard, root, run, { key: 'joined-cleanup-key' });
+      assert.equal(joined.job.jobId, first.job.jobId);
+      const forced = await submitShared(manager, guard, root, run, {
+        key: 'force-inflight-key',
+        forceRefresh: true,
+      });
+      assert.notEqual(forced.job.jobId, first.job.jobId);
+      const forceRetry = await submitShared(manager, guard, root, run, {
+        key: 'force-inflight-key',
+        forceRefresh: true,
+      });
+      assert.equal(forceRetry.reason, 'idempotent_replay');
+      gate.release();
+      await waitForTerminal(() => manager.getJob(first.job.jobId, guard));
+      await waitForTerminal(() => manager.getJob(forced.job.jobId, guard));
+      assert.equal(producers, 2);
+      now += 2_001;
+      await manager.cleanupExpired();
+      assert.equal(
+        (await readdir(scratch, { withFileTypes: true })).filter((entry) => entry.isDirectory())
+          .length,
+        0,
+      );
+      const retryAfterCleanup = await submitShared(manager, guard, root, run, {
+        key: 'joined-cleanup-key',
+      });
+      assert.equal(retryAfterCleanup.reason, 'created');
+      assert.notEqual(retryAfterCleanup.job.jobId, first.job.jobId);
+    } finally {
+      gate.release();
+      await manager.close();
+      await rm(scratch, { recursive: true, force: true });
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('keeps legacy snapshot keys replayable but excludes them from automatic lookup', async () => {
+    const root = await realpath(await createTestRoot());
+    const scratch = await createTestRoot();
+    await writeTestFile(root, 'probe.txt', 'probe');
+    const guard = await makeGuard([root]);
+    const fs = new GuardedFileSystem(guard);
+    const config = { ...getSnapshotConfig(), scratchDirectory: scratch, ephemeralScratch: false };
+    let producers = 0;
+    const run = async (ctx: Parameters<typeof runSnapshotPipeline>[3]): Promise<string> => {
+      producers += 1;
+      return runSnapshotPipeline(fs, root, { includeHidden: false, includeIgnored: false }, ctx);
+    };
+    const manager = new ArtifactJobManager(config);
+    let legacyId = '';
+    try {
+      const legacy = await manager.submit({
+        kind: 'snapshot',
+        idempotencyKey: 'legacy-key',
+        fingerprint: fingerprintJobInput({ kind: 'snapshot', root }),
+        sourceRoot: root,
+        sourceRootId: 'root-test',
+        reuseGuard: guard,
+        input: { includeHidden: false, includeIgnored: false },
+        run,
+      });
+      legacyId = legacy.job.jobId;
+      await waitForTerminal(() => manager.getJob(legacyId, guard));
+      const duplicate = await manager.submit({
+        kind: 'snapshot',
+        idempotencyKey: 'legacy-other-key',
+        fingerprint: fingerprintJobInput({ kind: 'snapshot', root }),
+        sourceRoot: root,
+        sourceRootId: 'root-test',
+        reuseGuard: guard,
+        input: { includeHidden: false, includeIgnored: false },
+        run,
+      });
+      assert.notEqual(duplicate.job.jobId, legacyId, 'old key-only path duplicates the producer');
+      await waitForTerminal(() => manager.getJob(duplicate.job.jobId, guard));
+      assert.equal(producers, 2);
+    } finally {
+      await manager.close();
+    }
+    const restarted = new ArtifactJobManager(config);
+    try {
+      const replay = await submitShared(restarted, guard, root, run, { key: 'legacy-key' });
+      assert.equal(replay.reason, 'idempotent_replay');
+      assert.equal(replay.job.jobId, legacyId);
+      const newRequest = await submitShared(restarted, guard, root, run);
+      assert.equal(newRequest.reason, 'created');
+      assert.notEqual(newRequest.job.jobId, legacyId);
+      await waitForTerminal(() => restarted.getJob(newRequest.job.jobId, guard));
+      assert.equal(producers, 3);
+    } finally {
+      await restarted.close();
+      await rm(scratch, { recursive: true, force: true });
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('replays a forced scan after restart without starting another producer', async () => {
+    const root = await realpath(await createTestRoot());
+    const scratch = await createTestRoot();
+    const guard = await makeGuard([root]);
+    const fs = new GuardedFileSystem(guard);
+    const config = { ...getSnapshotConfig(), scratchDirectory: scratch, ephemeralScratch: false };
+    let producers = 0;
+    const run = async (ctx: Parameters<typeof runSnapshotPipeline>[3]): Promise<string> => {
+      producers += 1;
+      return runSnapshotPipeline(fs, root, { includeHidden: false, includeIgnored: false }, ctx);
+    };
+    const firstManager = new ArtifactJobManager(config);
+    let forcedId = '';
+    try {
+      const forced = await submitShared(firstManager, guard, root, run, {
+        key: 'forced-restart-key',
+        forceRefresh: true,
+      });
+      forcedId = forced.job.jobId;
+      await waitForTerminal(() => firstManager.getJob(forcedId, guard));
+    } finally {
+      await firstManager.close();
+    }
+    const restarted = new ArtifactJobManager(config);
+    try {
+      const replay = await submitShared(restarted, guard, root, run, {
+        key: 'forced-restart-key',
+        forceRefresh: true,
+      });
+      assert.equal(replay.reason, 'idempotent_replay');
+      assert.equal(replay.job.jobId, forcedId);
+      assert.equal(producers, 1);
+    } finally {
+      await restarted.close();
+    }
+    const changedPolicy = new ArtifactJobManager({
+      ...config,
+      maxWalkDepth: config.maxWalkDepth - 1,
+    });
+    try {
+      await assert.rejects(changedPolicy.getJob(forcedId, guard), /reuse policy has changed/u);
+      await assert.rejects(
+        submitShared(changedPolicy, guard, root, run, {
+          key: 'forced-restart-key',
+          forceRefresh: true,
+        }),
+        /reuse policy has changed/u,
+      );
+      assert.equal(producers, 1);
+    } finally {
+      await changedPolicy.close();
+      await rm(scratch, { recursive: true, force: true });
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('cancels one shared worker for every joined observer and allows a new submit', async () => {
+    const root = await realpath(await createTestRoot());
+    const scratch = await createTestRoot();
+    const guard = await makeGuard([root]);
+    const gate = deferred();
+    const started = deferred();
+    let producers = 0;
+    const run = async (): Promise<string> => {
+      producers += 1;
+      started.release();
+      await gate.promise;
+      return '';
+    };
+    const manager = new ArtifactJobManager({
+      ...getSnapshotConfig(),
+      scratchDirectory: scratch,
+      ephemeralScratch: false,
+    });
+    try {
+      const owner = await submitShared(manager, guard, root, run, { key: 'owner-key' });
+      await started.promise;
+      const observer = await submitShared(manager, guard, root, run, {
+        key: 'observer-key',
+        maxAgeMs: 0,
+      });
+      assert.equal(observer.reason, 'inflight_reuse');
+      assert.equal(observer.job.jobId, owner.job.jobId);
+      await manager.cancel(owner.job.jobId, guard);
+      gate.release();
+      assert.equal((await manager.getJob(owner.job.jobId, guard)).state, 'cancelled');
+      assert.equal(
+        (await submitShared(manager, guard, root, run, { key: 'observer-key', maxAgeMs: 0 }))
+          .reason,
+        'idempotent_replay',
+      );
+      const replacement = await submitShared(manager, guard, root, run);
+      assert.equal(replacement.reason, 'created');
+      await waitForTerminal(() => manager.getJob(replacement.job.jobId, guard));
+      assert.equal(producers, 2);
+    } finally {
+      gate.release();
+      await manager.close();
+      await rm(scratch, { recursive: true, force: true });
+      await cleanupTestRoot(root);
+    }
+  });
+
+  it('selects a newly completed worker while checking an older ready result', async () => {
+    const root = await realpath(await createTestRoot());
+    const scratch = await createTestRoot();
+    await writeTestFile(root, 'probe.txt', 'probe');
+    const guard = await makeGuard([root]);
+    const fs = new GuardedFileSystem(guard);
+    let now = 4_000_000;
+    let firstId = '';
+    let blockFirst = false;
+    const statStarted = deferred();
+    const statGate = deferred();
+    const runGate = deferred();
+    const runStarted = deferred();
+    const manager = new ArtifactJobManager(
+      { ...getSnapshotConfig(), scratchDirectory: scratch, ephemeralScratch: false },
+      {
+        now: () => now,
+        statArtifact: async (path) => {
+          if (blockFirst && path.includes(firstId)) {
+            blockFirst = false;
+            statStarted.release();
+            await statGate.promise;
+          }
+          return lstat(path);
+        },
+      },
+    );
+    const run = async (ctx: Parameters<typeof runSnapshotPipeline>[3]): Promise<string> =>
+      runSnapshotPipeline(fs, root, { includeHidden: false, includeIgnored: false }, ctx);
+    try {
+      const first = await submitShared(manager, guard, root, run);
+      firstId = first.job.jobId;
+      await waitForTerminal(() => manager.getJob(firstId, guard));
+      now += 1000;
+      const second = await submitShared(
+        manager,
+        guard,
+        root,
+        async (ctx) => {
+          runStarted.release();
+          await runGate.promise;
+          return run(ctx);
+        },
+        { forceRefresh: true },
+      );
+      await runStarted.promise;
+      blockFirst = true;
+      const concurrent = submitShared(manager, guard, root, run);
+      await statStarted.promise;
+      runGate.release();
+      await waitForTerminal(() => manager.getJob(second.job.jobId, guard));
+      statGate.release();
+      const selected = await concurrent;
+      assert.equal(selected.reason, 'completed_reuse');
+      assert.equal(selected.job.jobId, second.job.jobId);
+    } finally {
+      runGate.release();
+      statGate.release();
+      await manager.close();
+      await rm(scratch, { recursive: true, force: true });
+      await cleanupTestRoot(root);
+    }
+  });
   it('survives independent HTTP requests and remains available in read-only stdio', async () => {
     const root = await createTestRoot();
     await writeTestFile(root, 'probe.txt', 'probe');

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { Dirent } from 'node:fs';
+import type { Dirent, Stats } from 'node:fs';
 import {
   lstat,
   mkdir,
@@ -36,13 +36,22 @@ const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a
 const MAX_ERROR_SAMPLES = 20;
 const MAX_ERROR_MESSAGE = 512;
 const METADATA_RENAME_ATTEMPTS = 8;
+const MAX_KEY_BINDINGS_PER_JOB = 1024;
 const OWNED_ARTIFACT_FILE_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(?:json|zip)$/u;
 
 export interface SubmitJobInput<Counters extends JobCounters = SnapshotCounters> {
   readonly kind: string;
-  readonly idempotencyKey: string;
+  readonly idempotencyKey?: string;
   readonly fingerprint: string;
+  readonly automaticReuse?: {
+    readonly fingerprint: string;
+    readonly policyFingerprint: string;
+    readonly configFingerprint: string;
+    readonly requestFingerprint: string;
+    readonly maxAgeMs: number;
+    readonly forceRefresh: boolean;
+  };
   readonly sourceRoot: string;
   readonly sourceRootId: string;
   readonly input: Record<string, unknown>;
@@ -52,6 +61,8 @@ export interface SubmitJobInput<Counters extends JobCounters = SnapshotCounters>
   readonly counters?: Counters;
   readonly run: (ctx: JobRunContext<Counters>) => Promise<string>;
 }
+
+export type SubmitReason = 'created' | 'completed_reuse' | 'inflight_reuse' | 'idempotent_replay';
 
 export interface ArtifactPayload {
   readonly artifact: StoredArtifact;
@@ -68,6 +79,8 @@ interface RuntimeJob {
 }
 
 interface ArtifactJobManagerDeps {
+  readonly now?: () => number;
+  readonly statArtifact?: (path: string) => Promise<Stats>;
   readonly readArtifact?: (path: string) => Promise<Buffer>;
   readonly unlinkFile?: (path: string) => Promise<void>;
   /** Test seams for exercising cancellation on both sides of the atomic rename. */
@@ -209,8 +222,10 @@ export class ArtifactJobManager {
   readonly #unlinkFile: (path: string) => Promise<void>;
   readonly #beforeArtifactRename: ((job: StoredJob<JobCounters>) => Promise<void>) | undefined;
   readonly #afterArtifactRename: ((job: StoredJob<JobCounters>) => Promise<void>) | undefined;
+  readonly #now: () => number;
+  readonly #statArtifact: (path: string) => Promise<Stats>;
   readonly #jobs = new Map<string, RuntimeJob>();
-  readonly #idempotency = new Map<string, string>();
+  readonly #idempotency = new Map<string, { jobId: string; requestFingerprint?: string }>();
   readonly #artifactJobs = new Map<string, string>();
   readonly #artifactBytes = new Map<string, number>();
   readonly #orphanBytes = new Map<string, number>();
@@ -236,11 +251,31 @@ export class ArtifactJobManager {
     this.#unlinkFile = deps.unlinkFile ?? unlink;
     this.#beforeArtifactRename = deps.beforeArtifactRename;
     this.#afterArtifactRename = deps.afterArtifactRename;
+    this.#now = deps.now ?? Date.now;
+    this.#statArtifact = deps.statArtifact ?? lstat;
   }
 
   async initialize(): Promise<void> {
     this.#initialized ??= this.#initialize();
     return this.#initialized;
+  }
+
+  /** Captured settings that can change snapshot traversal or published artifact shape. */
+  snapshotConfigFingerprint(): string {
+    const config = this.config;
+    return fingerprintJobInput({
+      version: 1,
+      scratchDirectory: this.#scratchDirectory,
+      maxRecordBytes: config.maxRecordBytes,
+      maxRawPartBytes: config.maxRawPartBytes,
+      maxZipBytes: config.maxZipBytes,
+      maxDeliveryBytes: config.maxDeliveryBytes,
+      maxFileSizeBytes: config.maxFileSizeBytes,
+      maxJobRawBytes: config.maxJobRawBytes,
+      maxJobArtifactBytes: config.maxJobArtifactBytes,
+      maxParts: config.maxParts,
+      maxWalkDepth: config.maxWalkDepth,
+    });
   }
 
   async #initialize(): Promise<void> {
@@ -297,7 +332,15 @@ export class ArtifactJobManager {
       tempBytes: 0,
     };
     this.#jobs.set(jobId, runtime);
-    this.#idempotency.set(job.idempotencyKey, jobId);
+    if (job.idempotencyKey) {
+      this.#idempotency.set(job.idempotencyKey, {
+        jobId,
+        ...(job.requestFingerprint ? { requestFingerprint: job.requestFingerprint } : {}),
+      });
+    }
+    for (const binding of job.keyBindings ?? []) {
+      this.#idempotency.set(binding.key, { jobId, requestFingerprint: binding.requestFingerprint });
+    }
     const metadataSize =
       (await stat(join(directory, 'job.json')).catch(() => undefined))?.size ?? 0;
     this.#metadataBytes.set(jobId, metadataSize);
@@ -321,7 +364,7 @@ export class ArtifactJobManager {
       job.phase = 'interrupted';
       job.complete = false;
       job.stopReason = 'server-restarted';
-      job.finishedAt = new Date().toISOString();
+      job.finishedAt = new Date(this.#now()).toISOString();
       await this.persist(job);
     }
     if (job.state !== 'completed' && job.artifacts.length > 0) {
@@ -363,7 +406,7 @@ export class ArtifactJobManager {
 
   async submit<Counters extends JobCounters = SnapshotCounters>(
     input: SubmitJobInput<Counters>,
-  ): Promise<{ job: StoredJob<Counters>; reused: boolean }> {
+  ): Promise<{ job: StoredJob<Counters>; reused: boolean; reason: SubmitReason }> {
     await this.initialize();
     const result = this.#submitChain.then(() => this.#submit(input));
     this.#submitChain = result.then(
@@ -375,20 +418,80 @@ export class ArtifactJobManager {
 
   async #submit<Counters extends JobCounters>(
     input: SubmitJobInput<Counters>,
-  ): Promise<{ job: StoredJob<Counters>; reused: boolean }> {
+  ): Promise<{ job: StoredJob<Counters>; reused: boolean; reason: SubmitReason }> {
     if (this.#closed) throw new FsError(ErrorCode.IO_ERROR, 'Job manager is shutting down');
-    const priorId = this.#idempotency.get(input.idempotencyKey);
-    if (priorId) {
-      const prior = this.#jobs.get(priorId)?.job;
+    if (!input.idempotencyKey && !input.automaticReuse) {
+      throw new FsError(ErrorCode.INVALID_INPUT, 'Idempotency key is required for this job');
+    }
+    if (input.automaticReuse && (input.kind !== 'snapshot' || !input.reuseGuard)) {
+      throw new FsError(
+        ErrorCode.INVALID_INPUT,
+        'Automatic snapshot reuse requires a current access guard',
+      );
+    }
+    if (
+      input.automaticReuse &&
+      input.automaticReuse.policyFingerprint !==
+        (await input.reuseGuard?.snapshotPolicyFingerprint())
+    ) {
+      throw new FsError(ErrorCode.ACCESS_DENIED, 'Snapshot access policy changed during submit');
+    }
+    const priorBinding = input.idempotencyKey
+      ? this.#idempotency.get(input.idempotencyKey)
+      : undefined;
+    if (priorBinding) {
+      const prior = this.#jobs.get(priorBinding.jobId)?.job;
       if (prior) {
-        if (prior.fingerprint !== input.fingerprint) {
+        const matches = priorBinding.requestFingerprint
+          ? priorBinding.requestFingerprint === input.automaticReuse?.requestFingerprint
+          : prior.fingerprint === input.fingerprint &&
+            (!input.automaticReuse ||
+              (input.automaticReuse.maxAgeMs === 3_600_000 && !input.automaticReuse.forceRefresh));
+        if (!matches) {
           throw new FsError(
             ErrorCode.INVALID_INPUT,
             'Idempotency key is already bound to different normalized job parameters',
           );
         }
+        if (
+          prior.reuseFingerprint &&
+          prior.reuseFingerprint !== input.automaticReuse?.fingerprint
+        ) {
+          throw new FsError(ErrorCode.ACCESS_DENIED, 'Snapshot reuse policy has changed');
+        }
         if (input.reuseGuard) await this.#authorize(prior, input.reuseGuard);
-        return { job: prior as StoredJob<Counters>, reused: true };
+        return { job: prior as StoredJob<Counters>, reused: true, reason: 'idempotent_replay' };
+      }
+    }
+    if (input.automaticReuse && !input.automaticReuse.forceRefresh) {
+      const candidate = await this.#findReusable(input.automaticReuse, input.reuseGuard);
+      if (candidate) {
+        if (input.idempotencyKey) {
+          const bindings = candidate.job.keyBindings ?? [];
+          if (bindings.length >= MAX_KEY_BINDINGS_PER_JOB) {
+            throw new FsError(ErrorCode.TOO_LARGE, 'Snapshot job key-binding limit reached');
+          }
+          const binding = {
+            key: input.idempotencyKey,
+            requestFingerprint: input.automaticReuse.requestFingerprint,
+          };
+          candidate.job.keyBindings = [...bindings, binding];
+          try {
+            await this.persist(candidate.job);
+          } catch (error) {
+            candidate.job.keyBindings = bindings;
+            throw error;
+          }
+          this.#idempotency.set(binding.key, {
+            jobId: candidate.job.jobId,
+            requestFingerprint: binding.requestFingerprint,
+          });
+        }
+        return {
+          job: candidate.job as StoredJob<Counters>,
+          reused: true,
+          reason: candidate.reason,
+        };
       }
     }
     const queued = [...this.#jobs.values()].filter(
@@ -397,14 +500,22 @@ export class ArtifactJobManager {
     if (queued >= this.config.maxQueuedJobs) {
       throw new FsError(ErrorCode.TOO_LARGE, 'Artifact job queue is full');
     }
-    const now = new Date().toISOString();
+    const now = new Date(this.#now()).toISOString();
     const jobId = randomUUID();
     const job: StoredJob<Counters> = {
       schemaVersion: 1,
       jobId,
       kind: input.kind,
-      idempotencyKey: input.idempotencyKey,
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
       fingerprint: input.fingerprint,
+      ...(input.automaticReuse
+        ? {
+            reuseFingerprint: input.automaticReuse.fingerprint,
+            policyFingerprint: input.automaticReuse.policyFingerprint,
+            configFingerprint: input.automaticReuse.configFingerprint,
+            requestFingerprint: input.automaticReuse.requestFingerprint,
+          }
+        : {}),
       sourceRoot: input.sourceRoot,
       sourceRootId: input.sourceRootId,
       input: input.input,
@@ -425,19 +536,127 @@ export class ArtifactJobManager {
     };
     await mkdir(this.jobDirectory(jobId), { recursive: false, mode: 0o700 });
     this.#jobs.set(jobId, runtime);
-    this.#idempotency.set(input.idempotencyKey, jobId);
+    if (input.idempotencyKey) {
+      this.#idempotency.set(input.idempotencyKey, {
+        jobId,
+        ...(input.automaticReuse
+          ? { requestFingerprint: input.automaticReuse.requestFingerprint }
+          : {}),
+      });
+    }
     try {
       await this.persist(job);
     } catch (error) {
       this.#jobs.delete(jobId);
-      this.#idempotency.delete(input.idempotencyKey);
+      if (input.idempotencyKey) this.#idempotency.delete(input.idempotencyKey);
       await rm(this.jobDirectory(jobId), { recursive: true, force: true });
       throw error;
     }
     queueMicrotask(() => {
       this.#pump();
     });
-    return { job, reused: false };
+    return { job, reused: false, reason: 'created' };
+  }
+
+  async #findReusable(
+    request: NonNullable<SubmitJobInput['automaticReuse']>,
+    guard?: PathGuard,
+  ): Promise<
+    { job: StoredJob<JobCounters>; reason: 'completed_reuse' | 'inflight_reuse' } | undefined
+  > {
+    const candidates = [...this.#jobs.values()]
+      .map((runtime) => runtime.job)
+      .filter((job) => job.kind === 'snapshot' && job.reuseFingerprint === request.fingerprint);
+    if (guard) {
+      // The hash selects candidates; the guard remains the access authority.
+      for (const candidate of candidates) await this.#authorize(candidate, guard);
+    }
+    const checked = new Set<string>();
+    const readyValid: StoredJob<JobCounters>[] = [];
+    for (;;) {
+      // A running candidate can complete while an older result's artifacts are
+      // being checked. Re-scan after every await before deciding to create work.
+      const now = this.#now();
+      const ready = candidates
+        .filter((job) => {
+          if (checked.has(job.jobId)) return false;
+          const started = job.startedAt ? Date.parse(job.startedAt) : NaN;
+          const expires = job.resultExpiresAt ? Date.parse(job.resultExpiresAt) : NaN;
+          return (
+            job.state === 'completed' &&
+            job.complete &&
+            request.maxAgeMs > 0 &&
+            !job.resultExpired &&
+            Number.isFinite(started) &&
+            started <= now &&
+            now - started <= request.maxAgeMs &&
+            Number.isFinite(expires) &&
+            now < expires
+          );
+        })
+        .sort(
+          (a, b) =>
+            Date.parse(b.startedAt ?? '') - Date.parse(a.startedAt ?? '') ||
+            b.jobId.localeCompare(a.jobId),
+        );
+      const job = ready[0];
+      if (!job) break;
+      checked.add(job.jobId);
+      if (
+        (await this.#readyArtifactsPresent(job)) &&
+        this.#now() < Date.parse(job.resultExpiresAt ?? '') &&
+        this.#now() - Date.parse(job.startedAt ?? '') <= request.maxAgeMs
+      ) {
+        readyValid.push(job);
+      }
+    }
+    const now = this.#now();
+    const best = readyValid
+      .filter(
+        (job) =>
+          job.state === 'completed' &&
+          job.complete &&
+          !job.resultExpired &&
+          now < Date.parse(job.resultExpiresAt ?? '') &&
+          now - Date.parse(job.startedAt ?? '') <= request.maxAgeMs,
+      )
+      .sort(
+        (a, b) =>
+          Date.parse(b.startedAt ?? '') - Date.parse(a.startedAt ?? '') ||
+          b.jobId.localeCompare(a.jobId),
+      )[0];
+    if (best) return { job: best, reason: 'completed_reuse' };
+    const inflight = candidates
+      .filter((job) => job.state === 'queued' || job.state === 'running')
+      .sort(
+        (a, b) =>
+          Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.jobId.localeCompare(b.jobId),
+      )[0];
+    return inflight ? { job: inflight, reason: 'inflight_reuse' } : undefined;
+  }
+
+  async #readyArtifactsPresent(job: StoredJob<JobCounters>): Promise<boolean> {
+    const manifests = job.artifacts.filter((artifact) => artifact.kind === 'manifest');
+    const parts = job.artifacts.filter((artifact) => artifact.kind === 'snapshot-part');
+    if (
+      !job.manifestArtifactId ||
+      manifests.length !== 1 ||
+      manifests[0]?.artifactId !== job.manifestArtifactId ||
+      parts.length === 0 ||
+      parts.length !== job.counters.parts ||
+      manifests.length + parts.length !== job.artifacts.length
+    )
+      return false;
+    for (const artifact of job.artifacts) {
+      if (this.#artifactJobs.get(artifact.artifactId) !== job.jobId) return false;
+      if (!JOB_ID_RE.test(artifact.artifactId) || !OWNED_ARTIFACT_FILE_RE.test(artifact.fileName))
+        return false;
+      const stored = await this.#statArtifact(this.#artifactPath(job.jobId, artifact)).catch(
+        () => undefined,
+      );
+      if (!stored?.isFile() || stored.size !== artifact.size) return false;
+    }
+    return job.state === 'completed' && job.complete && !job.resultExpired;
   }
 
   #pump(): void {
@@ -466,7 +685,7 @@ export class ArtifactJobManager {
     if (job.state !== 'queued' || !runtime.run) return;
     job.state = 'running';
     job.phase = 'starting';
-    job.startedAt = new Date().toISOString();
+    job.startedAt = new Date(this.#now()).toISOString();
     const timeout = AbortSignal.timeout(this.config.maxJobMs);
     const signal = AbortSignal.any([runtime.abortController.signal, timeout]);
     const ctx = new JobRunContext(this, runtime, signal);
@@ -479,8 +698,8 @@ export class ArtifactJobManager {
       job.state = 'completed';
       job.phase = 'completed';
       job.manifestArtifactId = manifestArtifactId;
-      job.finishedAt = new Date().toISOString();
-      job.resultExpiresAt = new Date(Date.now() + this.config.resultTtlMs).toISOString();
+      job.finishedAt = new Date(this.#now()).toISOString();
+      job.resultExpiresAt = new Date(this.#now() + this.config.resultTtlMs).toISOString();
     } catch (error) {
       if (runtime.abortController.signal.aborted || this.#closed) {
         await this.#removeArtifacts(runtime);
@@ -490,7 +709,7 @@ export class ArtifactJobManager {
       job.phase = 'failed';
       job.complete = false;
       job.stopReason = timeout.aborted ? 'time-limit-exceeded' : formatUnknownErrorMessage(error);
-      job.finishedAt = new Date().toISOString();
+      job.finishedAt = new Date(this.#now()).toISOString();
       ctx.addError(error);
       await this.#removeArtifacts(runtime);
     } finally {
@@ -522,7 +741,7 @@ export class ArtifactJobManager {
     job.phase = 'cancelled';
     job.complete = false;
     job.stopReason = 'cancelled-by-client';
-    job.finishedAt = new Date().toISOString();
+    job.finishedAt = new Date(this.#now()).toISOString();
     runtime.abortController.abort(new Error('Job cancelled'));
     await this.#removeArtifacts(runtime);
     await this.persist(job);
@@ -539,7 +758,7 @@ export class ArtifactJobManager {
     const initialExpiry = runtime.job.resultExpiresAt
       ? Date.parse(runtime.job.resultExpiresAt)
       : Number.POSITIVE_INFINITY;
-    if (runtime.job.resultExpired || Date.now() >= initialExpiry) {
+    if (runtime.job.resultExpired || this.#now() >= initialExpiry) {
       throw new FsError(ErrorCode.NOT_FOUND, 'Artifact has expired');
     }
     await this.#acquireReadSlot();
@@ -548,7 +767,7 @@ export class ArtifactJobManager {
       const expiry = runtime.job.resultExpiresAt
         ? Date.parse(runtime.job.resultExpiresAt)
         : Number.POSITIVE_INFINITY;
-      if (Date.now() >= expiry) {
+      if (this.#now() >= expiry) {
         throw new FsError(ErrorCode.NOT_FOUND, 'Artifact has expired');
       }
       const artifact = runtime.job.artifacts.find(
@@ -777,7 +996,7 @@ export class ArtifactJobManager {
     const expiry = runtime.job.resultExpiresAt
       ? Date.parse(runtime.job.resultExpiresAt)
       : Number.POSITIVE_INFINITY;
-    if (Date.now() < expiry || runtime.job.resultExpired) return;
+    if (this.#now() < expiry || runtime.job.resultExpired) return;
     if ((this.#activeReads.get(runtime.job.jobId) ?? 0) > 0) return;
     await this.#removeArtifacts(runtime);
     runtime.job.resultExpired = true;
@@ -787,6 +1006,15 @@ export class ArtifactJobManager {
 
   async cleanupExpired(): Promise<void> {
     await this.initialize();
+    const result = this.#submitChain.then(() => this.#cleanupExpired());
+    this.#submitChain = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  async #cleanupExpired(): Promise<void> {
     for (const runtime of this.#jobs.values()) {
       const jobId = runtime.job.jobId;
       const previous = this.#lifecycleChains.get(jobId) ?? Promise.resolve();
@@ -798,7 +1026,7 @@ export class ArtifactJobManager {
           (runtime.job.resultExpired ||
             (runtime.job.state !== 'completed' && isTerminal(runtime.job))) &&
           finished !== undefined &&
-          Date.now() - finished > this.config.resultTtlMs * 2 &&
+          this.#now() - finished > this.config.resultTtlMs * 2 &&
           (this.#activeReads.get(jobId) ?? 0) === 0
         ) {
           await rm(this.jobDirectory(jobId), { recursive: true, force: true });
@@ -812,7 +1040,9 @@ export class ArtifactJobManager {
             this.#artifactJobs.delete(artifact.artifactId);
           }
           this.#jobs.delete(jobId);
-          this.#idempotency.delete(runtime.job.idempotencyKey);
+          if (runtime.job.idempotencyKey) this.#idempotency.delete(runtime.job.idempotencyKey);
+          for (const binding of runtime.job.keyBindings ?? [])
+            this.#idempotency.delete(binding.key);
           this.#usedBytes = Math.max(
             0,
             this.#usedBytes -
@@ -851,6 +1081,15 @@ export class ArtifactJobManager {
 
   async #authorize(job: StoredJob<JobCounters>, guard: PathGuard): Promise<void> {
     await guard.validateExistingDirectory(job.sourceRoot);
+    if (
+      job.policyFingerprint &&
+      job.policyFingerprint !== (await guard.snapshotPolicyFingerprint())
+    ) {
+      throw new FsError(ErrorCode.ACCESS_DENIED, 'Snapshot access policy has changed');
+    }
+    if (job.configFingerprint && job.configFingerprint !== this.snapshotConfigFingerprint()) {
+      throw new FsError(ErrorCode.ACCESS_DENIED, 'Snapshot reuse policy has changed');
+    }
     for (const path of job.authorizationPaths ?? []) {
       guard.assertPathAllowed(path);
     }
@@ -891,7 +1130,7 @@ export class ArtifactJobManager {
         runtime.job.phase = 'interrupted';
         runtime.job.complete = false;
         runtime.job.stopReason = 'server-shutdown';
-        runtime.job.finishedAt = new Date().toISOString();
+        runtime.job.finishedAt = new Date(this.#now()).toISOString();
         runtime.abortController.abort(new Error('Server shutting down'));
         await this.persist(runtime.job).catch((error: unknown) => {
           Logger.warn(

@@ -33,6 +33,8 @@
   пошаговая целевая проверка manifest/ZIP в ChatGPT;
   [live results](testing/003-live-2026-09-20.md) — результаты smoke/main/upper;
   [интеграция 003](testing/003-integration-2026-09-20.md) — Windows fixes и финальный CI.
+- [006 shared snapshot live protocol](testing/006-shared-snapshot-live.md): следующий
+  опыт с двумя ChatGPT-чатами и проверкой непрерывного процесса туннеля после review.
 - [Bundle local](testing/bundle-local-2026-09-20.md): stdio MCP, independent
   ZIP/XLS verifier, multipart volume и Windows 8.3; [live protocol](testing/bundle-live.md) —
   пошаговая целевая проверка после code review;

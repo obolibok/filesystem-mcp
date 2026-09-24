@@ -237,11 +237,29 @@ All tools are scoped to the configured roots. Call `list_roots` first to discove
 
 | Tool           | Description                                                                                                                                                               |
 | :------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `snapshot`     | Submit a background metadata inventory for one guarded directory.                                                                                                         |
+| `snapshot`     | Reuse a fresh completed metadata inventory or join a matching queued/running job for one guarded directory; otherwise start a background scan.                            |
 | `bundle`       | Submit a background capture of one explicit bounded set of relative file paths under one guarded directory; no globbing or recursive directory expansion.                 |
 | `job_status`   | Poll bounded progress, counters, errors, expiry, and artifact IDs for a snapshot or bundle job.                                                                           |
 | `cancel_job`   | Cancel queued/running work and discard incomplete artifacts; source files are not changed.                                                                                |
 | `get_artifact` | Return one immutable manifest or independent ZIP part as an MCP embedded resource plus resource link; current source policy and delivery limits are checked on each call. |
+
+`snapshot` accepts `path`, optional `includeHidden`/`includeIgnored`, optional
+`idempotencyKey`, `maxAgeMs` (0–30 days, default 3,600,000 ms), and `forceRefresh`
+(default `false`). A normal request returns the newest compatible complete result
+whose walk began within `maxAgeMs` and whose artifacts are still available; otherwise
+it joins a compatible queued/running job or starts a new one. `maxAgeMs: 0` skips
+completed results but can still join running work. The response gives `reused`, a
+`reason` (`created`, `completed_reuse`, `inflight_reuse`, or `idempotent_replay`),
+and `job`, including `startedAt` and `resultExpiresAt` when available. Reuse never
+extends artifact TTL. Source and `.gitignore` changes are not detected automatically.
+
+For a fresh scan with retry protection, use
+`{"path":"<synthetic-source>","forceRefresh":true,"idempotencyKey":"refresh-example-001"}`.
+Retry the exact arguments after a lost response. Each forced request without a key
+starts another scan. A shared job has one cancellation state: `cancel_job` stops it
+for every client, while closing one client does not stop it. Sharing is limited to
+one server process and its scratch directory; independent processes and machines
+do not share workers or results. `bundle` still requires `idempotencyKey`.
 
 #### Write
 

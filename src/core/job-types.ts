@@ -65,8 +65,15 @@ export interface StoredJob<Counters extends JobCounters = SnapshotCounters> {
   readonly schemaVersion: 1;
   readonly jobId: string;
   readonly kind: string;
-  readonly idempotencyKey: string;
+  readonly idempotencyKey?: string;
   readonly fingerprint: string;
+  /** Snapshot-only identity for automatic reuse, including traversal policy and format. */
+  readonly reuseFingerprint?: string;
+  readonly policyFingerprint?: string;
+  readonly configFingerprint?: string;
+  /** Snapshot-only identity of the caller's retry parameters. */
+  readonly requestFingerprint?: string;
+  keyBindings?: { key: string; requestFingerprint: string }[];
   readonly sourceRoot: string;
   readonly sourceRootId: string;
   readonly input: Record<string, unknown>;

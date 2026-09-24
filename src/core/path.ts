@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Stats } from 'node:fs';
 import { lstat, readlink, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -25,6 +26,7 @@ import {
   isSamePath,
   isWindowsDriveRelativePath,
   normalizeAllowedDirectory,
+  normalizeCaseForComparison,
   normalizePath,
 } from './path-utils.js';
 import { parseTrueEnvFlag, toPosixPath } from './primitives.js';
@@ -217,6 +219,26 @@ export class PathGuard {
       return [];
     }
     return [...this.allowedDirectoriesState];
+  }
+
+  /** Stable identity of the effective traversal policy, independent of root aliases. */
+  async snapshotPolicyFingerprint(): Promise<string> {
+    const canonical = await Promise.all(
+      this.getAllowedDirectories().map(async (dir) => (await resolveRealPath(dir)) ?? dir),
+    );
+    const roots = [
+      ...new Set(canonical.map((dir) => normalizeCaseForComparison(normalizePath(dir)))),
+    ].sort();
+    return createHash('sha256')
+      .update(
+        JSON.stringify({
+          version: 1,
+          roots,
+          boundaries: [...this.rootBoundaries].sort(),
+          sensitive: this.sensitive.policyIdentity,
+        }),
+      )
+      .digest('hex');
   }
 
   isSensitive(filePath: string): boolean {
