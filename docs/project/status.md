@@ -15,7 +15,7 @@
 | 004          | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md)  | done     | 003               | Code review, live и CI PASS; принят через [PR #5](https://github.com/obolibok/filesystem-mcp/pull/5)                              |
 | 004-live     | [Живой bundle Windows/ChatGPT](../tasks/004-live-windows-chatgpt.md)     | done     | 004 review PASS   | Live и graceful teardown PASS; evidence принята и интегрирована в PR #5                                                           |
 | 004-portable | [Переносимый Windows-комплект](../tasks/004-portable-windows.md)         | done     | 004               | Planning; local acceptance и полный check PASS; Node/tunnel, инструкции, roots/TTL                                                |
-| 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md) | review   | 003, 004-portable | GPT-6-Sol / Extra High; `codex/006-shared-snapshot-reuse`; code review PASS на fc031a02; live/интеграция ожидаются                |
+| 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md) | review   | 003, 004-portable | GPT-6-Sol / Extra High; `codex/006-shared-snapshot-reuse`; code review и live PASS на fc031a02; интеграция ожидается                |
 | 005          | Контролируемое повторение предметного исследования                       | proposed | 004, 006          | Планирование + пользователь                                                                                                       |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -31,8 +31,8 @@ reuse готового свежего snapshot и объединение вып�
 чатами одного экземпляра сервиса, maxAgeMs и forceRefresh. Контракт и acceptance
 реализованы на `fc031a02`. [Независимое code review](../testing/006-review-2026-09-24.md)
 PASS: полный check — 420 tests, 412 pass, 0 fail, 8 skips; блокирующих замечаний нет.
-[Стенд живого опыта](../testing/006-live-2026-09-24.md) подготовлен: 13 portable checks PASS; туннель запущен. ChatGPT smoke, completed reuse и inflight reuse из второго чата PASS; большой обход один, 21011 строк, серверные SHA/CRC PASS. Forced retry и доставка manifest/трёх ZIP в ChatGPT тоже PASS; hashes совпали. Controlled source change 12 → 13 файлов и выбор нового снимка PASS; функциональная часть live завершена. Далее штатный teardown, затем интеграция/CI.
-Следующий этап — опыт с двумя ChatGPT-чатами, затем интеграция, CI и обновление
+[Стенд живого опыта](../testing/006-live-2026-09-24.md) подготовлен: 13 portable checks PASS; туннель штатно остановлен по Ctrl+C, отсутствие процессов/readiness проверено. ChatGPT smoke, completed reuse и inflight reuse из второго чата PASS; большой обход один, 21011 строк, серверные SHA/CRC PASS. Forced retry и доставка manifest/трёх ZIP в ChatGPT тоже PASS; hashes совпали. Controlled source change 12 → 13 файлов и выбор нового снимка PASS; живой опыт и graceful teardown PASS. Далее интеграция/CI.
+Следующий этап — интеграция, CI и обновление
 переносимой поставки. Runtime 006 ещё не слит в main.
 005 сохраняет номер и следует после принятия 006.
 
