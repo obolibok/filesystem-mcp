@@ -147,31 +147,31 @@ Synthetic source, отдельный scratch, два независимых MCP 
 server. Доказательства включают jobId, причину выбора, число запусков producer и
 SHA-256 полученных artifacts; одного совпадения поля reused недостаточно.
 
-- [ ] Повтор в одном клиенте и новый клиент без прежнего jobId/ключа получают
+- [x] Повтор в одном клиенте и новый клиент без прежнего jobId/ключа получают
       один свежий готовый снимок; второй обход не выполняется.
-- [ ] Одновременные запросы без ключей и с разными ключами получают одну queued/
+- [x] Одновременные запросы без ключей и с разными ключами получают одну queued/
       running job. Проверить гонку с освобождением worker/завершением job и полную
       очередь: пригодный reuse остаётся доступным без нового queue slot.
-- [ ] Разные roots/flags/политики разделены; canonical Windows aliases учтены.
+- [x] Разные roots/flags/политики разделены; canonical Windows aliases учтены.
       Запрещённый root, сужение доступа и restart с изменённой политикой не дают
       metadata/artifacts прежнего более широкого контекста.
-- [ ] Проверены default age, границы возраста, maxAgeMs=0, forceRefresh при готовом
+- [x] Проверены default age, границы возраста, maxAgeMs=0, forceRefresh при готовом
       и выполняющемся результате, idempotent retry forced запроса и conflicts.
       Использовать управляемые часы/барьеры, не ждать час и не полагаться на sleeps.
-- [ ] Изменённый synthetic source остаётся старым в допустимом ready reuse и
+- [x] Изменённый synthetic source остаётся старым в допустимом ready reuse и
       появляется в forced/new snapshot. Возраст длинного обхода считается от старта.
-- [ ] Ready reuse и привязки разных ключей переживают restart. Старый storage
+- [x] Ready reuse и привязки разных ключей переживают restart. Старый storage
       читается совместимо; interrupted, partial, failure, expiry, missing artifacts
       и очистка metadata не создают ложных hits. TTL не продлевается от обращений.
-- [ ] Потеря ответа/отключение клиента не отменяет общий worker; explicit cancel
+- [x] Потеря ответа/отключение клиента не отменяет общий worker; explicit cancel
       отражается у обоих клиентов. Integrity и прежние bundle contracts сохранены.
-- [ ] Выполнен npm run check; проверки на Windows, skips и фактические результаты
+- [x] Выполнен npm run check; проверки на Windows, skips и фактические результаты
       записаны. POSIX-specific поведение покрыть portable тестами для CI и честно
       отделить от того, что локально не исполнялось.
-- [ ] Обновлены reference, tool instructions, Windows runbook и portable README
+- [x] Обновлены reference, tool instructions, Windows runbook и portable README
       template: общность в пределах процесса, свежесть vs TTL, forceRefresh/retry,
       shared cancellation и отсутствие автоматической инвалидации.
-- [ ] Подготовлен короткий протокол следующего live опыта с двумя чатами через
+- [x] Подготовлен короткий протокол следующего live опыта с двумя чатами через
       один deployment: готовый reuse, inflight reuse, forceRefresh и проверка
       фактического process lifetime туннеля. Не объявлять локальные clients
       доказательством поведения ChatGPT. Сам live опыт проводится после code review.
@@ -239,3 +239,10 @@ __tests__/snapshot.test.ts` PASS (38/38, 0 skips); `TOOL-SURFACE-002` PASS;
   worktree; проводить после code review. Одному scratch по-прежнему нужен один
   процесс, distributed cache/автоинвалидации source нет. Push/PR/merge/release
   исполнитель не делал. Итог сохранён локальным commit; SHA в handoff сообщении.
+
+## Приёмка планированием, 2026-09-24
+
+Реализация принята и интегрирована через [PR #6](https://github.com/obolibok/filesystem-mcp/pull/6).
+Code review, live ChatGPT опыт, CI Windows/Ubuntu и обновлённая переносимая
+поставка PASS. [Итог интеграции](../testing/006-integration-2026-09-24.md) содержит
+head/merge, исправление тестового helper для 8.3 scratch, результаты и ограничения.

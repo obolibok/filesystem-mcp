@@ -15,7 +15,7 @@
 | 004          | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md)  | done     | 003               | Code review, live и CI PASS; принят через [PR #5](https://github.com/obolibok/filesystem-mcp/pull/5)                              |
 | 004-live     | [Живой bundle Windows/ChatGPT](../tasks/004-live-windows-chatgpt.md)     | done     | 004 review PASS   | Live и graceful teardown PASS; evidence принята и интегрирована в PR #5                                                           |
 | 004-portable | [Переносимый Windows-комплект](../tasks/004-portable-windows.md)         | done     | 004               | Planning; local acceptance и полный check PASS; Node/tunnel, инструкции, roots/TTL                                                |
-| 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md) | review   | 003, 004-portable | GPT-6-Sol / Extra High; `codex/006-shared-snapshot-reuse`; code review и live PASS на fc031a02; интеграция ожидается              |
+| 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md) | done     | 003, 004-portable | Принята через [PR #6](https://github.com/obolibok/filesystem-mcp/pull/6); review, live, CI и portable PASS                        |
 | 005          | Контролируемое повторение предметного исследования                       | proposed | 004, 006          | Планирование + пользователь                                                                                                       |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -26,15 +26,19 @@
 
 ## Текущий следующий шаг
 
-Пользователь разрешил [006](../tasks/006-shared-snapshot-reuse.md): автоматический
-reuse готового свежего snapshot и объединение выполняющихся запросов между
-чатами одного экземпляра сервиса, maxAgeMs и forceRefresh. Контракт и acceptance
-реализованы на `fc031a02`. [Независимое code review](../testing/006-review-2026-09-24.md)
-PASS: полный check — 420 tests, 412 pass, 0 fail, 8 skips; блокирующих замечаний нет.
-[Стенд живого опыта](../testing/006-live-2026-09-24.md) подготовлен: 13 portable checks PASS; туннель штатно остановлен по Ctrl+C, отсутствие процессов/readiness проверено. ChatGPT smoke, completed reuse и inflight reuse из второго чата PASS; большой обход один, 21011 строк, серверные SHA/CRC PASS. Forced retry и доставка manifest/трёх ZIP в ChatGPT тоже PASS; hashes совпали. Controlled source change 12 → 13 файлов и выбор нового снимка PASS; живой опыт и graceful teardown PASS. Далее интеграция/CI.
-Следующий этап — интеграция, CI и обновление
-переносимой поставки. Runtime 006 ещё не слит в main.
-005 сохраняет номер и следует после принятия 006.
+[006](../tasks/006-shared-snapshot-reuse.md) принята через
+[PR #6](https://github.com/obolibok/filesystem-mcp/pull/6), merge `9707bbe3`.
+[Code review](../testing/006-review-2026-09-24.md),
+[живой опыт](../testing/006-live-2026-09-24.md) и
+[интеграция/CI/portable](../testing/006-integration-2026-09-24.md) PASS.
+Финальный PR CI: Windows 417 pass / 3 skips, Ubuntu 412 pass / 8 skips, 0 fail.
+Runtime общего reuse включён в main. Туннель опыта штатно остановлен.
+
+Обновлённая чистая поставка: `out/Schwarzbeck-MCP-2026-09-24` и соседний ZIP
+(69,2 MB), 13 portable checks и hashes/CRC PASS. Внутри Windows-инструкция,
+multiple roots, tunnel/key/plugin, scratch/TTL и общий snapshot reuse.
+Следующий шаг — перенос/настройка на целевой машине и выбор набора/вопроса/критериев
+для предметного опыта 005. Задача 005 остаётся proposed; исполнитель не назначен.
 
 004 и 004-live приняты через [PR #5](https://github.com/obolibok/filesystem-mcp/pull/5).
 Перед предметным опытом пользователь запросил переносимую Windows-поставку.

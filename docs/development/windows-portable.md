@@ -62,3 +62,10 @@ Production roots не нужны. Synthetic копии и отчёты оста�
 
 Полный repository check и окончательная поставка фиксируются в карточке
 [004-portable](../tasks/004-portable-windows.md).
+
+## Обновление 24.09.2026
+
+Поставка с принятым общим snapshot reuse: out/Schwarzbeck-MCP-2026-09-24,
+рядом ZIP и SHA-256. Локальные 13 portable scenarios PASS; живой опыт двух
+ChatGPT-чатов и штатный Ctrl+C PASS. Обновлённая инструкция входит в комплект.
+[Итоги, источник сборки и контрольная сумма](../testing/006-integration-2026-09-24.md).
