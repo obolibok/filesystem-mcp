@@ -326,20 +326,24 @@ export class SensitiveMatcher {
   private readonly builtin: CompiledPatternSet;
   private readonly operator: CompiledPatternSet;
   private readonly allow: CompiledPatternSet;
+  readonly policyIdentity: string;
 
   // An explicit pattern list (tests, custom guards) is one relievable tier;
   // the default construction splits built-ins from operator-supplied
   // FS_DENYLIST/--deny entries, which allow entries can never lift.
   constructor(patterns?: readonly string[], allow?: readonly string[]) {
     if (patterns !== undefined || allow !== undefined) {
+      this.policyIdentity = JSON.stringify([patterns ?? [], [], allow ?? []]);
       this.builtin = toPatternSet(patterns ?? []);
       this.operator = EMPTY_PATTERN_SET;
       this.allow = toPatternSet(allow ?? []);
     } else {
       const tiers = buildDenyTiers();
+      const allowPatterns = buildAllowPatterns();
+      this.policyIdentity = JSON.stringify([tiers.builtin, tiers.operator, allowPatterns]);
       this.builtin = toPatternSet(tiers.builtin);
       this.operator = toPatternSet(tiers.operator);
-      this.allow = toPatternSet(buildAllowPatterns());
+      this.allow = toPatternSet(allowPatterns);
     }
   }
 

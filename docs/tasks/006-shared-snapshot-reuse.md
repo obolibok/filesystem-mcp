@@ -193,11 +193,49 @@ SHA-256 полученных artifacts; одного совпадения пол
 
 ## Work record
 
-До начала реализации: не начато. Заполняет исполнитель.
+Реализация: ready for review. Центральный статус меняет планирование после приёмки.
 
-- Base и branch:
-- Что изменилось и почему:
-- Контракт, defaults, fingerprint политики и storage compatibility:
-- Команды и результаты проверок, среда, skips:
-- Выполненные/оставшиеся acceptance:
-- Ограничения, follow-up и состояние handoff:
+- Base и branch: `3b7059cc7f2b48b41888b776a5826a706a0ba77a` (`main`),
+  `codex/006-shared-snapshot-reuse`, выделенный приложением worktree. Перед правками
+  checkout был clean. Исходный key-only путь с двумя разными ключами воспроизведён
+  на synthetic source: две jobs/два запуска producer; regression сохраняет это
+  наблюдение только для чтения старого persisted контракта.
+- Что изменилось и почему: `snapshot` автоматически выбирает самый новый пригодный
+  complete result, присоединяется к совместимой queued/running job или создаёт
+  новую. `#submitChain` сериализует выбор, регистрацию и cleanup; проверка ready
+  artifacts не читает ZIP, а race с завершением worker повторно просматривает
+  кандидатов. Ответ содержит `reason`; HTTP endpoint уже владел одним manager и
+  guard для разных MCP-клиентов, stdio — одним manager на процесс.
+- Контракт и storage: `idempotencyKey` у snapshot optional, у bundle unchanged.
+  `maxAgeMs` — 0–30 суток, default 3600000, от `startedAt`; 0 не выбирает ready.
+  `forceRefresh` обходит auto ready/inflight, явный key replay имеет приоритет;
+  без ключа forced retry создаёт новую job. Отдельные `reuseFingerprint` и
+  `requestFingerprint` хранятся в прежнем `schemaVersion: 1` job JSON.
+  Автоматическая identity: kind, canonical root, flags, format/semantics version,
+  canonical effective roots, boundaries, sensitive deny/allow policy и captured
+  result-affecting snapshot limits/scratch. Root и policy проверяются заново до
+  metadata/artifact/replay; изменённые traversal limits также закрывают старый
+  результат. Старые jobs без reuse proof не участвуют в auto search, прежний key
+  и jobId продолжают работать. Дополнительные key bindings сохраняются в job JSON,
+  максимум 1024 на job с явным отказом следующему ключу; cleanup удаляет их вместе
+  с terminal job. TTL/queue settings не входят в semantic fingerprint; reuse не
+  продлевает TTL.
+- Проверки: Windows, Node 24.15.0. `npm ci` PASS; `node --test --import tsx
+__tests__/snapshot.test.ts` PASS (38/38, 0 skips); `TOOL-SURFACE-002` PASS;
+  `npm run check` PASS (build, types, ESLint, Prettier, Knip, 420 tests:
+  412 pass, 0 fail, 8 platform/permission skips). Обычный sandbox запуск tsx
+  остановился до тестов на `uv_os_get_passwd`; тесты и полный check выполнены с
+  разрешённым доступом к системной информации. Первый full check выявил превышение
+  бюджета tools/list (15636 > 15200 символов); после сокращения описания повторный
+  полный check PASS. POSIX-only ветви локально не исполнялись; ждут CI.
+- Acceptance: независимые HTTP clients и один scratch/job producer, SHA-256
+  manifest; in-flight гонки с барьерами, full queue, переход worker к completed,
+  readiness/0/default age/long walk, force/retry/restart, source mutation,
+  roots/flags/alias/policy, partial/failure/missing artifacts, TTL/cleanup,
+  shared cancel, legacy JSON и bundle compatibility проверены synthetic tests.
+  Reference, tool instructions, Windows runbook, portable README template и
+  [протокол двух чатов](../testing/006-shared-snapshot-live.md) обновлены.
+- Ограничения и handoff: live ChatGPT/tunnel опыт и CI не выполнялись в coding
+  worktree; проводить после code review. Одному scratch по-прежнему нужен один
+  процесс, distributed cache/автоинвалидации source нет. Push/PR/merge/release
+  исполнитель не делал. Итог сохранён локальным commit; SHA в handoff сообщении.

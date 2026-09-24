@@ -15,19 +15,27 @@ const IdempotencyKey = z
   .min(8)
   .max(128)
   .regex(/^[A-Za-z0-9._:-]+$/u)
-  .describe('Stable caller-generated key (8-128 safe characters); reuse after a lost response.');
+  .describe('Optional stable retry key (8-128 safe characters).');
 
 const SnapshotInputSchema = z.strictObject({
-  path: RequiredPath.describe('Exactly one guarded directory to snapshot recursively.'),
-  idempotencyKey: IdempotencyKey,
+  path: RequiredPath.describe('One guarded directory to scan recursively.'),
+  idempotencyKey: IdempotencyKey.optional(),
   includeHidden: defaultFalseBoolean('Include dot-prefixed files and directories.'),
   includeIgnored: defaultFalseBoolean(
     'Include default exclusions and entries excluded by nested .gitignore files.',
   ),
+  maxAgeMs: z
+    .int()
+    .min(0)
+    .max(30 * 24 * 60 * 60 * 1000)
+    .default(3_600_000)
+    .describe('Completed-result age from walk start in ms; 0 still joins running work.'),
+  forceRefresh: defaultFalseBoolean('Bypass automatic reuse; use idempotencyKey for safe retries.'),
 });
 
 const SnapshotOutputSchema = z.strictObject({
   reused: z.boolean(),
+  reason: z.enum(['created', 'completed_reuse', 'inflight_reuse', 'idempotent_replay']),
   job: JobStatusOutputSchema,
 });
 
@@ -35,13 +43,13 @@ export const SNAPSHOT = defineTool({
   name: 'snapshot',
   title: 'Start Metadata Snapshot',
   description:
-    'Submit a durable background metadata snapshot for one guarded directory. Returns quickly with a job ID; poll job_status, then fetch the manifest and independent ZIP parts with get_artifact. Source files are never modified or content-hashed.',
+    'Reuse a fresh completed snapshot, join queued/running work, or start a guarded scan. Use forceRefresh for a new scan and idempotencyKey for safe retries. Poll job_status; fetch manifest/ZIP with get_artifact.',
   input: SnapshotInputSchema,
   output: SnapshotOutputSchema,
   annotations: {
     readOnlyHint: false,
     destructiveHint: false,
-    idempotentHint: true,
+    idempotentHint: false,
     openWorldHint: false,
   },
   sourceMutating: false,
@@ -56,12 +64,33 @@ export const SNAPSHOT = defineTool({
       includeHidden: args.includeHidden,
       includeIgnored: args.includeIgnored,
     };
+    const policyFingerprint = await ctx.fs.pathGuard.snapshotPolicyFingerprint();
+    const configFingerprint = ctx.jobManager.snapshotConfigFingerprint();
+    const automaticFingerprint = fingerprintJobInput({
+      version: 2,
+      ...normalized,
+      policyFingerprint,
+      configFingerprint,
+    });
+    const requestFingerprint = fingerprintJobInput({
+      ...normalized,
+      maxAgeMs: args.maxAgeMs,
+      forceRefresh: args.forceRefresh,
+    });
     const sourceRootId = `root-${createHash('sha256').update(sourceRoot).digest('hex').slice(0, 16)}`;
     const workerFs = new GuardedFileSystem(ctx.fs.pathGuard);
     const submitted = await ctx.jobManager.submit({
       kind: 'snapshot',
-      idempotencyKey: args.idempotencyKey,
+      ...(args.idempotencyKey ? { idempotencyKey: args.idempotencyKey } : {}),
       fingerprint: fingerprintJobInput(normalized),
+      automaticReuse: {
+        fingerprint: automaticFingerprint,
+        policyFingerprint,
+        configFingerprint,
+        requestFingerprint,
+        maxAgeMs: args.maxAgeMs,
+        forceRefresh: args.forceRefresh,
+      },
       sourceRoot,
       sourceRootId,
       reuseGuard: ctx.fs.pathGuard,
@@ -77,10 +106,14 @@ export const SNAPSHOT = defineTool({
           runCtx,
         ),
     });
-    const value = { reused: submitted.reused, job: jobStatusValue(submitted.job) };
+    const value = {
+      reused: submitted.reused,
+      reason: submitted.reason,
+      job: jobStatusValue(submitted.job),
+    };
     return {
       structured: value,
-      text: `${submitted.reused ? 'Reused' : 'Submitted'} snapshot job ${submitted.job.jobId} (${submitted.job.state}). Poll job_status; the submit request may close without cancelling the job.`,
+      text: `Snapshot job ${submitted.job.jobId} (${submitted.job.state}; ${submitted.reason}). Poll job_status; the submit request may close without cancelling the shared job.`,
     };
   },
 });
