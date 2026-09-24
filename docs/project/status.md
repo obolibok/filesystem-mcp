@@ -15,7 +15,7 @@
 | 004          | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md)  | done     | 003               | Code review, live и CI PASS; принят через [PR #5](https://github.com/obolibok/filesystem-mcp/pull/5)                              |
 | 004-live     | [Живой bundle Windows/ChatGPT](../tasks/004-live-windows-chatgpt.md)     | done     | 004 review PASS   | Live и graceful teardown PASS; evidence принята и интегрирована в PR #5                                                           |
 | 004-portable | [Переносимый Windows-комплект](../tasks/004-portable-windows.md)         | done     | 004               | Planning; local acceptance и полный check PASS; Node/tunnel, инструкции, roots/TTL                                                |
-| 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md) | ready    | 003, 004-portable | GPT-6-Sol / Extra High; `codex/006-shared-snapshot-reuse`; запуск после docs checkpoint                                           |
+| 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md) | active   | 003, 004-portable | GPT-6-Sol / Extra High; `codex/006-shared-snapshot-reuse`; отдельный worktree c641; запуск принят приложением                     |
 | 005          | Контролируемое повторение предметного исследования                       | proposed | 004, 006          | Планирование + пользователь                                                                                                       |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -29,7 +29,7 @@
 Пользователь разрешил [006](../tasks/006-shared-snapshot-reuse.md): автоматический
 reuse готового свежего snapshot и объединение выполняющихся запросов между
 чатами одного экземпляра сервиса, maxAgeMs и forceRefresh. Контракт и acceptance
-подготовлены; назначается отдельный worktree на GPT-6-Sol / Extra High.
+подготовлены и опубликованы; запуск исполнителя на GPT-6-Sol / Extra High принят приложением.
 После реализации — code review, затем отдельный опыт с двумя ChatGPT-чатами,
 интеграция и обновление переносимой поставки. Сейчас это ещё не runtime capability.
 005 сохраняет номер и следует после принятия 006.
@@ -51,6 +51,21 @@ relocation с пробелами/Unicode, snapshot/bundle SHA/CRC/originals и l
 005 — контролируемое повторение исследования Daum/Inoplacer из чистого чата.
 Перед назначением определить выборку, исходный вопрос и критерии приёмки.
 005 остаётся proposed; новый исполнитель ещё не назначен.
+
+## Запуск 006, 2026-09-24
+
+Карточка опубликована в main commit `3b7059cc7f2b48b41888b776a5826a706a0ba77a`.
+Запрошенное название — `006 - shared snapshot reuse`, проект `SWB RAG Dev`,
+модель `gpt-6-sol`, effort `xhigh`. Приложение создало отдельный worktree `c641`
+на этом checkpoint; HEAD и наличие карточки независимо проверены.
+Рабочая ветка `codex/006-shared-snapshot-reuse` уже создана в этом worktree; проверено через Git.
+
+Create вернул `client-new-thread:e9141ef5-2d09-491e-b502-2be6d7d96249`;
+это pending creation ID, не настоящий task ID для API. На момент записи запуск
+принят, первый ответ исполнителя ещё не подтверждён. Не создавать дубликат.
+Prompt разрешает реализацию, локальные проверки, документацию и commits.
+Code review, cloud/live проверка, push/PR/merge и обновление поставки остаются
+у планирования. 005 не перенумерована и ожидает завершения 006.
 
 ## Приёмка 004 и 004-live, 2026-09-21
 
