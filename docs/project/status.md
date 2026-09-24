@@ -31,7 +31,7 @@ reuse готового свежего snapshot и объединение вып�
 чатами одного экземпляра сервиса, maxAgeMs и forceRefresh. Контракт и acceptance
 реализованы на `fc031a02`. [Независимое code review](../testing/006-review-2026-09-24.md)
 PASS: полный check — 420 tests, 412 pass, 0 fail, 8 skips; блокирующих замечаний нет.
-[Стенд живого опыта](../testing/006-live-2026-09-24.md) подготовлен: 13 portable checks PASS; туннель запущен, ChatGPT smoke и completed reuse из второго чата PASS; следующий шаг — inflight reuse.
+[Стенд живого опыта](../testing/006-live-2026-09-24.md) подготовлен: 13 portable checks PASS; туннель запущен. ChatGPT smoke, completed reuse и inflight reuse из второго чата PASS; большой обход один, 21011 строк, серверные SHA/CRC PASS. Далее forced retry, доставка большого результата, controlled source change/forceRefresh и teardown.
 Следующий этап — опыт с двумя ChatGPT-чатами, затем интеграция, CI и обновление
 переносимой поставки. Runtime 006 ещё не слит в main.
 005 сохраняет номер и следует после принятия 006.
