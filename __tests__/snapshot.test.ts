@@ -200,6 +200,9 @@ async function submitShared(
   run: NonNullable<Parameters<ArtifactJobManager['submit']>[0]['run']>,
   options: { key?: string; maxAgeMs?: number; forceRefresh?: boolean; identity?: string } = {},
 ) {
+  // Match the tool: canonicalize scratch (including Windows 8.3 aliases)
+  // before capturing the config fingerprint used for later authorization.
+  await manager.assertScratchSeparated(root);
   const maxAgeMs = options.maxAgeMs ?? 3_600_000;
   const forceRefresh = options.forceRefresh ?? false;
   return manager.submit({
