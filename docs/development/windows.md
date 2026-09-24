@@ -143,6 +143,22 @@ $env:FS_SNAPSHOT_DIR = 'D:\filesystem-mcp-scratch'
 node dist/index.js --read-only --root-boundary $fixturePath $fixturePath
 ```
 
+`snapshot` теперь принимает необязательный `idempotencyKey`. Для обычного запроса
+достаточно `path`: сервер в одном процессе возвращает свежий complete результат
+или присоединяется к queued/running job того же root/flags/политики. Default
+`maxAgeMs=3600000` отсчитывается от начала обхода; `maxAgeMs=0` запрещает ready
+reuse, но не joining. Это не TTL: готовые artifacts по умолчанию живут 24 часа
+от завершения, а reuse не продлевает срок. Изменения source или `.gitignore`
+автоматически не отслеживаются. Для нового обхода с безопасным retry используйте
+`forceRefresh=true` и собственный `idempotencyKey`; повтор без ключа создаёт
+ещё одну job. Причину выбора показывает `reason`. `cancel_job` общей job отменяет
+её для всех клиентов; закрытие одного клиента не отменяет worker.
+
+В HTTP manager и guard общие для MCP-сессий одного endpoint; stdio имеет один
+manager на процесс. Два независимых процесса, VM или scratch с разными владельцами
+не делят job. Для опыта с двумя чатами проверить, что оба запроса достигают
+одного и того же живого процесса и туннеля.
+
 Один scratch каталог принадлежит одному процессу сервера. Для параллельных
 экземпляров задавать разные `FS_SNAPSHOT_DIR`; каталог должен переживать restart
 того же экземпляра, если требуется повторная выдача completed artifacts.

@@ -108,8 +108,8 @@ blob SDK-клиентом само по себе не доказывает ма�
 добавлять schema механически. Изменения artifact/job ответов требуют проверки совместимости.
 
 Snapshot и bundle имеют единый disk-backed lifecycle и не используют 60-секундные
-ResourceStore/PageSnapshotStore. `snapshot` быстро регистрирует job с обязательным
-idempotencyKey; `bundle` делает то же для отсортированного явного набора и optional
+ResourceStore/PageSnapshotStore. `snapshot` быстро выбирает подходящую job или создаёт
+новую; `idempotencyKey` необязателен. `bundle` по-прежнему требует ключ для отсортированного явного набора и optional
 `expected { size, lastWriteTime }`. `job_status` опрашивается отдельными вызовами, `cancel_job` отменяет
 собственный AbortController job, `get_artifact` выдаёт ровно один manifest/ZIP как
 embedded resource + matching resource_link. HTTP endpoint владеет одним manager для
@@ -119,6 +119,39 @@ Startup удаляет только manager-owned partial/metadata-temp и UUID-
 Unreferenced final после crash между rename и metadata commit удаляется; ошибка
 удаления остаётся учтённой в scratch quota до успешного cleanup/restart. Expiry,
 artifact removal и terminal directory cleanup сериализованы для каждой job.
+
+Обычный snapshot сначала проверяет текущий доступ и явный ключ, затем выбирает самый
+новый совместимый `completed` с `complete=true`, живыми artifacts, TTL и возрастом
+от `startedAt` не более `maxAgeMs` (default 3600000 ms, допустимо 0–30 суток).
+`maxAgeMs=0` запрещает ready hit, но допускает присоединение к queued/running.
+Если ready hit нет, присоединяется к самой ранней совместимой queued/running job;
+иначе создаёт новую. `forceRefresh=true` обходит оба вида автоматического reuse;
+повтор с тем же явным ключом остаётся replay даже для forced job. Без ключа каждый
+forced вызов создаёт новый логический запрос. Ответ возвращает `reused`, `reason`
+(`created`, `completed_reuse`, `inflight_reuse`, `idempotent_replay`) и прежний
+`job` с `startedAt`, `finishedAt`, `resultExpiresAt`. Reuse не запускает второй
+producer, не занимает queue slot и не продлевает TTL. Отмена общей job действует
+на всех наблюдателей; отключение клиента её не отменяет.
+
+Автоматическая identity включает kind, canonical source root, flags, версию
+семантики/формата, effective allowed roots и boundaries, sensitive deny/allow
+policy, а также captured snapshot limits и scratch location. Изменение значимых
+лимитов после restart блокирует replay/status/fetch старого результата; изменения
+TTL и ёмкости очереди не меняют identity. Lexical aliases
+одного root канонизируются. Fingerprint используется только для поиска: перед
+replay, status, cancel и artifact fetch guard заново проверяет root и policy.
+Более широкая или узкая политика требует нового snapshot; старый job с ключом
+не выдаёт metadata/artifacts при policy mismatch. Старые job JSON без policy proof
+доступны по прежнему ключу и jobId, но не участвуют в автоматическом поиске.
+Identity явного retry отдельно учитывает path/flags/maxAgeMs/forceRefresh;
+изменение любого из них даёт conflict. Новые ключи, присоединившиеся к job,
+сохраняются в её metadata, переживают restart и удаляются вместе с terminal job.
+На одну job допускается не более 1024 дополнительных привязок: следующая явно
+отклоняется без потери уже живых привязок. Failed/cancelled/interrupted/expired,
+partial и result с отсутствующим artifact не выбираются автоматически. Наличие,
+тип и размер artifacts проверяются без перечитывания ZIP; SHA-256 остаётся
+обязательной проверкой при выдаче. Изменения source/.gitignore не инвалидируют
+готовый результат: для нового обхода задают `forceRefresh` или меньший maxAgeMs.
 
 CSV v1 — UTF-8 без BOM, CRLF, RFC 4180, одинаковый header в каждой части:
 `RootId,RelativePath,Name,Extension,Length,LastWriteTime`. RelativePath использует
