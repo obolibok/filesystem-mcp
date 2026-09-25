@@ -16,7 +16,7 @@
 | 004-live     | [Живой bundle Windows/ChatGPT](../tasks/004-live-windows-chatgpt.md)                | done     | 004 review PASS   | Live и graceful teardown PASS; evidence принята и интегрирована в PR #5                                                           |
 | 004-portable | [Переносимый Windows-комплект](../tasks/004-portable-windows.md)                    | done     | 004               | Planning; local acceptance и полный check PASS; Node/tunnel, инструкции, roots/TTL                                                |
 | 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md)            | done     | 003, 004-portable | Принята через [PR #6](https://github.com/obolibok/filesystem-mcp/pull/6); review, live, CI и portable PASS                        |
-| 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md) | active   | 006               | Передана приложению: GPT-6-Sol / Extra High, worktree 7799; первый ответ ожидается                                                |
+| 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md) | active   | 006               | GPT-6-Sol / Extra High; review aca33f39: R1/P1 и R2/P2 возвращены на исправление                                                  |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006          | Планирование + пользователь                                                                                                       |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -31,7 +31,7 @@
 фатальной диагностики. [Triage](../testing/007-snapshot-failure-triage-2026-09-25.md)
 подтверждён synthetic reproduction и metadata установленного комплекта.
 Разрешена реализация [007](../tasks/007-snapshot-walk-recovery.md): исправление
-классификации и fatalError перед предметным опытом 005. Задача передана GPT-6-Sol / Extra High в отдельный worktree;
+классификации и fatalError перед предметным опытом 005. Независимое [review R1](../testing/007-review-r1-2026-09-25.md) вернуло два замечания исполнителю;
 установленный сервер не менялся. Точный native errno исходного сбоя пока неизвестен.
 
 [006](../tasks/006-shared-snapshot-reuse.md) принята через
@@ -353,3 +353,12 @@ pending clientThreadId `client-new-thread:29a11d3c-8525-4016-926f-2566bd99966e`.
 через список задач. Pending id не используется как threadId и повторный запуск
 не выполняется. После готовности исполнитель назначает рабочую ветку
 `codex/007-snapshot-walk-recovery` и ведёт Work record карточки.
+
+## Review 007, 25.09.2026
+
+Исполнитель передал aca33f39, реальный threadId: 01a0d7d8-88f3-7480-84fe-7d4d1f436f6e.
+Независимый full check PASS (427 tests, 419 pass, 8 skips), однако дополнительные
+synthetic проверки подтвердили R1: sensitive child стал fatal и R2: теряется
+fatal path при 8.3 scratch. [Протокол](../testing/007-review-r1-2026-09-25.md).
+Замечания переданы на исправление в прежнюю задачу. До повторного review
+интеграция и обновление пользовательского комплекта не выполняются.
