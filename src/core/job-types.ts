@@ -54,6 +54,12 @@ export interface JobFatalError extends JobErrorSample {
   readonly operation?: string;
 }
 
+/** Live-only diagnostic when the latest terminal job state is not yet durable. */
+interface JobMetadataPersistence {
+  readonly state: 'recovering' | 'failed';
+  readonly error: JobFatalError;
+}
+
 export interface StoredArtifact {
   readonly artifactId: string;
   readonly kind: 'manifest' | 'snapshot-part' | 'bundle-part';
@@ -94,6 +100,8 @@ export interface StoredJob<Counters extends JobCounters = SnapshotCounters> {
   stopReason?: string;
   /** Independent of the bounded error samples; present for failed jobs only. */
   fatalError?: JobFatalError;
+  /** Never written to job.json; an unavailable disk cannot certify its own recovery. */
+  metadataPersistence?: JobMetadataPersistence;
   complete: boolean;
   counters: Counters;
   errors: JobErrorSample[];
