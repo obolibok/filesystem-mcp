@@ -17,7 +17,7 @@
 | 004-portable | [Переносимый Windows-комплект](../tasks/004-portable-windows.md)                    | done     | 004               | Planning; local acceptance и полный check PASS; Node/tunnel, инструкции, roots/TTL                                                |
 | 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md)            | done     | 003, 004-portable | Принята через [PR #6](https://github.com/obolibok/filesystem-mcp/pull/6); review, live, CI и portable PASS                        |
 | 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md) | review   | 006               | GPT-6-Sol / Extra High; review и большой walk/ZIP PASS; выявлен metadata persist defect, предложена 008                           |
-| 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)      | review   | 007 runtime       | Review/portable и live delivery PASS; restart pending, готовится интеграционный PR                                                          |
+| 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)      | review   | 007 runtime       | Review/portable и live delivery PASS; restart pending, готовится интеграционный PR                                                |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006          | Планирование + пользователь                                                                                                       |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
