@@ -101,7 +101,7 @@ Push/PR/merge, live и новая поставка остаются у план�
 
 ## Work record
 
-Ready for review. Исполнитель использовал созданный приложением worktree. HEAD при
+Передача исполнителя на review (историческая запись). Исполнитель использовал созданный приложением worktree. HEAD при
 старте был detached `2f993a60371b7ce218a0f59b4cf06d5201fe9190` (main с
 актуальной карточкой, без runtime 007). Создана ветка
 `codex/008-job-metadata-persistence`; сделан только в ней `merge --ff-only`
@@ -165,3 +165,15 @@ state; restart показывает только последнее успешн
 ожидание между filesystem attempts, не зависший syscall. Большой production walk,
 installed kit и облачный маршрут не проверялись в этой задаче; это остаётся у
 планирования после review.
+
+## Приёмка планированием, 25.09.2026
+
+Принята после [независимого review](../testing/008-review-2026-09-25.md),
+[portable checks](../testing/008-portable-2026-09-25.md) и
+[большого live с проверкой restart](../testing/008-live-2026-09-25.md).
+Финальный CI Windows/Ubuntu: по 441 tests, 438/429 pass, 0 fail, 3/12 skips.
+[PR #7](https://github.com/obolibok/filesystem-mcp/pull/7) слит в main,
+merge `eefc00298045c216ba64dcbce707aa9bc6153d85`.
+[Интеграционный протокол](../testing/008-integration-2026-09-25.md)
+фиксирует immutable head, CI и изменения tests при интеграции. Live metadata
+сохранилась после restart, прежний manifest снова получен без нового snapshot.

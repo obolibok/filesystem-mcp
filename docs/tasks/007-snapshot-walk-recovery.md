@@ -58,20 +58,20 @@ Synthetic reproduction: 60 файлов, отказ statDetailed на 30-м вы
 
 ## Acceptance
 
-- [ ] Synthetic regressions демонстрируют дефект до fix и проходят после него:
+- [x] Synthetic regressions демонстрируют дефект до fix и проходят после него:
       raw/wrapped EACCES/EPERM, ENOTDIR/исчезновение, известный EBUSY cause.
-- [ ] Child file/dir/ignore-read и iteration failures не теряют последующих соседей;
+- [x] Child file/dir/ignore-read и iteration failures не теряют последующих соседей;
       counts корректны, manifest complete=false, реально выданные ZIP SHA/CRC/CSV
       содержат все доступные записи, включая записи после проблемного объекта.
-- [ ] Root access failure, cancellation/timeout, лимиты, scratch/compression fault
+- [x] Root access failure, cancellation/timeout, лимиты, scratch/compression fault
       остаются отказами; прежние PathGuard/symlink constraints не ослаблены.
-- [ ] После >20 recoverable ошибок fatal сохраняется отдельно с корректными
+- [x] После >20 recoverable ошибок fatal сохраняется отдельно с корректными
       bounded code/path/cause fields; доступен после restart, samples ограничены.
       Путь не теряется и когда fatal — первая ошибка. Старые jobs читаются.
-- [ ] Complete=false не становится автоматическим ready hit; bundle совместим.
-- [ ] Полный npm run check, значимые Windows/POSIX проверки, wire schema/tool budget;
+- [x] Complete=false не становится автоматическим ready hit; bundle совместим.
+- [x] Полный npm run check, значимые Windows/POSIX проверки, wire schema/tool budget;
       документация описывает отличие completed от complete и fatalError.
-- [ ] Work record содержит base/head, результаты, skips, публичный контракт,
+- [x] Work record содержит base/head, результаты, skips, публичный контракт,
       ограничения и протокол последующего большого опыта. Production данные
       и персональные пути не коммитятся; версии пакетов не меняются.
 
@@ -85,7 +85,7 @@ triage и parallel-work workflow. В изолированном worktree вос�
 
 ## Work record
 
-Ready for review. База `86b7eafc6be7f97cf1a0cdc013426c48ac402585`,
+Передача исполнителя на review (историческая запись). База `86b7eafc6be7f97cf1a0cdc013426c48ac402585`,
 ветка `codex/007-snapshot-walk-recovery` в выделенном worktree приложения;
 итоговый HEAD — локальный checkpoint этой ветки (SHA в handoff). Перед правкой
 working tree был чистым. `npm ci` установлен только в этом worktree.
@@ -153,3 +153,15 @@ fatal code/nativeErrorCode/operation. При `completed` проверить mani
 пропусков; при `failed` сверить fatalError независимо от samples. Исходный
 нативный отказ пользовательского диска всё ещё неизвестен. Личные пути,
 inventory, ZIP и credentials остаются вне Git.
+
+## Приёмка планированием, 25.09.2026
+
+Принята после [независимого review](../testing/007-review-r2-2026-09-25.md),
+[portable checks](../testing/008-portable-2026-09-25.md) и
+[большого live с проверкой restart](../testing/008-live-2026-09-25.md).
+Финальный CI Windows/Ubuntu: по 441 tests, 438/429 pass, 0 fail, 3/12 skips.
+[PR #7](https://github.com/obolibok/filesystem-mcp/pull/7) слит в main,
+merge `eefc00298045c216ba64dcbce707aa9bc6153d85`.
+[Интеграционный протокол](../testing/008-integration-2026-09-25.md)
+фиксирует immutable head, CI и изменения tests при интеграции. Live metadata
+сохранилась после restart, прежний manifest снова получен без нового snapshot.

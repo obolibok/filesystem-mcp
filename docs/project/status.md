@@ -4,21 +4,21 @@
 Это единая доска интеграционного статуса. Coding-чаты записывают свою работу в
 карточках задач, а планирование обновляет эту таблицу после review/интеграции.
 
-| ID           | Работа                                                                              | Статус   | Зависит от        | Назначение                                                                                                                        |
-| ------------ | ----------------------------------------------------------------------------------- | -------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| 000          | Подготовка контекста и правил работы                                                | done     | —                 | Планирующий чат; docs checkpoint                                                                                                  |
-| 001          | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)                      | done     | 000               | `001 - baseline defects fix`; `codex/001-baseline-defects`                                                                        |
-| 002          | [Стенд доставки originals](../tasks/002-originals-delivery.md)                      | done     | 001               | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live                                             |
-| 002-live     | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)                | done     | 002               | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3                                                  |
-| 002-tool     | [Выдача originals через tool](../tasks/002-tool-delivery.md)                        | done     | 002, 002-live     | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                                                                   |
-| 003          | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md)              | done     | 002-tool          | `003 - compressed snapshot`; принят через [PR #4](https://github.com/obolibok/filesystem-mcp/pull/4); code review, live и CI PASS |
-| 004          | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md)             | done     | 003               | Code review, live и CI PASS; принят через [PR #5](https://github.com/obolibok/filesystem-mcp/pull/5)                              |
-| 004-live     | [Живой bundle Windows/ChatGPT](../tasks/004-live-windows-chatgpt.md)                | done     | 004 review PASS   | Live и graceful teardown PASS; evidence принята и интегрирована в PR #5                                                           |
-| 004-portable | [Переносимый Windows-комплект](../tasks/004-portable-windows.md)                    | done     | 004               | Planning; local acceptance и полный check PASS; Node/tunnel, инструкции, roots/TTL                                                |
-| 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md)            | done     | 003, 004-portable | Принята через [PR #6](https://github.com/obolibok/filesystem-mcp/pull/6); review, live, CI и portable PASS                        |
-| 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md) | review   | 006               | GPT-6-Sol / Extra High; review и большой walk/ZIP PASS; выявлен metadata persist defect, предложена 008                           |
-| 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)      | review   | 007 runtime       | Review/portable/live delivery PASS; PR #7 draft, restart pending                                                                  |
-| 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006          | Планирование + пользователь                                                                                                       |
+| ID           | Работа                                                                              | Статус   | Зависит от         | Назначение                                                                                                                        |
+| ------------ | ----------------------------------------------------------------------------------- | -------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| 000          | Подготовка контекста и правил работы                                                | done     | —                  | Планирующий чат; docs checkpoint                                                                                                  |
+| 001          | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)                      | done     | 000                | `001 - baseline defects fix`; `codex/001-baseline-defects`                                                                        |
+| 002          | [Стенд доставки originals](../tasks/002-originals-delivery.md)                      | done     | 001                | `codex/002-originals-delivery`; принят через PR #2; целевой прогон вынесен в 002-live                                             |
+| 002-live     | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)                | done     | 002                | Отрицательный `resources/read` маршрут принят как исторический результат в PR #3                                                  |
+| 002-tool     | [Выдача originals через tool](../tasks/002-tool-delivery.md)                        | done     | 002, 002-live      | `codex/002-tool-delivery`; review и CI PASS; принят через PR #3                                                                   |
+| 003          | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md)              | done     | 002-tool           | `003 - compressed snapshot`; принят через [PR #4](https://github.com/obolibok/filesystem-mcp/pull/4); code review, live и CI PASS |
+| 004          | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md)             | done     | 003                | Code review, live и CI PASS; принят через [PR #5](https://github.com/obolibok/filesystem-mcp/pull/5)                              |
+| 004-live     | [Живой bundle Windows/ChatGPT](../tasks/004-live-windows-chatgpt.md)                | done     | 004 review PASS    | Live и graceful teardown PASS; evidence принята и интегрирована в PR #5                                                           |
+| 004-portable | [Переносимый Windows-комплект](../tasks/004-portable-windows.md)                    | done     | 004                | Planning; local acceptance и полный check PASS; Node/tunnel, инструкции, roots/TTL                                                |
+| 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md)            | done     | 003, 004-portable  | Принята через [PR #6](https://github.com/obolibok/filesystem-mcp/pull/6); review, live, CI и portable PASS                        |
+| 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md) | done     | 006                | Принята вместе с 008 через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, большой live и CI PASS             |
+| 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)      | done     | 007 runtime        | Принята через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, portable, live/restart и CI PASS                |
+| 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
 готовы; `active` — назначен исполнитель; `review` — есть проверяемый результат;
@@ -28,43 +28,53 @@
 
 ## Текущий следующий шаг
 
-Большой пользовательский опыт выявил воспроизводимый отказ child path и потерю
-фатальной диагностики. [Triage](../testing/007-snapshot-failure-triage-2026-09-25.md)
-подтверждён synthetic reproduction и metadata установленного комплекта.
-Разрешена реализация [007](../tasks/007-snapshot-walk-recovery.md): исправление
-классификации и fatalError перед предметным опытом 005. Замечания [review R1](../testing/007-review-r1-2026-09-25.md) закрыты: независимое [review R2](../testing/007-review-r2-2026-09-25.md) на 832a6771 PASS (430 tests, 422 pass, 8 skips). По запросу пользователя подготовлена [тестовая поставка 007](../testing/007-portable-2026-09-25.md): 13 portable checks и ZIP/hash PASS. [Большой live](../testing/007-live-2026-09-25.md) подтвердил 484710 записей, 62 пропуска, SHA/CRC/CSV обеих частей. Пользователь обновил прежнюю установку без сохранения старой. Два других jobs выявили EPERM/rename metadata и несохранённый terminal state; synthetic Windows handle repro подтверждён. Пользователь разрешил [008](../tasks/008-job-metadata-persistence.md); исполнитель завершил её в 7bf58e05. [Независимое review](../testing/008-review-2026-09-25.md) PASS: 433 pass, 8 skips; реальные Windows locks 1,5/3,5 s и restart проверены. [Новая тестовая поставка 007+008](../testing/008-portable-2026-09-25.md) готова: 13 portable checks и ZIP hashes PASS. [Live 008](../testing/008-live-2026-09-25.md) functional/delivery PASS: 484719 и 69779 уникальных записей, persisted completed, SHA/CRC/CSV проверены. Пользователь ещё не проверял прежний jobId после restart. [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7) draft, интеграционная ветка codex/008-integration. Runtime совпадает с 7bf58e05; правка двух order-dependent tests прошла локальный full check и финальный CI Windows/Ubuntu (438/429 pass, 0 fail, 3/12 skips); [интеграционный протокол](../testing/008-integration-2026-09-25.md). До пользовательского restart приёмка и merge не закрыты; CI уже PASS.
+Инфраструктурные задачи 007 и 008 приняты и интегрированы через
+[PR #7](https://github.com/obolibok/filesystem-mcp/pull/7), merge
+`eefc00298045c216ba64dcbce707aa9bc6153d85`.
+[Code review 007](../testing/007-review-r2-2026-09-25.md),
+[code review 008](../testing/008-review-2026-09-25.md),
+[portable](../testing/008-portable-2026-09-25.md),
+[пользовательский live/restart](../testing/008-live-2026-09-25.md) и
+[финальный CI](../testing/008-integration-2026-09-25.md) PASS.
+
+Большие обходы: 484719 и 69779 уникальных записей, persisted completed,
+SHA/CRC/CSV проверены. После restart прежний большой job и manifest доступны
+без нового snapshot; SHA manifest совпадает с файлом на диске.
+`complete=false` из-за недоступных дочерних файлов сохранён в контракте.
+Финальный PR head `65b7bc4c` прошёл Windows/Ubuntu: по 441 tests,
+438/429 pass, 0 fail, 3/12 skips.
+
+Актуальная чистая поставка — `out/Schwarzbeck-MCP-008-test-2026-09-25`
+и соседний ZIP, source runtime `7bf58e05`. Установленная пользовательская сборка
+совпадает с принятым runtime; повторная установка не требуется. После её
+создания исправлены тесты, зависевшие от порядка обхода, и документация.
+Внутри автономные Node/tunnel, инструкция Windows, multiple roots,
+tunnel/key/plugin, scratch/TTL. 13 portable checks PASS. Новый перенос на VM,
+Windows 11 и SMB остаются отдельными условиями deployment.
+
+Следующий шаг — подготовка предметного опыта 005: выбрать каталоги/файлы
+Daum/Inoplacer, один исходный исследовательский вопрос и проверяемые критерии
+результата. Задача остаётся proposed; исполнитель не назначен. После согласования
+планирование оформит карточку, а отдельная задача проведёт исследование из
+чистого чата через snapshot/bundle. Серверные доменные парсеры и постоянная
+индексная БД в scope не добавлены.
+
+## Ранее принятая инфраструктура
 
 [006](../tasks/006-shared-snapshot-reuse.md) принята через
 [PR #6](https://github.com/obolibok/filesystem-mcp/pull/6), merge `9707bbe3`.
 [Code review](../testing/006-review-2026-09-24.md),
 [живой опыт](../testing/006-live-2026-09-24.md) и
 [интеграция/CI/portable](../testing/006-integration-2026-09-24.md) PASS.
-Финальный PR CI: Windows 417 pass / 3 skips, Ubuntu 412 pass / 8 skips, 0 fail.
-Runtime общего reuse включён в main. Туннель опыта штатно остановлен.
-
-Обновлённая чистая поставка: `out/Schwarzbeck-MCP-2026-09-24` и соседний ZIP
-(69,2 MB), 13 portable checks и hashes/CRC PASS. Внутри Windows-инструкция,
-multiple roots, tunnel/key/plugin, scratch/TTL и общий snapshot reuse.
-Следующий шаг — перенос/настройка на целевой машине и выбор набора/вопроса/критериев
-для предметного опыта 005. Задача 005 остаётся proposed; исполнитель не назначен.
+Общий snapshot reuse включён в main; тестовый туннель штатно остановлен.
 
 004 и 004-live приняты через [PR #5](https://github.com/obolibok/filesystem-mcp/pull/5).
-Перед предметным опытом пользователь запросил переносимую Windows-поставку.
-[004-portable](../tasks/004-portable-windows.md) подготовлена: автономные Node,
-MCP и tunnel-client, конфигурация нескольких roots, инструкция по tunnel/key/plugin,
-TTL/scratch и операторские команды. [Сборка и проверка](../development/windows-portable.md).
-Поставка создаётся в ignored out/; builder/templates и доказательства хранятся в Git.
-
-Windows 10 Pro x64 / PowerShell 5.1: 13 portable scenarios PASS, включая
-relocation с пробелами/Unicode, snapshot/bundle SHA/CRC/originals и local doctor.
-Полный npm run check: 409 tests, 401 pass, 0 fail, 8 platform/permission skips.
-Следующее действие пользователя — перенести комплект на VM, указать roots/tunnel_id
-и пройти вложенный smoke. Новая VM/Windows 11/SMB и новый cloud run не проверены
-этим локальным результатом. Ключ вводится локально; его нет в поставке.
-
-005 — контролируемое повторение исследования Daum/Inoplacer из чистого чата.
-Перед назначением определить выборку, исходный вопрос и критерии приёмки.
-005 остаётся proposed; новый исполнитель ещё не назначен.
+[004-portable](../tasks/004-portable-windows.md) обеспечивает автономные Node,
+MCP и tunnel-client, конфигурацию нескольких roots и операторские инструкции.
+[Builder и verifier](../development/windows-portable.md) создают поставку в
+ignored out/; templates и обезличенные доказательства хранятся в Git.
+Сборка от 24.09 историческая, актуальная указана выше. Credentials в чистую
+поставку не включены.
 
 ## Запуск 008, 2026-09-25
 
