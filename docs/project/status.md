@@ -17,7 +17,7 @@
 | 004-portable | [Переносимый Windows-комплект](../tasks/004-portable-windows.md)                    | done     | 004               | Planning; local acceptance и полный check PASS; Node/tunnel, инструкции, roots/TTL                                                |
 | 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md)            | done     | 003, 004-portable | Принята через [PR #6](https://github.com/obolibok/filesystem-mcp/pull/6); review, live, CI и portable PASS                        |
 | 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md) | review   | 006               | GPT-6-Sol / Extra High; review и большой walk/ZIP PASS; выявлен metadata persist defect, предложена 008                           |
-| 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)      | active   | 007 runtime       | GPT-6-Sol / Extra High; реализация разрешена, готовится запуск                                                                    |
+| 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)      | active   | 007 runtime       | GPT-6-Sol / Extra High; запуск принят, worktree 55a7 создан                                                                       |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006          | Планирование + пользователь                                                                                                       |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -32,7 +32,7 @@
 фатальной диагностики. [Triage](../testing/007-snapshot-failure-triage-2026-09-25.md)
 подтверждён synthetic reproduction и metadata установленного комплекта.
 Разрешена реализация [007](../tasks/007-snapshot-walk-recovery.md): исправление
-классификации и fatalError перед предметным опытом 005. Замечания [review R1](../testing/007-review-r1-2026-09-25.md) закрыты: независимое [review R2](../testing/007-review-r2-2026-09-25.md) на 832a6771 PASS (430 tests, 422 pass, 8 skips). По запросу пользователя подготовлена [тестовая поставка 007](../testing/007-portable-2026-09-25.md): 13 portable checks и ZIP/hash PASS. [Большой live](../testing/007-live-2026-09-25.md) подтвердил 484710 записей, 62 пропуска, SHA/CRC/CSV обеих частей. Пользователь обновил прежнюю установку без сохранения старой. Два других jobs выявили EPERM/rename metadata и несохранённый terminal state; synthetic Windows handle repro подтверждён. Пользователь разрешил [008](../tasks/008-job-metadata-persistence.md); готовится отдельный исполнитель GPT-6-Sol / Extra High; причина production-блокировки не установлена. CI/интеграция 007 и устойчивость persistence ещё не закрыты.
+классификации и fatalError перед предметным опытом 005. Замечания [review R1](../testing/007-review-r1-2026-09-25.md) закрыты: независимое [review R2](../testing/007-review-r2-2026-09-25.md) на 832a6771 PASS (430 tests, 422 pass, 8 skips). По запросу пользователя подготовлена [тестовая поставка 007](../testing/007-portable-2026-09-25.md): 13 portable checks и ZIP/hash PASS. [Большой live](../testing/007-live-2026-09-25.md) подтвердил 484710 записей, 62 пропуска, SHA/CRC/CSV обеих частей. Пользователь обновил прежнюю установку без сохранения старой. Два других jobs выявили EPERM/rename metadata и несохранённый terminal state; synthetic Windows handle repro подтверждён. Пользователь разрешил [008](../tasks/008-job-metadata-persistence.md); создан worktree 55a7 для исполнителя GPT-6-Sol / Extra High, первый ответ пока не подтверждён; причина production-блокировки не установлена. CI/интеграция 007 и устойчивость persistence ещё не закрыты.
 
 [006](../tasks/006-shared-snapshot-reuse.md) принята через
 [PR #6](https://github.com/obolibok/filesystem-mcp/pull/6), merge `9707bbe3`.
@@ -65,6 +65,30 @@ relocation с пробелами/Unicode, snapshot/bundle SHA/CRC/originals и l
 005 — контролируемое повторение исследования Daum/Inoplacer из чистого чата.
 Перед назначением определить выборку, исходный вопрос и критерии приёмки.
 005 остаётся proposed; новый исполнитель ещё не назначен.
+
+## Запуск 008, 2026-09-25
+
+Пользователь разрешил реализацию. Карточка и разрешение опубликованы в main
+`2f993a60`. Запрошенное название — `008 - job metadata persistence`, проект
+`SWB RAG Dev`, модель `gpt-6-sol`, effort `xhigh`, отдельный managed worktree.
+
+Планирование подготовило checkpoint `5028c06c352d6e2753e577b8f0a16396c6bdbedb`:
+reviewed runtime 007 + актуальные docs/main. Подготовка выполнена в собственном
+review checkout, не в main. Diff по src/tests/scripts/package files к
+`832a6771cd3938947c24329b6d06a512bf5605db` пуст. Исполнитель сначала создаёт
+ветку `codex/008-job-metadata-persistence` в своём worktree и вносит checkpoint,
+потом воспроизводит и исправляет дефект. База сохраняет карточку и work record 007.
+
+Create вернул `client-new-thread:124e05ff-bb05-40d0-b66e-cea8396c6048` — pending
+creation ID, не настоящий task ID. Создание worktree `55a7` на main `2f993a60`
+и наличие карточки независимо проверены. На момент записи API списка задач ещё
+не вернул новый task ID, первый ответ исполнителя не подтверждён. Повторный
+запрос создания не отправлять.
+
+Launch prompt разрешает runtime fix в scope 008, synthetic Windows handle/polling
+и deterministic tests, полный check, reference/work record и локальный commit.
+Установленный комплект, production roots, jobs и tunnel не являются зависимостями.
+Push/PR/merge, приёмку, новую поставку и live ведёт планирование.
 
 ## Запуск 006, 2026-09-24
 
