@@ -16,7 +16,7 @@
 | 004-live     | [Живой bundle Windows/ChatGPT](../tasks/004-live-windows-chatgpt.md)                | done     | 004 review PASS   | Live и graceful teardown PASS; evidence принята и интегрирована в PR #5                                                           |
 | 004-portable | [Переносимый Windows-комплект](../tasks/004-portable-windows.md)                    | done     | 004               | Planning; local acceptance и полный check PASS; Node/tunnel, инструкции, roots/TTL                                                |
 | 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md)            | done     | 003, 004-portable | Принята через [PR #6](https://github.com/obolibok/filesystem-mcp/pull/6); review, live, CI и portable PASS                        |
-| 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md) | review   | 006               | GPT-6-Sol / Extra High; review 832a6771 PASS; далее CI, новая поставка и большой live                                             |
+| 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md) | review   | 006               | GPT-6-Sol / Extra High; review 832a6771 PASS; тестовая поставка готова, пользователь проводит большой live                        |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006          | Планирование + пользователь                                                                                                       |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -31,7 +31,7 @@
 фатальной диагностики. [Triage](../testing/007-snapshot-failure-triage-2026-09-25.md)
 подтверждён synthetic reproduction и metadata установленного комплекта.
 Разрешена реализация [007](../tasks/007-snapshot-walk-recovery.md): исправление
-классификации и fatalError перед предметным опытом 005. Замечания [review R1](../testing/007-review-r1-2026-09-25.md) закрыты: независимое [review R2](../testing/007-review-r2-2026-09-25.md) на 832a6771 PASS (430 tests, 422 pass, 8 skips). Далее CI, новая поставка и повтор большого опыта;
+классификации и fatalError перед предметным опытом 005. Замечания [review R1](../testing/007-review-r1-2026-09-25.md) закрыты: независимое [review R2](../testing/007-review-r2-2026-09-25.md) на 832a6771 PASS (430 tests, 422 pass, 8 skips). По запросу пользователя подготовлена [тестовая поставка 007](../testing/007-portable-2026-09-25.md): 13 portable checks и ZIP/hash PASS. [Инструкция опыта](../testing/007-portable-retest.md) включена в комплект; пользователь выполняет большой live. CI/интеграция ещё впереди;
 установленный сервер не менялся. Точный native errno исходного сбоя пока неизвестен.
 
 [006](../tasks/006-shared-snapshot-reuse.md) принята через
