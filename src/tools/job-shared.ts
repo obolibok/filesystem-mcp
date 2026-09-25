@@ -42,6 +42,11 @@ const ErrorSampleSchema = z.strictObject({
   message: z.string(),
 });
 
+const FatalErrorSchema = ErrorSampleSchema.extend({
+  nativeErrorCode: z.string().optional(),
+  operation: z.string().optional(),
+});
+
 const ArtifactSummarySchema = z.strictObject({
   artifactId: z.string(),
   kind: z.enum(['manifest', 'snapshot-part', 'bundle-part']),
@@ -65,6 +70,7 @@ export const JobStatusOutputSchema = z.strictObject({
   resultExpired: z.boolean(),
   resultExpiresAt: IsoDateTime.optional(),
   stopReason: z.string().optional(),
+  fatalError: FatalErrorSchema.optional(),
   counters: z.union([SnapshotCountersSchema, BundleCountersSchema]),
   errors: z.array(ErrorSampleSchema),
   manifestArtifactId: z.string().optional(),
@@ -89,6 +95,7 @@ export function jobStatusValue(job: StoredJob<JobCounters>): JobStatusValue {
     resultExpired: job.resultExpired ?? false,
     ...(job.resultExpiresAt ? { resultExpiresAt: job.resultExpiresAt } : {}),
     ...(job.stopReason ? { stopReason: job.stopReason } : {}),
+    ...(job.fatalError ? { fatalError: { ...job.fatalError } } : {}),
     counters: { ...job.counters },
     errors: job.errors.map((error) => ({ ...error })),
     ...(job.manifestArtifactId ? { manifestArtifactId: job.manifestArtifactId } : {}),

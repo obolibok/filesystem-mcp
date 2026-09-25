@@ -49,6 +49,11 @@ export interface JobErrorSample {
   readonly message: string;
 }
 
+export interface JobFatalError extends JobErrorSample {
+  readonly nativeErrorCode?: string;
+  readonly operation?: string;
+}
+
 export interface StoredArtifact {
   readonly artifactId: string;
   readonly kind: 'manifest' | 'snapshot-part' | 'bundle-part';
@@ -87,6 +92,8 @@ export interface StoredJob<Counters extends JobCounters = SnapshotCounters> {
   resultExpiresAt?: string;
   resultExpired?: boolean;
   stopReason?: string;
+  /** Independent of the bounded error samples; present for failed jobs only. */
+  fatalError?: JobFatalError;
   complete: boolean;
   counters: Counters;
   errors: JobErrorSample[];

@@ -160,6 +160,29 @@ symlink/junction не разыменовываются. Manifest v1 фиксир
 policy, counters/errors/completeness и SHA-256/rows/raw/ZIP/base64 sizes частей.
 Snapshot не является атомарным filesystem snapshot: исчезновение/недоступность
 делает `complete=false`, но не скрывается как пустой успех.
+Отказы чтения отдельного дочернего файла, каталога, `.gitignore` или итератора
+каталога учитываются один раз и позволяют продолжить доступных соседей. Для
+native `ENOENT`/`ENOTDIR`/`EISDIR` и wrapped
+`NOT_FOUND`/`NOT_DIRECTORY`/`NOT_FILE` растёт
+`disappearedSkipped`; для `EACCES`/`EPERM`/`EBUSY` и соответствующих wrapped
+permission/известного native `EBUSY` растёт `inaccessibleSkipped`. Итерация
+с ошибкой прекращается только внутри затронутого каталога. Если файл после
+перечисления сменил тип на каталог, special или symlink, он не читается,
+сохраняет соответствующий `specialSkipped`/`symlinksSkipped` и одну error
+запись; snapshot становится неполным. Root, отказ policy,
+неизвестный IO, ENOSPC/EMFILE/ENFILE, лимиты, отмена, timeout и отказ
+scratch/ZIP не классифицируются как пропуск. `state=completed` с
+`complete=false` сохраняет manifest и готовые части, но не входит в
+автоматический ready reuse; клиенту нужно проверить оба поля. Отдельного
+state `partial` нет.
+
+У `state=failed` статус имеет optional `fatalError` независимо от первых 20
+`errors` samples: bounded `code`/`message`, допустимый source/scratch `path`,
+а при известной native cause — `nativeErrorCode` и `operation`. Поле
+сохраняется в job metadata и доступно после restart через `job_status` после
+обычной проверки доступа. `stopReason` остаётся прежним; cancelled и
+interrupted не получают выдуманный fatalError, timeout использует
+`TIMEOUT` без ложного пути. В `fatalError` не сериализуются stack и cause.
 Кэш уникальных путей внутри `ignore` ограничен периодическим созданием нового matcher
 из уже скомпилированных rules; nested patterns и negation сохраняются. Walk depth —
 жёсткий policy cap и приводит к `failed`, а не к partial completed результату.

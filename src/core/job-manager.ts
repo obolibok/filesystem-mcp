@@ -12,7 +12,7 @@ import {
   unlink,
   writeFile,
 } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { ErrorCode, formatUnknownErrorMessage, FsError, isNodeError } from './errors.js';
@@ -20,6 +20,7 @@ import type { GuardedFileSystem } from './fs.js';
 import type {
   JobCounters,
   JobErrorSample,
+  JobFatalError,
   SnapshotCounters,
   StoredArtifact,
   StoredJob,
@@ -35,6 +36,7 @@ import { getMaxTextFileSize } from './util.js';
 const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const MAX_ERROR_SAMPLES = 20;
 const MAX_ERROR_MESSAGE = 512;
+const MAX_ERROR_PATH = 1024;
 const METADATA_RENAME_ATTEMPTS = 8;
 const MAX_KEY_BINDINGS_PER_JOB = 1024;
 const OWNED_ARTIFACT_FILE_RE =
@@ -96,15 +98,105 @@ function isJobRunning(job: StoredJob<JobCounters>): boolean {
   return job.state === 'running';
 }
 
-function safeErrorSample(error: unknown, path?: string): JobErrorSample {
-  const code =
-    error instanceof FsError
-      ? error.code
-      : isNodeError(error) && error.code
-        ? error.code
-        : ErrorCode.UNKNOWN;
-  const message = formatUnknownErrorMessage(error).slice(0, MAX_ERROR_MESSAGE);
-  return { code, message, ...(path ? { path } : {}) };
+function nativeError(error: unknown): NodeJS.ErrnoException | undefined {
+  const visited = new Set<unknown>();
+  let current = error;
+  for (let depth = 0; depth < 4 && current instanceof Error && !visited.has(current); depth += 1) {
+    visited.add(current);
+    if (
+      !(current instanceof FsError) &&
+      isNodeError(current) &&
+      /^E[A-Z]{2,20}$/u.test(current.code ?? '')
+    ) {
+      return current;
+    }
+    current = current.cause;
+  }
+  return undefined;
+}
+
+function safeDiagnosticPath(
+  error: unknown,
+  job: StoredJob<JobCounters>,
+  scratchDirectory: string,
+  explicitPath?: string,
+): string | undefined {
+  const native = nativeError(error);
+  const candidates = [
+    explicitPath,
+    error instanceof FsError ? error.problem.path : undefined,
+    native?.path,
+  ];
+  for (const candidate of candidates) {
+    if (
+      typeof candidate !== 'string' ||
+      candidate.length > MAX_ERROR_PATH ||
+      !isAbsolute(candidate)
+    )
+      continue;
+    const normalized = resolve(candidate);
+    if (
+      isPathInsideDirectory(job.sourceRoot, normalized) ||
+      isPathInsideDirectory(scratchDirectory, normalized)
+    )
+      return normalized;
+  }
+  return undefined;
+}
+
+function safeDiagnosticMessage(error: unknown, code: string): string {
+  // Error.message may contain an arbitrary path, URL, or credential. Expose
+  // only fixed text; stopReason retains its existing contract.
+  if (error instanceof FsError && error.message === 'Cannot access path')
+    return 'Cannot access path';
+  if (error instanceof FsError && error.message === 'Path not found') return 'Path not found';
+  switch (code) {
+    case ErrorCode.TOO_LARGE:
+      return 'Configured limit exceeded';
+    case ErrorCode.NOT_FILE:
+      return 'Path is not a file';
+    case ErrorCode.NOT_DIRECTORY:
+      return 'Path is not a directory';
+    case ErrorCode.PERMISSION_DENIED:
+    case 'EACCES':
+    case 'EPERM':
+      return 'Permission denied';
+    default:
+      return 'Job failed';
+  }
+}
+
+function safeDiagnostic(
+  error: unknown,
+  job: StoredJob<JobCounters>,
+  scratchDirectory: string,
+  explicitPath?: string,
+): JobFatalError {
+  const native = nativeError(error);
+  const code = error instanceof FsError ? error.code : (native?.code ?? ErrorCode.UNKNOWN);
+  const message = safeDiagnosticMessage(error, code);
+  const path = safeDiagnosticPath(error, job, scratchDirectory, explicitPath);
+  const nativeErrorCode = native?.code;
+  const operation = native?.syscall;
+  return {
+    code: code.slice(0, 64),
+    message: message.slice(0, MAX_ERROR_MESSAGE),
+    ...(path ? { path } : {}),
+    ...(nativeErrorCode ? { nativeErrorCode } : {}),
+    ...(typeof operation === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,31}$/u.test(operation)
+      ? { operation }
+      : {}),
+  };
+}
+
+function safeErrorSample(
+  error: unknown,
+  job: StoredJob<JobCounters>,
+  scratchDirectory: string,
+  path?: string,
+): JobErrorSample {
+  const { code, message, path: safePath } = safeDiagnostic(error, job, scratchDirectory, path);
+  return { code, message, ...(safePath ? { path: safePath } : {}) };
 }
 
 async function replaceMetadataFile(temp: string, destination: string): Promise<void> {
@@ -181,7 +273,9 @@ export class JobRunContext<Counters extends JobCounters = JobCounters> {
     this.job.counters.errors += 1;
     this.job.complete = false;
     if (this.job.errors.length < MAX_ERROR_SAMPLES) {
-      this.job.errors.push(safeErrorSample(error, path));
+      this.job.errors.push(
+        safeErrorSample(error, this.job, this.manager.config.scratchDirectory, path),
+      );
     }
   }
 
@@ -709,6 +803,9 @@ export class ArtifactJobManager {
       job.phase = 'failed';
       job.complete = false;
       job.stopReason = timeout.aborted ? 'time-limit-exceeded' : formatUnknownErrorMessage(error);
+      job.fatalError = timeout.aborted
+        ? { code: ErrorCode.TIMEOUT, message: 'Job timed out' }
+        : safeDiagnostic(error, job, this.config.scratchDirectory);
       job.finishedAt = new Date(this.#now()).toISOString();
       ctx.addError(error);
       await this.#removeArtifacts(runtime);

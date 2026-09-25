@@ -6,7 +6,7 @@ export const JOB_STATUS = defineTool({
   name: 'job_status',
   title: 'Get Job Status',
   description:
-    'Return bounded status, exact counters, error samples, expiry, and artifact IDs for one durable background job. It never returns the inventory itself.',
+    'Return bounded status, exact counters, error samples, optional fatal error, expiry, and artifact IDs for one durable background job. It never returns the inventory itself.',
   input: JobIdInputSchema,
   output: JobStatusOutputSchema,
   annotations: {
