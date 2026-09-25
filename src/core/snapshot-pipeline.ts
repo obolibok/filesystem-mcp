@@ -135,6 +135,15 @@ function isDefaultIgnored(entry: Dirent): boolean {
 
 function isRecoverableWalkError(error: unknown): boolean {
   if (error instanceof FsError) {
+    // PathGuard's sensitive-file denylist is a per-child exclusion. Other
+    // ACCESS_DENIED errors (root policy, containment, unsafe aliases) remain
+    // fatal, and the caller still never reads the denied child.
+    if (error.code === ErrorCode.ACCESS_DENIED) {
+      return (
+        error.cause === undefined &&
+        error.message === 'Sensitive file blocked. Set ALLOW_SENSITIVE=1 to override.'
+      );
+    }
     const nativeCause = error.cause;
     const nativeCode = isNodeError(nativeCause) ? nativeCause.code : undefined;
     if (

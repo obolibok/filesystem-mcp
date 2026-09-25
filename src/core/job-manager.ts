@@ -273,9 +273,7 @@ export class JobRunContext<Counters extends JobCounters = JobCounters> {
     this.job.counters.errors += 1;
     this.job.complete = false;
     if (this.job.errors.length < MAX_ERROR_SAMPLES) {
-      this.job.errors.push(
-        safeErrorSample(error, this.job, this.manager.config.scratchDirectory, path),
-      );
+      this.job.errors.push(safeErrorSample(error, this.job, this.manager.scratchDirectory, path));
     }
   }
 
@@ -347,6 +345,10 @@ export class ArtifactJobManager {
     this.#afterArtifactRename = deps.afterArtifactRename;
     this.#now = deps.now ?? Date.now;
     this.#statArtifact = deps.statArtifact ?? lstat;
+  }
+
+  get scratchDirectory(): string {
+    return this.#scratchDirectory;
   }
 
   async initialize(): Promise<void> {
@@ -805,7 +807,7 @@ export class ArtifactJobManager {
       job.stopReason = timeout.aborted ? 'time-limit-exceeded' : formatUnknownErrorMessage(error);
       job.fatalError = timeout.aborted
         ? { code: ErrorCode.TIMEOUT, message: 'Job timed out' }
-        : safeDiagnostic(error, job, this.config.scratchDirectory);
+        : safeDiagnostic(error, job, this.#scratchDirectory);
       job.finishedAt = new Date(this.#now()).toISOString();
       ctx.addError(error);
       await this.#removeArtifacts(runtime);

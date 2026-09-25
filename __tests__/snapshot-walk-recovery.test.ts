@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import type { Dir } from 'node:fs';
 import { mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
@@ -15,6 +16,7 @@ import { GuardedFileSystem } from '../src/core/fs.js';
 import { ArtifactJobManager, fingerprintJobInput } from '../src/core/job-manager.js';
 import type { StoredJob } from '../src/core/job-types.js';
 import { emptyBundleCounters } from '../src/core/job-types.js';
+import { isSamePath } from '../src/core/path-utils.js';
 import { getSnapshotConfig } from '../src/core/snapshot-config.js';
 import { runSnapshotPipeline } from '../src/core/snapshot-pipeline.js';
 import { JobStatusOutputSchema, jobStatusValue } from '../src/tools/job-shared.js';
@@ -56,6 +58,24 @@ function native(code: string, path: string): NodeJS.ErrnoException {
   return Object.assign(new Error(`synthetic ${code}`), { code, path, syscall: 'realpath' });
 }
 
+function windowsShortPath(path: string): string {
+  return execFileSync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      '$ErrorActionPreference = "Stop"; (New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:FSMCP_SHORT_PATH_TEST).ShortPath',
+    ],
+    {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 10_000,
+      env: { ...process.env, FSMCP_SHORT_PATH_TEST: path },
+    },
+  ).trim();
+}
+
 async function csvInZip(bytes: Buffer): Promise<string> {
   await verifySnapshotZip(bytes, false);
   return new Promise((resolve, reject) => {
@@ -94,6 +114,82 @@ async function snapshotPaths(
 }
 
 describe('snapshot walk recovery', () => {
+  it('skips a real sensitive child and still publishes both allowed neighbors', async () => {
+    const root = await realpath(await createTestRoot());
+    const scratch = await createTestRoot();
+    const sensitivePath = join(root, 'b.pem');
+    await writeFile(join(root, 'a.txt'), 'safe first');
+    await writeFile(sensitivePath, 'synthetic placeholder only');
+    await writeFile(join(root, 'z.txt'), 'safe last');
+    const guard = await makeGuard([root]);
+    assert.equal(guard.isSensitive(sensitivePath), true);
+    const fs = new GuardedFileSystem(guard);
+    await assert.rejects(
+      fs.statDetailed(sensitivePath),
+      (error: unknown) => error instanceof FsError && error.code === ErrorCode.ACCESS_DENIED,
+    );
+    const manager = new ArtifactJobManager({
+      ...getSnapshotConfig(),
+      scratchDirectory: scratch,
+      ephemeralScratch: false,
+    });
+    try {
+      const jobId = await submit(manager, fs, root);
+      const job = await terminal(manager, jobId, guard);
+      assert.equal(job.state, 'completed', job.stopReason);
+      assert.equal(job.complete, false);
+      assert.equal(job.counters.filesWritten, 2);
+      assert.equal(job.counters.inaccessibleSkipped, 1);
+      assert.equal(job.counters.errors, 1);
+      assert.equal(job.errors[0]?.code, ErrorCode.ACCESS_DENIED);
+      assert.equal(job.errors[0]?.path, sensitivePath);
+      assert.equal(job.artifacts.length, 2);
+      assert.deepEqual(await snapshotPaths(manager, job, guard), ['a.txt', 'z.txt']);
+    } finally {
+      await manager.close();
+      await rm(root, { recursive: true, force: true });
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a real guard scope change fatal during child stat', async () => {
+    const root = await realpath(await createTestRoot());
+    const scratch = await createTestRoot();
+    await writeFile(join(root, 'child.txt'), 'synthetic row');
+    const guard = await makeGuard([root]);
+    class NarrowingFs extends GuardedFileSystem {
+      override async statDetailed(
+        path: string,
+        options?: { signal?: AbortSignal },
+      ): ReturnType<GuardedFileSystem['statDetailed']> {
+        guard.initialize([]);
+        try {
+          return await super.statDetailed(path, options);
+        } finally {
+          // Restore the original guard so job_status can authorize the result.
+          guard.initialize([root]);
+        }
+      }
+    }
+    const manager = new ArtifactJobManager({
+      ...getSnapshotConfig(),
+      scratchDirectory: scratch,
+      ephemeralScratch: false,
+    });
+    try {
+      const jobId = await submit(manager, new NarrowingFs(guard), root);
+      const job = await terminal(manager, jobId, guard);
+      assert.equal(job.state, 'failed');
+      assert.equal(job.fatalError?.code, ErrorCode.ACCESS_DENIED);
+      assert.equal(job.counters.inaccessibleSkipped, 0);
+      assert.deepEqual(job.artifacts, []);
+    } finally {
+      await manager.close();
+      await rm(root, { recursive: true, force: true });
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+
   it('treats wrapped child permission faults like native faults and keeps later files', async () => {
     for (const [errno, wrapped, mapped] of [
       ['EACCES', false, ErrorCode.PERMISSION_DENIED],
@@ -377,6 +473,7 @@ describe('snapshot walk recovery', () => {
       'handles',
       'mismapped',
       'policy',
+      'policy-cause',
     ] as const) {
       const root = await realpath(await createTestRoot());
       const scratch = await createTestRoot();
@@ -436,6 +533,13 @@ describe('snapshot walk recovery', () => {
             );
           if (failure === 'policy')
             throw new FsError(ErrorCode.ACCESS_DENIED, 'Cannot access path', path);
+          if (failure === 'policy-cause')
+            throw new FsError(
+              ErrorCode.ACCESS_DENIED,
+              'Sensitive file blocked. Set ALLOW_SENSITIVE=1 to override.',
+              path,
+              native('ENOSPC', path),
+            );
           return super.statDetailed(path, options);
         }
       }
@@ -583,4 +687,85 @@ describe('snapshot walk recovery', () => {
       await rm(outside, { recursive: true, force: true });
     }
   });
+
+  it(
+    'retains canonical scratch paths with a real Windows 8.3 configuration',
+    { skip: process.platform !== 'win32' },
+    async (t) => {
+      const container = await realpath(await createTestRoot());
+      const source = join(container, 'source');
+      const scratch = join(container, 'snapshot scratch long name');
+      const outside = await realpath(await createTestRoot());
+      await mkdir(source);
+      await mkdir(scratch);
+      let manager: ArtifactJobManager | undefined;
+      try {
+        const configuredScratch = windowsShortPath(scratch);
+        if (isSamePath(configuredScratch, scratch)) {
+          t.skip('Windows filesystem does not provide an 8.3 short name');
+          return;
+        }
+        assert(isSamePath(await realpath(configuredScratch), scratch));
+        const guard = await makeGuard([source]);
+        manager = new ArtifactJobManager({
+          ...getSnapshotConfig(),
+          scratchDirectory: configuredScratch,
+          ephemeralScratch: false,
+        });
+        await manager.initialize();
+        assert(isSamePath(manager.scratchDirectory, scratch));
+        let failingPath: string | undefined;
+        const first = await manager.submit({
+          kind: 'snapshot',
+          idempotencyKey: '007-short-scratch',
+          fingerprint: fingerprintJobInput('007-short-scratch'),
+          sourceRoot: source,
+          sourceRootId: 'root-test',
+          input: {},
+          run: async (ctx) => {
+            failingPath = ctx.tempPath('csv');
+            const cause = Object.assign(new Error('synthetic ENOSPC'), {
+              code: 'ENOSPC',
+              path: failingPath,
+              syscall: 'write',
+            });
+            throw new FsError(ErrorCode.IO_ERROR, 'Cannot access path', failingPath, cause);
+          },
+        });
+        const failed = await terminal(manager, first.job.jobId, guard);
+        assert.equal(failed.state, 'failed');
+        assert(failingPath);
+        assert.equal(failed.fatalError?.path, failingPath);
+        assert.equal(failed.fatalError?.nativeErrorCode, 'ENOSPC');
+        assert.equal(failed.fatalError?.operation, 'write');
+        assert.equal(failed.errors[0]?.path, failingPath);
+
+        const outsidePath = join(outside, 'not-owned.csv');
+        const second = await manager.submit({
+          kind: 'snapshot',
+          idempotencyKey: '007-outside-scratch',
+          fingerprint: fingerprintJobInput('007-outside-scratch'),
+          sourceRoot: source,
+          sourceRootId: 'root-test',
+          input: {},
+          run: async () => {
+            throw new FsError(
+              ErrorCode.IO_ERROR,
+              'Cannot access path',
+              outsidePath,
+              native('ENOSPC', outsidePath),
+            );
+          },
+        });
+        const outsideFailure = await terminal(manager, second.job.jobId, guard);
+        assert.equal(outsideFailure.state, 'failed');
+        assert.equal(outsideFailure.fatalError?.path, undefined);
+        assert.equal(outsideFailure.errors[0]?.path, undefined);
+      } finally {
+        await manager?.close();
+        await rm(container, { recursive: true, force: true });
+        await rm(outside, { recursive: true, force: true });
+      }
+    },
+  );
 });
