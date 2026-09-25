@@ -144,7 +144,7 @@ describe('snapshot walk recovery', () => {
       assert.equal(job.errors[0]?.code, ErrorCode.ACCESS_DENIED);
       assert.equal(job.errors[0]?.path, sensitivePath);
       assert.equal(job.artifacts.length, 2);
-      assert.deepEqual(await snapshotPaths(manager, job, guard), ['a.txt', 'z.txt']);
+      assert.deepEqual((await snapshotPaths(manager, job, guard)).sort(), ['a.txt', 'z.txt']);
     } finally {
       await manager.close();
       await rm(root, { recursive: true, force: true });
@@ -275,15 +275,21 @@ describe('snapshot walk recovery', () => {
       await writeFile(join(root, `${String(index).padStart(3, '0')}.txt`), 'row');
     }
     const guard = await makeGuard([root]);
-    const fatalPath = join(root, '049.txt');
+    let fatalPath: string | undefined;
+    let statCalls = 0;
     class FaultingFs extends GuardedFileSystem {
       override async statDetailed(
         path: string,
         options?: { signal?: AbortSignal },
       ): ReturnType<GuardedFileSystem['statDetailed']> {
-        if (path === fatalPath)
+        // Directory enumeration order differs by filesystem. Inject by call
+        // position so 21 recoverable faults always precede the fatal one.
+        const position = statCalls++;
+        if (position === 49) {
+          fatalPath = path;
           throw new FsError(ErrorCode.IO_ERROR, 'Cannot access path', path, native('ENOSPC', path));
-        if (basename(path) >= '025.txt' && basename(path) <= '045.txt') {
+        }
+        if (position >= 25 && position <= 45) {
           throw new FsError(
             ErrorCode.PERMISSION_DENIED,
             'Cannot access path',
@@ -307,6 +313,8 @@ describe('snapshot walk recovery', () => {
       assert.equal(job.state, 'failed');
       assert.equal(job.errors.length, 20, job.stopReason);
       assert.equal(job.counters.errors, 22);
+      assert.equal(statCalls, 50);
+      assert(fatalPath);
       assert(job.counters.parts > 0, 'closed parts preceded the fatal fault');
       assert.deepEqual(job.artifacts, []);
       assert.deepEqual(job.fatalError, {
