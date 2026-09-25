@@ -16,7 +16,7 @@
 | 004-live     | [Живой bundle Windows/ChatGPT](../tasks/004-live-windows-chatgpt.md)                | done     | 004 review PASS   | Live и graceful teardown PASS; evidence принята и интегрирована в PR #5                                                           |
 | 004-portable | [Переносимый Windows-комплект](../tasks/004-portable-windows.md)                    | done     | 004               | Planning; local acceptance и полный check PASS; Node/tunnel, инструкции, roots/TTL                                                |
 | 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md)            | done     | 003, 004-portable | Принята через [PR #6](https://github.com/obolibok/filesystem-mcp/pull/6); review, live, CI и portable PASS                        |
-| 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md) | ready    | 006               | Реализация разрешена; GPT-6-Sol / Extra High; готовится отдельный worktree                                                        |
+| 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md) | active   | 006               | Передана приложению: GPT-6-Sol / Extra High, worktree 7799; первый ответ ожидается                                                |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006          | Планирование + пользователь                                                                                                       |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -31,7 +31,7 @@
 фатальной диагностики. [Triage](../testing/007-snapshot-failure-triage-2026-09-25.md)
 подтверждён synthetic reproduction и metadata установленного комплекта.
 Разрешена реализация [007](../tasks/007-snapshot-walk-recovery.md): исправление
-классификации и fatalError перед предметным опытом 005. Готовится запуск GPT-6-Sol / Extra High;
+классификации и fatalError перед предметным опытом 005. Задача передана GPT-6-Sol / Extra High в отдельный worktree;
 установленный сервер не менялся. Точный native errno исходного сбоя пока неизвестен.
 
 [006](../tasks/006-shared-snapshot-reuse.md) принята через
@@ -337,3 +337,19 @@ Pending ID выше сохраняется только как история з
 После каждой интеграции сохранять ссылку на принятый commit/PR, итог acceptance,
 актуальный reference и состояние зависимых задач. Новые coding-задачи начинать
 от принятого `main`; пересекающиеся изменения core назначать последовательно.
+
+## Передача 007, 25.09.2026
+
+Пользователь разрешил реализацию. Base checkpoint:
+`86b7eafc6be7f97cf1a0cdc013426c48ac402585`, опубликован в main до запуска.
+Приложению передан prompt с карточкой/triage, synthetic regressions, scope,
+проверками и handoff без изменения установленного сервера.
+
+Запрошенное название задачи: `007 - snapshot walk recovery`; модель `gpt-6-sol`,
+effort `xhigh`, проект SWB RAG Dev, environment=worktree. Приложение вернуло
+pending clientThreadId `client-new-thread:29a11d3c-8525-4016-926f-2566bd99966e`.
+Отдельный worktree `7799` создан на указанной базе; наличие карточки проверено.
+На момент передачи реальный threadId и первый ответ исполнителя ещё не доступны
+через список задач. Pending id не используется как threadId и повторный запуск
+не выполняется. После готовности исполнитель назначает рабочую ветку
+`codex/007-snapshot-walk-recovery` и ведёт Work record карточки.
