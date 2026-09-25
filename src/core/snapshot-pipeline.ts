@@ -135,18 +135,53 @@ function isDefaultIgnored(entry: Dirent): boolean {
 
 function isRecoverableWalkError(error: unknown): boolean {
   if (error instanceof FsError) {
-    return error.code === ErrorCode.NOT_FOUND || error.code === ErrorCode.ACCESS_DENIED;
+    // PathGuard's sensitive-file denylist is a per-child exclusion. Other
+    // ACCESS_DENIED errors (root policy, containment, unsafe aliases) remain
+    // fatal, and the caller still never reads the denied child.
+    if (error.code === ErrorCode.ACCESS_DENIED) {
+      return (
+        error.cause === undefined &&
+        error.message === 'Sensitive file blocked. Set ALLOW_SENSITIVE=1 to override.'
+      );
+    }
+    const nativeCause = error.cause;
+    const nativeCode = isNodeError(nativeCause) ? nativeCause.code : undefined;
+    if (
+      nativeCode &&
+      !['ENOENT', 'ENOTDIR', 'EISDIR', 'EACCES', 'EPERM', 'EBUSY'].includes(nativeCode)
+    ) {
+      return false;
+    }
+    if (
+      error.code === ErrorCode.NOT_FOUND ||
+      error.code === ErrorCode.NOT_DIRECTORY ||
+      error.code === ErrorCode.NOT_FILE ||
+      error.code === ErrorCode.PERMISSION_DENIED
+    )
+      return true;
+    if (error.code !== ErrorCode.IO_ERROR) return false;
+    // PathGuard preserves the native errno as a cause. A generic IO_ERROR is
+    // still fatal; only a known transient failure of this child is skippable.
+    return nativeCode === 'EBUSY';
   }
   return (
     isNodeError(error) &&
-    ['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM', 'EBUSY'].includes(error.code ?? '')
+    ['ENOENT', 'ENOTDIR', 'EISDIR', 'EACCES', 'EPERM', 'EBUSY'].includes(error.code ?? '')
   );
 }
 
 function classifyWalkError(ctx: JobRunContext, error: unknown, path: string): void {
+  ctx.signal.throwIfAborted();
   if (!isRecoverableWalkError(error)) throw error;
   const code = error instanceof FsError ? error.code : isNodeError(error) ? error.code : undefined;
-  if (code === ErrorCode.NOT_FOUND || code === 'ENOENT') {
+  if (
+    code === ErrorCode.NOT_FOUND ||
+    code === ErrorCode.NOT_DIRECTORY ||
+    code === ErrorCode.NOT_FILE ||
+    code === 'ENOENT' ||
+    code === 'ENOTDIR' ||
+    code === 'EISDIR'
+  ) {
     snapshotCounters(ctx).disappearedSkipped += 1;
   } else {
     snapshotCounters(ctx).inaccessibleSkipped += 1;
@@ -203,20 +238,30 @@ async function* walkSnapshotRecords(
         absoluteDirectory,
       );
     }
-    const localRule = options.includeIgnored
-      ? undefined
-      : await loadLocalIgnore(fs, absoluteDirectory, relativeDirectory, ctx);
-    const rules = localRule ? [...inheritedRules, localRule] : inheritedRules;
     let directory;
     try {
       ({ directory } = await fs.opendir(absoluteDirectory, { signal: ctx.signal }));
     } catch (error) {
+      if (relativeDirectory === '') throw error;
       classifyWalkError(ctx, error, absoluteDirectory);
       return;
     }
     snapshotCounters(ctx).directoriesVisited += 1;
     try {
-      for await (const entry of directory) {
+      const localRule = options.includeIgnored
+        ? undefined
+        : await loadLocalIgnore(fs, absoluteDirectory, relativeDirectory, ctx);
+      const rules = localRule ? [...inheritedRules, localRule] : inheritedRules;
+      for (;;) {
+        let entry;
+        try {
+          entry = await directory.read();
+        } catch (error) {
+          if (relativeDirectory === '') throw error;
+          classifyWalkError(ctx, error, absoluteDirectory);
+          return;
+        }
+        if (entry === null) break;
         ctx.signal.throwIfAborted();
         snapshotCounters(ctx).entriesSeen += 1;
         const absolutePath = join(absoluteDirectory, entry.name);
@@ -249,31 +294,42 @@ async function* walkSnapshotRecords(
           snapshotCounters(ctx).specialSkipped += 1;
           continue;
         }
+        let detail;
         try {
-          const detail = await fs.statDetailed(absolutePath, { signal: ctx.signal });
-          if (detail.isSymlink) {
-            snapshotCounters(ctx).symlinksSkipped += 1;
-            continue;
-          }
-          if (!detail.stats.isFile()) {
-            snapshotCounters(ctx).specialSkipped += 1;
-            continue;
-          }
-          yield {
-            rootId: ctx.job.sourceRootId,
-            relativePath,
-            name: entry.name,
-            extension: extname(entry.name),
-            length: detail.stats.size,
-            lastWriteTime: detail.stats.mtime.toISOString(),
-          };
+          detail = await fs.statDetailed(absolutePath, { signal: ctx.signal });
         } catch (error) {
           classifyWalkError(ctx, error, absolutePath);
+          continue;
         }
+        if (detail.isSymlink) {
+          snapshotCounters(ctx).symlinksSkipped += 1;
+          ctx.addError(
+            new FsError(
+              ErrorCode.NOT_FILE,
+              'File changed to symlink during snapshot',
+              absolutePath,
+            ),
+            absolutePath,
+          );
+          continue;
+        }
+        if (!detail.stats.isFile()) {
+          snapshotCounters(ctx).specialSkipped += 1;
+          ctx.addError(
+            new FsError(ErrorCode.NOT_FILE, 'File type changed during snapshot', absolutePath),
+            absolutePath,
+          );
+          continue;
+        }
+        yield {
+          rootId: ctx.job.sourceRootId,
+          relativePath,
+          name: entry.name,
+          extension: extname(entry.name),
+          length: detail.stats.size,
+          lastWriteTime: detail.stats.mtime.toISOString(),
+        };
       }
-    } catch (error) {
-      if (ctx.signal.aborted) throw error;
-      classifyWalkError(ctx, error, absoluteDirectory);
     } finally {
       await directory.close().catch(() => undefined);
     }

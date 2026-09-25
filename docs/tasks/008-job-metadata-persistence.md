@@ -72,23 +72,23 @@ getJob с интервалом 1 ms — наблюдалось completed и 730 
 
 ## Acceptance
 
-- [ ] Воспроизведение показано до fix; реальная Windows handle block 1500 ms
+- [x] Воспроизведение показано до fix; реальная Windows handle block 1500 ms
       после fix завершается без потери checkpoint/результата. Короткая и постоянная
       блокировки имеют отдельные tests и bounded ожидание.
-- [ ] Несколько status callers + частые checkpoint/terminal transitions:
+- [x] Несколько status callers + частые checkpoint/terminal transitions:
       корректные JSON/state/counters; нет stale overwrite, зависаний и утечек.
       Windows integration test и переносимые deterministic fault tests.
-- [ ] Ошибка terminal save и последующее восстановление проверены отдельно от
+- [x] Ошибка terminal save и последующее восстановление проверены отдельно от
       ошибки промежуточного checkpoint; durable state/fatalError после recovery
       и restart соответствуют контракту. Permanent failure честно диагностируется.
-- [ ] Cancel/timeout/close остаются ограниченными по времени; retry не записывает
+- [x] Cancel/timeout/close остаются ограниченными по времени; retry не записывает
       позднее completed поверх cancelled/interrupted. Non-transient ошибки не
       маскируются, scratch quota и cleanup учтены.
-- [ ] Non-fatal ACCESS_DENIED больше не говорит Job failed; native diagnostics,
+- [x] Non-fatal ACCESS_DENIED больше не говорит Job failed; native diagnostics,
       safe path bounds и bundle/legacy контракты сохранены.
-- [ ] Полный npm run check и meaningful stress; записаны длительности, retries,
+- [x] Полный npm run check и meaningful stress; записаны длительности, retries,
       platform skips и границы доказательств. Production данные не нужны.
-- [ ] Reference и work record объясняют recovery window, terminal persist failure,
+- [x] Reference и work record объясняют recovery window, terminal persist failure,
       close/restart и ограничения. Центральный статус ведёт планирование.
 
 ## Передача после назначения
@@ -101,5 +101,67 @@ Push/PR/merge, live и новая поставка остаются у план�
 
 ## Work record
 
-Не начато. Triage и synthetic reproduction выполнены планированием;
-реализация разрешена, запуск исполнителя ведёт планирование.
+Ready for review. Исполнитель использовал созданный приложением worktree. HEAD при
+старте был detached `2f993a60371b7ce218a0f59b4cf06d5201fe9190` (main с
+актуальной карточкой, без runtime 007). Создана ветка
+`codex/008-job-metadata-persistence`; сделан только в ней `merge --ff-only`
+подготовленного checkpoint `5028c06c352d6e2753e577b8f0a16396c6bdbedb`.
+Начальная `git diff --name-status` от reviewed runtime
+`832a6771cd3938947c24329b6d06a512bf5605db` была пуста для `src`,
+`__tests__`, `scripts`, `package.json`, `package-lock.json`, `server.json`.
+Планирование и main не менялись.
+
+До fix новый независимый Windows test открыл synthetic `job.json` отдельным
+PowerShell-процессом с `FileAccess.Read + FileShare.ReadWrite` без Delete на
+1500 ms. На исходном коде получен `EPERM` при rename; live job стала `failed`,
+terminal persist тоже отказал. Тест завершился fail (`Timed out waiting for
+completed; got failed`, 13,86 s). Node/tsx под sandbox identity не запускался
+из-за `uv_os_get_passwd ENOMEM`, поэтому этот и последующие test/check команды
+выполнены локально с повышенным sandbox permission, без доступа к production.
+
+Решение: metadata replacement сохраняет atomic rename и прежний destination;
+для transient `EPERM`/`EACCES`/`EBUSY` retry ограничен 2500 ms на запись.
+Checkpoint retry принимает worker signal и завершается при cancel/timeout/close.
+После первого transient отказа terminal write получает второе окно 2500 ms;
+итого recovery до примерно 5 секунд. Terminal writers одной job сериализованы,
+старые checkpoint не могут перезаписать более поздний terminal state.
+Nontransient ошибки сразу прекращают retry. Новые durable sidecar файлы не нужны:
+старый `job.json` остаётся пригодным для startup; metadata-temp ограничен quota,
+удаляется после отказа, а неудачное удаление учитывается как orphan.
+
+При исчерпании terminal recovery живой status получает optional
+`metadataPersistence` (`recovering`/`failed` и безопасную bounded native
+диагностику), и ошибка попадает в server log. Поле не пишется в `job.json`;
+успешное восстановление убирает его. Если запись физически недоступна,
+после close/restart последний durable `running`/`queued` становится
+`interrupted` с `server-restarted`; несохранённый fatalError не выдумывается.
+Дополнительного изменения state machine или metadata schema v1 нет.
+Non-fatal `ACCESS_DENIED` sample теперь получает фиксированное
+`Permission denied`, сохраняет code/counters/path и не объявляет всю job failed.
+
+Целевой набор после fix: 11/11 PASS на Windows/Node 24.15.0, 12,25 s.
+Реальный handle 50 ms и 1500 ms: durable `completed`, checkpoint и counters
+сохранены; handle 6500 ms: bounded live `metadataPersistence.failed`, durable
+остаётся `running`, restart переводит в `interrupted`. Fault injection отдельно
+проверил terminal-only failure/recovery/fatalError/restart, permanent EIO и EPERM,
+500 checkpoints с четырьмя параллельными частыми status callers, cancel,
+timeout, close, nontransient checkpoint, quota и отсутствие metadata-temp после
+отказа. В stress 500 checkpoints завершились за 0,75 s; прямой непрерывный
+test read `job.json` исключён из status stress, потому что сам создаёт Windows
+read handle. Platform skips целевого Windows набора: 0.
+
+Полный `npm run check` на Windows: build/type-check/type-check:test/eslint/
+prettier/knip PASS; Node suite 441 tests, 433 PASS, 0 FAIL, 8 platform skips,
+39,14 s на окончательном коде. Первые два прохода нашли и исправили соответственно лишний exported
+type (Knip) и несовместимое изменение общего fatal `IO_ERROR` message в
+существующем test 007. Итоговый fatal fallback `Job failed` сохранён;
+non-fatal `ACCESS_DENIED` исправлен отдельно. Количество попыток зависит от
+времени, а не фиксировано: nontransient fault дал одну попытку, постоянный
+synthetic transient — несколько попыток и ограниченное окно 100+150 ms в тесте;
+production окна составляют 2500+2500 ms.
+Остаточный риск: источник production lock неизвестен. Недоступный дольше 5 s
+destination и постоянный отказ диска не могут получить гарантию durable terminal
+state; restart показывает только последнее успешное metadata. Окно ограничивает
+ожидание между filesystem attempts, не зависший syscall. Большой production walk,
+installed kit и облачный маршрут не проверялись в этой задаче; это остаётся у
+планирования после review.

@@ -239,7 +239,7 @@ All tools are scoped to the configured roots. Call `list_roots` first to discove
 | :------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `snapshot`     | Reuse a fresh completed metadata inventory or join a matching queued/running job for one guarded directory; otherwise start a background scan.                            |
 | `bundle`       | Submit a background capture of one explicit bounded set of relative file paths under one guarded directory; no globbing or recursive directory expansion.                 |
-| `job_status`   | Poll bounded progress, counters, errors, expiry, and artifact IDs for a snapshot or bundle job.                                                                           |
+| `job_status`   | Poll bounded progress, counters, error samples, optional fatal error, expiry, and artifact IDs for a snapshot or bundle job.                                              |
 | `cancel_job`   | Cancel queued/running work and discard incomplete artifacts; source files are not changed.                                                                                |
 | `get_artifact` | Return one immutable manifest or independent ZIP part as an MCP embedded resource plus resource link; current source policy and delivery limits are checked on each call. |
 
@@ -260,6 +260,15 @@ starts another scan. A shared job has one cancellation state: `cancel_job` stops
 for every client, while closing one client does not stop it. Sharing is limited to
 one server process and its scratch directory; independent processes and machines
 do not share workers or results. `bundle` still requires `idempotencyKey`.
+
+Check both `state` and `complete` after polling. A snapshot can finish as
+`state: "completed", complete: false` when individual child paths were
+unavailable; its manifest and finished ZIP parts remain fetchable, while a
+future normal snapshot request starts a fresh scan. A failed job has an
+optional `fatalError` separate from the first 20 `errors` samples. It carries
+bounded code/message and, when known and safe, path, native error code and
+operation. Cancellation and interruption use their existing state and
+`stopReason`; a timeout failure reports `fatalError.code: "TIMEOUT"`.
 
 #### Write
 

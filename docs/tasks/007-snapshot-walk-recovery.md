@@ -85,4 +85,71 @@ triage и parallel-work workflow. В изолированном worktree вос�
 
 ## Work record
 
-Реализация не начата. Планирование подтвердило synthetic reproduction на 14a8ea0e.
+Ready for review. База `86b7eafc6be7f97cf1a0cdc013426c48ac402585`,
+ветка `codex/007-snapshot-walk-recovery` в выделенном worktree приложения;
+итоговый HEAD — локальный checkpoint этой ветки (SHA в handoff). Перед правкой
+working tree был чистым. `npm ci` установлен только в этом worktree.
+
+Решение: walker открывает каталог до чтения `.gitignore`, чтобы отказ самого
+каталога не дал два samples; ошибки `Dir.read` ловятся только на границе
+текущего каталога, а stat только на границе файла. Поэтому отказ дочернего
+пути прекращает затронутый каталог/файл, но не соседние ветви; ошибки
+producer/ZIP не попадают в этот catch. Native и wrapped EACCES/EPERM,
+ENOENT/ENOTDIR/EISDIR, NOT_FILE и известный EBUSY cause дают counters и
+`completed, complete=false`. Generic IO_ERROR, UNKNOWN, policy denial,
+ENOSPC/EMFILE/ENFILE, root, лимиты и storage остаются fatal. Symlink policy,
+PathGuard/GuardedFileSystem и cleanup не менялись.
+
+Повторное review `aca33f39` обнаружило два пропуска. R1: штатный
+`FsError(ACCESS_DENIED)` от sensitive child по ошибке стал fatal. Теперь
+только точный отказ sensitive denylist без native cause остаётся child skip;
+остальные ACCESS_DENIED (включая сужение root/policy и неизвестный cause)
+fatal. Регрессия использует настоящий PathGuard/GuardedFileSystem и
+неопасный placeholder `.pem`, проверяет запрет чтения, обе соседние записи и
+готовые artifacts; отдельная регрессия на реальном сужении PathGuard во
+время child stat подтверждает fatal. R2: diagnostic path сравнивался с short configured
+scratch вместо canonical manager scratch. Контекст и fatal catch теперь
+используют один canonical path. Реальный Windows 8.3 test подтверждает
+`fatalError.path` и sample path для `ctx.tempPath` с native ENOSPC/write,
+а путь вне source/scratch по-прежнему не выдаётся.
+
+Общий job contract расширен optional `fatalError` для `failed`: bounded
+`code/message`, достоверный допустимый path и native code/operation при
+наличии. Он хранится независимо от 20 samples и переживает restart;
+samples также извлекают FsError path. Поля ограничены по размеру и не
+копируют произвольные message, stack или cause. Timeout имеет
+`fatalError.code=TIMEOUT` без придуманного пути; cancelled/interrupted
+остаются со своим state/stopReason без fatalError. Старые job JSON без поля
+читаются. `stopReason` и bundle contract сохранены. Новый partial state,
+TTL/quota/cleanup и выдача artifacts после настоящего fatal не вводились.
+
+До fix отдельный synthetic test показал wrapped EACCES → `failed` и
+остановку серии отказов на первом sample. После fix:
+
+- `node --test --import tsx __tests__/snapshot-walk-recovery.test.ts`:
+  10/10 PASS; raw/wrapped errno, real sensitive child, сужение PathGuard и
+  Windows 8.3 scratch,
+  дочерние file/dir/ignore/iteration,
+  смена типа после перечисления без повторного счёта counters, продолжение
+  соседей, SHA-256/CRC/CSV, root/policy/resource failures,
+  > 20 samples, status/metadata/restart, incomplete ready reuse и bundle/legacy.
+- `npm run check:static`: PASS (build, production/test types, ESLint,
+  Prettier, Knip).
+- Финальный `npm run check`: PASS, 430 tests, 422 pass, 0 fail, 8 skips.
+  Skips относятся к POSIX FIFO/inode/mode и недоступным Windows file symlink
+  checks. Windows 8.3 source/scratch/ancestor, MCP wire schema и
+  `TOOL-SURFACE-002` budget прошли. Первый полный прогон нашёл гонку
+  только в новом persistence assertion: тест читал `job.json` до финального
+  persist worker; тест исправлен ожиданием `manager.close()`, затем весь
+  check повторён с PASS. В ограниченном sandbox tsx не стартовал из-за
+  `uv_os_get_passwd ENOMEM`; тесты выполнялись разрешённым запуском.
+
+После code review планирование проверяет CI, собирает новую переносимую
+версию и проводит отдельный live опыт. Протокол: подтвердить source commit
+установленного сервера и непрерывность того же процесса/scratch, повторить
+обход с новым retry key, сохранить обезличенные state/complete/counters и
+fatal code/nativeErrorCode/operation. При `completed` проверить manifest,
+количество строк, SHA/CRC и выдачу всех ZIP частей, включая записи после
+пропусков; при `failed` сверить fatalError независимо от samples. Исходный
+нативный отказ пользовательского диска всё ещё неизвестен. Личные пути,
+inventory, ZIP и credentials остаются вне Git.

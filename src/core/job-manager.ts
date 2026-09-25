@@ -12,7 +12,7 @@ import {
   unlink,
   writeFile,
 } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { ErrorCode, formatUnknownErrorMessage, FsError, isNodeError } from './errors.js';
@@ -20,6 +20,7 @@ import type { GuardedFileSystem } from './fs.js';
 import type {
   JobCounters,
   JobErrorSample,
+  JobFatalError,
   SnapshotCounters,
   StoredArtifact,
   StoredJob,
@@ -35,7 +36,9 @@ import { getMaxTextFileSize } from './util.js';
 const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const MAX_ERROR_SAMPLES = 20;
 const MAX_ERROR_MESSAGE = 512;
-const METADATA_RENAME_ATTEMPTS = 8;
+const MAX_ERROR_PATH = 1024;
+const METADATA_RETRY_WINDOW_MS = 2_500;
+const TERMINAL_RECOVERY_WINDOW_MS = 2_500;
 const MAX_KEY_BINDINGS_PER_JOB = 1024;
 const OWNED_ARTIFACT_FILE_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(?:json|zip)$/u;
@@ -80,6 +83,9 @@ interface RuntimeJob {
 
 interface ArtifactJobManagerDeps {
   readonly now?: () => number;
+  readonly renameMetadata?: (temp: string, destination: string) => Promise<void>;
+  readonly metadataRetryWindowMs?: number;
+  readonly terminalRecoveryWindowMs?: number;
   readonly statArtifact?: (path: string) => Promise<Stats>;
   readonly readArtifact?: (path: string) => Promise<Buffer>;
   readonly unlinkFile?: (path: string) => Promise<void>;
@@ -96,28 +102,135 @@ function isJobRunning(job: StoredJob<JobCounters>): boolean {
   return job.state === 'running';
 }
 
-function safeErrorSample(error: unknown, path?: string): JobErrorSample {
-  const code =
-    error instanceof FsError
-      ? error.code
-      : isNodeError(error) && error.code
-        ? error.code
-        : ErrorCode.UNKNOWN;
-  const message = formatUnknownErrorMessage(error).slice(0, MAX_ERROR_MESSAGE);
-  return { code, message, ...(path ? { path } : {}) };
+function nativeError(error: unknown): NodeJS.ErrnoException | undefined {
+  const visited = new Set<unknown>();
+  let current = error;
+  for (let depth = 0; depth < 4 && current instanceof Error && !visited.has(current); depth += 1) {
+    visited.add(current);
+    if (
+      !(current instanceof FsError) &&
+      isNodeError(current) &&
+      /^E[A-Z]{2,20}$/u.test(current.code ?? '')
+    ) {
+      return current;
+    }
+    current = current.cause;
+  }
+  return undefined;
 }
 
-async function replaceMetadataFile(temp: string, destination: string): Promise<void> {
+function safeDiagnosticPath(
+  error: unknown,
+  job: StoredJob<JobCounters>,
+  scratchDirectory: string,
+  explicitPath?: string,
+): string | undefined {
+  const native = nativeError(error);
+  const candidates = [
+    explicitPath,
+    error instanceof FsError ? error.problem.path : undefined,
+    native?.path,
+  ];
+  for (const candidate of candidates) {
+    if (
+      typeof candidate !== 'string' ||
+      candidate.length > MAX_ERROR_PATH ||
+      !isAbsolute(candidate)
+    )
+      continue;
+    const normalized = resolve(candidate);
+    if (
+      isPathInsideDirectory(job.sourceRoot, normalized) ||
+      isPathInsideDirectory(scratchDirectory, normalized)
+    )
+      return normalized;
+  }
+  return undefined;
+}
+
+function safeDiagnosticMessage(error: unknown, code: string): string {
+  // Error.message may contain an arbitrary path, URL, or credential. Expose
+  // only fixed text; stopReason retains its existing contract.
+  if (error instanceof FsError && error.message === 'Cannot access path')
+    return 'Cannot access path';
+  if (error instanceof FsError && error.message === 'Path not found') return 'Path not found';
+  switch (code) {
+    case ErrorCode.TOO_LARGE:
+      return 'Configured limit exceeded';
+    case ErrorCode.NOT_FILE:
+      return 'Path is not a file';
+    case ErrorCode.NOT_DIRECTORY:
+      return 'Path is not a directory';
+    case ErrorCode.PERMISSION_DENIED:
+    case ErrorCode.ACCESS_DENIED:
+    case 'EACCES':
+    case 'EPERM':
+      return 'Permission denied';
+    case ErrorCode.NOT_FOUND:
+      return 'Path not found';
+    default:
+      return 'Job failed';
+  }
+}
+
+function safeDiagnostic(
+  error: unknown,
+  job: StoredJob<JobCounters>,
+  scratchDirectory: string,
+  explicitPath?: string,
+): JobFatalError {
+  const native = nativeError(error);
+  const code = error instanceof FsError ? error.code : (native?.code ?? ErrorCode.UNKNOWN);
+  const message = safeDiagnosticMessage(error, code);
+  const path = safeDiagnosticPath(error, job, scratchDirectory, explicitPath);
+  const nativeErrorCode = native?.code;
+  const operation = native?.syscall;
+  return {
+    code: code.slice(0, 64),
+    message: message.slice(0, MAX_ERROR_MESSAGE),
+    ...(path ? { path } : {}),
+    ...(nativeErrorCode ? { nativeErrorCode } : {}),
+    ...(typeof operation === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,31}$/u.test(operation)
+      ? { operation }
+      : {}),
+  };
+}
+
+function safeErrorSample(
+  error: unknown,
+  job: StoredJob<JobCounters>,
+  scratchDirectory: string,
+  path?: string,
+): JobErrorSample {
+  const { code, message, path: safePath } = safeDiagnostic(error, job, scratchDirectory, path);
+  return { code, message, ...(safePath ? { path: safePath } : {}) };
+}
+
+function isTransientMetadataError(error: unknown): boolean {
+  return (
+    isNodeError(error) &&
+    error.syscall === 'rename' &&
+    (error.code === 'EPERM' || error.code === 'EACCES' || error.code === 'EBUSY')
+  );
+}
+
+async function replaceMetadataFile(
+  temp: string,
+  destination: string,
+  retryWindowMs: number,
+  renameMetadata: (temp: string, destination: string) => Promise<void>,
+  signal?: AbortSignal,
+): Promise<void> {
+  const deadline = performance.now() + retryWindowMs;
   for (let attempt = 1; ; attempt += 1) {
+    signal?.throwIfAborted();
     try {
-      await rename(temp, destination);
+      await renameMetadata(temp, destination);
       return;
     } catch (error) {
-      const transient =
-        isNodeError(error) &&
-        (error.code === 'EPERM' || error.code === 'EACCES' || error.code === 'EBUSY');
-      if (!transient || attempt >= METADATA_RENAME_ATTEMPTS) throw error;
-      await delay(attempt * 10);
+      const remaining = deadline - performance.now();
+      if (!isTransientMetadataError(error) || remaining <= 0) throw error;
+      await delay(Math.min(25 * attempt, 200, remaining), undefined, { signal });
     }
   }
 }
@@ -170,18 +283,20 @@ export class JobRunContext<Counters extends JobCounters = JobCounters> {
     this.signal.throwIfAborted();
     if (this.job.state !== 'running') throw this.signal.reason;
     this.job.phase = phase;
-    await this.manager.persist(this.job);
+    await this.manager.persist(this.job, this.signal);
   }
 
   async checkpoint(): Promise<void> {
-    await this.manager.persist(this.job);
+    this.signal.throwIfAborted();
+    if (this.job.state !== 'running') throw this.signal.reason;
+    await this.manager.persist(this.job, this.signal);
   }
 
   addError(error: unknown, path?: string): void {
     this.job.counters.errors += 1;
     this.job.complete = false;
     if (this.job.errors.length < MAX_ERROR_SAMPLES) {
-      this.job.errors.push(safeErrorSample(error, path));
+      this.job.errors.push(safeErrorSample(error, this.job, this.manager.scratchDirectory, path));
     }
   }
 
@@ -219,6 +334,9 @@ export class JobRunContext<Counters extends JobCounters = JobCounters> {
 export class ArtifactJobManager {
   readonly config: SnapshotConfig;
   readonly #readArtifact: (path: string) => Promise<Buffer>;
+  readonly #renameMetadata: (temp: string, destination: string) => Promise<void>;
+  readonly #metadataRetryWindowMs: number;
+  readonly #terminalRecoveryWindowMs: number;
   readonly #unlinkFile: (path: string) => Promise<void>;
   readonly #beforeArtifactRename: ((job: StoredJob<JobCounters>) => Promise<void>) | undefined;
   readonly #afterArtifactRename: ((job: StoredJob<JobCounters>) => Promise<void>) | undefined;
@@ -230,6 +348,7 @@ export class ArtifactJobManager {
   readonly #artifactBytes = new Map<string, number>();
   readonly #orphanBytes = new Map<string, number>();
   readonly #persistChains = new Map<string, Promise<void>>();
+  readonly #terminalChains = new Map<string, Promise<void>>();
   readonly #artifactRemovalChains = new Map<string, Promise<void>>();
   readonly #lifecycleChains = new Map<string, Promise<void>>();
   readonly #activeReads = new Map<string, number>();
@@ -248,11 +367,18 @@ export class ArtifactJobManager {
     this.config = config;
     this.#scratchDirectory = resolve(config.scratchDirectory);
     this.#readArtifact = deps.readArtifact ?? (async (path) => readFile(path));
+    this.#renameMetadata = deps.renameMetadata ?? rename;
+    this.#metadataRetryWindowMs = deps.metadataRetryWindowMs ?? METADATA_RETRY_WINDOW_MS;
+    this.#terminalRecoveryWindowMs = deps.terminalRecoveryWindowMs ?? TERMINAL_RECOVERY_WINDOW_MS;
     this.#unlinkFile = deps.unlinkFile ?? unlink;
     this.#beforeArtifactRename = deps.beforeArtifactRename;
     this.#afterArtifactRename = deps.afterArtifactRename;
     this.#now = deps.now ?? Date.now;
     this.#statArtifact = deps.statArtifact ?? lstat;
+  }
+
+  get scratchDirectory(): string {
+    return this.#scratchDirectory;
   }
 
   async initialize(): Promise<void> {
@@ -585,6 +711,7 @@ export class ArtifactJobManager {
           return (
             job.state === 'completed' &&
             job.complete &&
+            !job.metadataPersistence &&
             request.maxAgeMs > 0 &&
             !job.resultExpired &&
             Number.isFinite(started) &&
@@ -616,6 +743,7 @@ export class ArtifactJobManager {
         (job) =>
           job.state === 'completed' &&
           job.complete &&
+          !job.metadataPersistence &&
           !job.resultExpired &&
           now < Date.parse(job.resultExpiresAt ?? '') &&
           now - Date.parse(job.startedAt ?? '') <= request.maxAgeMs,
@@ -656,7 +784,9 @@ export class ArtifactJobManager {
       );
       if (!stored?.isFile() || stored.size !== artifact.size) return false;
     }
-    return job.state === 'completed' && job.complete && !job.resultExpired;
+    return (
+      job.state === 'completed' && job.complete && !job.metadataPersistence && !job.resultExpired
+    );
   }
 
   #pump(): void {
@@ -709,12 +839,15 @@ export class ArtifactJobManager {
       job.phase = 'failed';
       job.complete = false;
       job.stopReason = timeout.aborted ? 'time-limit-exceeded' : formatUnknownErrorMessage(error);
+      job.fatalError = timeout.aborted
+        ? { code: ErrorCode.TIMEOUT, message: 'Job timed out' }
+        : safeDiagnostic(error, job, this.#scratchDirectory);
       job.finishedAt = new Date(this.#now()).toISOString();
       ctx.addError(error);
       await this.#removeArtifacts(runtime);
     } finally {
       await this.#removePartials(runtime);
-      await this.persist(job);
+      await this.#persistTerminal(job);
     }
   }
 
@@ -744,7 +877,7 @@ export class ArtifactJobManager {
     job.finishedAt = new Date(this.#now()).toISOString();
     runtime.abortController.abort(new Error('Job cancelled'));
     await this.#removeArtifacts(runtime);
-    await this.persist(job);
+    await this.#persistTerminal(job);
     return job;
   }
 
@@ -859,9 +992,13 @@ export class ArtifactJobManager {
     return artifact;
   }
 
-  async persist(job: StoredJob<JobCounters>): Promise<void> {
+  async persist(
+    job: StoredJob<JobCounters>,
+    signal?: AbortSignal,
+    retryWindowMs = this.#metadataRetryWindowMs,
+  ): Promise<void> {
     const previous = this.#persistChains.get(job.jobId) ?? Promise.resolve();
-    const next = previous.then(() => this.#persistNow(job));
+    const next = previous.then(() => this.#persistNow(job, retryWindowMs, signal));
     this.#persistChains.set(
       job.jobId,
       next.catch(() => undefined),
@@ -869,10 +1006,18 @@ export class ArtifactJobManager {
     await next;
   }
 
-  async #persistNow(job: StoredJob<JobCounters>): Promise<void> {
+  async #persistNow(
+    job: StoredJob<JobCounters>,
+    retryWindowMs: number,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    signal?.throwIfAborted();
     const path = join(this.jobDirectory(job.jobId), 'job.json');
     const temp = join(this.jobDirectory(job.jobId), `job.${randomUUID()}.metadata-tmp`);
-    const bytes = Buffer.from(`${JSON.stringify(job, null, 2)}\n`, 'utf8');
+    const bytes = Buffer.from(
+      `${JSON.stringify({ ...job, metadataPersistence: undefined }, null, 2)}\n`,
+      'utf8',
+    );
     const previousBytes = this.#metadataBytes.get(job.jobId) ?? 0;
     if (this.#usedBytes + bytes.length > this.config.scratchQuotaBytes) {
       throw new FsError(
@@ -880,19 +1025,78 @@ export class ArtifactJobManager {
         'Artifact scratch quota exceeded while saving metadata',
       );
     }
-    await writeFile(temp, bytes, { flag: 'wx', mode: 0o600 });
+    // Reserve the temporary copy before any await so simultaneous jobs cannot
+    // each spend the same remaining quota. The old destination stays charged.
+    this.#usedBytes += bytes.length;
+    let replaced = false;
     try {
-      await replaceMetadataFile(temp, path);
+      await writeFile(temp, bytes, { flag: 'wx', mode: 0o600 });
+      await replaceMetadataFile(temp, path, retryWindowMs, this.#renameMetadata, signal);
+      replaced = true;
     } finally {
-      await this.#deleteOwnedFile(temp).catch(async (error: unknown) => {
-        const size = (await stat(temp).catch(() => undefined))?.size ?? 0;
-        this.#usedBytes += size;
-        this.#orphanBytes.set(job.jobId, (this.#orphanBytes.get(job.jobId) ?? 0) + size);
-        Logger.warn(`Could not remove snapshot metadata temp: ${formatUnknownErrorMessage(error)}`);
-      });
+      if (replaced) {
+        this.#usedBytes -= bytes.length;
+      } else {
+        await this.#deleteOwnedFile(temp)
+          .then(() => {
+            this.#usedBytes -= bytes.length;
+          })
+          .catch(async (error: unknown) => {
+            const size = (await stat(temp).catch(() => undefined))?.size ?? bytes.length;
+            this.#usedBytes += size - bytes.length;
+            this.#orphanBytes.set(job.jobId, (this.#orphanBytes.get(job.jobId) ?? 0) + size);
+            Logger.warn(
+              `Could not remove snapshot metadata temp: ${formatUnknownErrorMessage(error)}`,
+            );
+          });
+      }
     }
     this.#usedBytes += bytes.length - previousBytes;
     this.#metadataBytes.set(job.jobId, bytes.length);
+  }
+
+  async #persistTerminal(job: StoredJob<JobCounters>): Promise<void> {
+    const previous = this.#terminalChains.get(job.jobId) ?? Promise.resolve();
+    const next = previous.then(() => this.#persistTerminalNow(job));
+    this.#terminalChains.set(
+      job.jobId,
+      next.catch(() => undefined),
+    );
+    await next;
+  }
+
+  async #persistTerminalNow(job: StoredJob<JobCounters>): Promise<void> {
+    try {
+      await this.persist(job);
+      delete job.metadataPersistence;
+      return;
+    } catch (error) {
+      job.metadataPersistence = {
+        state: isTransientMetadataError(error) ? 'recovering' : 'failed',
+        error: safeDiagnostic(error, job, this.#scratchDirectory),
+      };
+      if (!isTransientMetadataError(error)) {
+        Logger.error(
+          `Artifact job ${job.jobId} could not persist terminal metadata: ${formatUnknownErrorMessage(error)}`,
+        );
+        return;
+      }
+    }
+    // A blocked destination can outlive the checkpoint window. Retry the final
+    // state once more, without retaining an extra durable sidecar or an unbounded
+    // background writer. The per-job chain prevents an older write overtaking it.
+    try {
+      await this.persist(job, undefined, this.#terminalRecoveryWindowMs);
+      delete job.metadataPersistence;
+    } catch (error) {
+      job.metadataPersistence = {
+        state: 'failed',
+        error: safeDiagnostic(error, job, this.#scratchDirectory),
+      };
+      Logger.error(
+        `Artifact job ${job.jobId} could not recover terminal metadata: ${formatUnknownErrorMessage(error)}`,
+      );
+    }
   }
 
   #artifactPath(jobId: string, artifact: StoredArtifact): string {
@@ -1054,6 +1258,7 @@ export class ArtifactJobManager {
           this.#metadataBytes.delete(jobId);
           this.#orphanBytes.delete(jobId);
           this.#persistChains.delete(jobId);
+          this.#terminalChains.delete(jobId);
           this.#artifactRemovalChains.delete(jobId);
         }
       });
@@ -1124,6 +1329,7 @@ export class ArtifactJobManager {
     this.#closed = true;
     if (this.#cleanupTimer) clearInterval(this.#cleanupTimer);
     const workers: Promise<void>[] = [];
+    const terminalWrites: Promise<void>[] = [];
     for (const runtime of this.#jobs.values()) {
       if (runtime.job.state === 'queued' || runtime.job.state === 'running') {
         runtime.job.state = 'interrupted';
@@ -1132,14 +1338,11 @@ export class ArtifactJobManager {
         runtime.job.stopReason = 'server-shutdown';
         runtime.job.finishedAt = new Date(this.#now()).toISOString();
         runtime.abortController.abort(new Error('Server shutting down'));
-        await this.persist(runtime.job).catch((error: unknown) => {
-          Logger.warn(
-            `Could not persist interrupted snapshot job ${runtime.job.jobId}: ${formatUnknownErrorMessage(error)}`,
-          );
-        });
+        terminalWrites.push(this.#persistTerminal(runtime.job));
       }
       if (runtime.worker) workers.push(runtime.worker);
     }
+    await Promise.allSettled(terminalWrites);
     await Promise.allSettled(workers);
     if (this.config.ephemeralScratch) {
       await rm(this.#scratchDirectory, { recursive: true, force: true });

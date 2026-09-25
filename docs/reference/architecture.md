@@ -120,6 +120,30 @@ Unreferenced final после crash между rename и metadata commit уда�
 удаления остаётся учтённой в scratch quota до успешного cleanup/restart. Expiry,
 artifact removal и terminal directory cleanup сериализованы для каждой job.
 
+`job.json` заменяется через уникальный metadata-temp и atomic rename без удаления
+старого destination. Только transient `EPERM`/`EACCES`/`EBUSY` при rename повторяются
+до 2,5 секунды на одну запись; checkpoint retry прерывается при cancel/timeout/close.
+Terminal write после первого transient отказа получает ещё одно ограниченное окно
+2,5 секунды, итого до примерно 5 секунд на terminal recovery. Записи одной job
+сериализованы, а одновременные terminal writers упорядочены. Metadata-temp
+резервируется в scratch quota на время записи и удаляется после отказа; неудачное
+удаление учитывается как orphan. `ENOSPC`, quota и неизвестные ошибки не получают
+transient retry. Сроки относятся к ожиданию повторов и не ограничивают зависшую
+саму OS filesystem operation или неотзывчивый producer.
+
+После отказа terminal save живой `job_status` показывает optional
+`metadataPersistence: {state: recovering|failed, error}` с безопасными bounded
+code/message/path/native diagnostics. Это поле только в памяти, не в `job.json`;
+успешное восстановление его убирает. При постоянном отказе server log фиксирует
+ошибку, live state остаётся доступным до остановки процесса, но durable state
+не гарантирован. `close` ждёт bounded metadata retries; после restart последний
+доступный `job.json` со старым `running`/`queued` становится `interrupted`, без
+выдуманного fatalError от несохранённого terminal результата. Если scratch вновь
+доступен, startup сохраняет `interrupted`. Внешний долгий file handle, недоступный
+диск и внезапное завершение процесса вне recovery window остаются ограничениями.
+Частый `getJob`/`job_status` работающей job читает in-memory state и не открывает
+`job.json`; снижать частоту status ради корректности записи не требуется.
+
 Обычный snapshot сначала проверяет текущий доступ и явный ключ, затем выбирает самый
 новый совместимый `completed` с `complete=true`, живыми artifacts, TTL и возрастом
 от `startedAt` не более `maxAgeMs` (default 3600000 ms, допустимо 0–30 суток).
@@ -160,6 +184,36 @@ symlink/junction не разыменовываются. Manifest v1 фиксир
 policy, counters/errors/completeness и SHA-256/rows/raw/ZIP/base64 sizes частей.
 Snapshot не является атомарным filesystem snapshot: исчезновение/недоступность
 делает `complete=false`, но не скрывается как пустой успех.
+Отказы чтения отдельного дочернего файла, каталога, `.gitignore` или итератора
+каталога учитываются один раз и позволяют продолжить доступных соседей. Для
+native `ENOENT`/`ENOTDIR`/`EISDIR` и wrapped
+`NOT_FOUND`/`NOT_DIRECTORY`/`NOT_FILE` растёт
+`disappearedSkipped`; для `EACCES`/`EPERM`/`EBUSY` и соответствующих wrapped
+permission/известного native `EBUSY` растёт `inaccessibleSkipped`. Итерация
+с ошибкой прекращается только внутри затронутого каталога. Если файл после
+перечисления сменил тип на каталог, special или symlink, он не читается,
+сохраняет соответствующий `specialSkipped`/`symlinksSkipped` и одну error
+запись; snapshot становится неполным. Штатный sensitive child остаётся
+запретным для чтения и учитывается как `inaccessibleSkipped`, не прекращая
+доступных соседей. Root, отказ общей policy,
+неизвестный IO, ENOSPC/EMFILE/ENFILE, лимиты, отмена, timeout и отказ
+scratch/ZIP не классифицируются как пропуск. `state=completed` с
+`complete=false` сохраняет manifest и готовые части, но не входит в
+автоматический ready reuse; клиенту нужно проверить оба поля. Отдельного
+state `partial` нет.
+
+У `state=failed` статус имеет optional `fatalError` независимо от первых 20
+`errors` samples: bounded `code`/`message`, допустимый source/scratch `path`,
+а при известной native cause — `nativeErrorCode` и `operation`. Scratch path
+проверяется по canonical директории manager даже при Windows 8.3 spelling
+конфигурации; путь вне source/scratch не выдаётся. Поле
+сохраняется в job metadata и доступно после restart через `job_status` после
+обычной проверки доступа. `stopReason` остаётся прежним; cancelled и
+interrupted не получают выдуманный fatalError, timeout использует
+`TIMEOUT` без ложного пути. В `fatalError` не сериализуются stack и cause.
+Non-fatal `ACCESS_DENIED` sample получает безопасное `Permission denied` без
+формулировки о провале всей job; code/counters/path остаются прежними. Fatal
+diagnostics также используют фиксированный текст и не называют ошибку пропуском.
 Кэш уникальных путей внутри `ignore` ограничен периодическим созданием нового matcher
 из уже скомпилированных rules; nested patterns и negation сохраняются. Walk depth —
 жёсткий policy cap и приводит к `failed`, а не к partial completed результату.

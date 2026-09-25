@@ -185,6 +185,23 @@ node --import tsx scripts/snapshot-benchmark/run.mts --mode walk --walk-files 60
 материализацию большой embedded resource в ChatGPT. Результаты проверенного
 стенда: [smoke/main/upper](../testing/003-live-2026-09-20.md).
 
+Проверка восстановления после отказа дочернего пути — только synthetic,
+без доступа к производственному дереву:
+
+```powershell
+node --test --import tsx __tests__/snapshot-walk-recovery.test.ts
+```
+
+После исправления `state=completed` вместе с `complete=false` означает
+доступные manifest/ZIP и учтённые пропуски; такой результат не выбирается
+автоматически для ready reuse. Для `state=failed` читать отдельный
+`fatalError` в `job_status` даже если первые 20 `errors` samples заполнены.
+Перед повторным большим опытом планирование проверяет принятую версию,
+непрерывность процесса и scratch, текущие caps, root policy и отдельную
+готовность каждой job. После опыта сохранить только обезличенные counters,
+state/complete, fatal code/nativeErrorCode/operation и результат проверки
+доставленных ZIP; source path и inventory остаются вне Git.
+
 ## Bundle выбранных originals
 
 `bundle` использует тот же `FS_SNAPSHOT_DIR`, queue, deadline, quota, TTL,
