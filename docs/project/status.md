@@ -18,7 +18,7 @@
 | 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md)            | done     | 003, 004-portable  | Принята через [PR #6](https://github.com/obolibok/filesystem-mcp/pull/6); review, live, CI и portable PASS                        |
 | 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md) | done     | 006                | Принята вместе с 008 через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, большой live и CI PASS             |
 | 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)      | done     | 007 runtime        | Принята через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, portable, live/restart и CI PASS                |
-| 009          | [Выбор инструментов и понятные результаты](../tasks/009-tool-selection.md)          | active   | 007, 008           | GPT-6.1-Sol / Extra High; отдельный worktree, codex/009-tool-selection; запуск передан приложению                                 |
+| 009          | [Выбор инструментов и понятные результаты](../tasks/009-tool-selection.md)          | review   | 007, 008           | Code review, local check и CI PASS; [PR #8](https://github.com/obolibok/filesystem-mcp/pull/8) draft; live pending                |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -33,8 +33,14 @@
 существующих инструментов по задаче пользователя, поставить предупреждения о
 неполном поиске перед списком и уточнить трактовку job counters. Подсчёт файлов
 был проверочным запросом для выбора snapshot; count_files/count-only исключены.
-Постановка опубликована и передана в отдельную задачу GPT-6.1-Sol / Extra High;
-создание worktree и рабочей ветки независимо подтверждено.
+Исполнитель передал `7c4f4ec9` на `codex/009-tool-selection`.
+[Независимое code review](../testing/009-review-2026-10-08.md) PASS:
+435 pass, 0 fail, 8 platform/permission skips; в tools/list изменены только три
+публичных descriptions, схемы/annotations сохранены. Draft
+[PR #8](https://github.com/obolibok/filesystem-mcp/pull/8) открыт на том же head;
+[CI Windows/Ubuntu](https://github.com/obolibok/filesystem-mcp/actions/runs/37775500386)
+PASS: 440/431 pass, 0 fail, 3/12 skips, по 443 tests. Следующий этап — тестовая
+поставка и live выбор инструментов в чистом чате; до этого done/merge не закрыты.
 Локальные wire checks и подготовка live-протокола входят в реализацию; живой
 выбор моделью проверяется после review. Sleep/Ctrl+C и нестабильный PowerShell
 helper остаются отдельными наблюдениями и в scope 009 не входят.
