@@ -18,7 +18,7 @@
 | 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md)            | done     | 003, 004-portable  | Принята через [PR #6](https://github.com/obolibok/filesystem-mcp/pull/6); review, live, CI и portable PASS                        |
 | 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md) | done     | 006                | Принята вместе с 008 через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, большой live и CI PASS             |
 | 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)      | done     | 007 runtime        | Принята через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, portable, live/restart и CI PASS                |
-| 009          | [Выбор инструментов и понятные результаты](../tasks/009-tool-selection.md)          | review   | 007, 008           | Code review, local check и CI PASS; [PR #8](https://github.com/obolibok/filesystem-mcp/pull/8) draft; live pending                |
+| 009          | [Выбор инструментов и понятные результаты](../tasks/009-tool-selection.md)          | done     | 007, 008           | Принята через [PR #8](https://github.com/obolibok/filesystem-mcp/pull/8); review и CI PASS; пользователь принял live              |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -29,21 +29,25 @@
 
 ## Текущий следующий шаг
 
-Пользователь разрешил [009](../tasks/009-tool-selection.md): согласовать выбор
-существующих инструментов по задаче пользователя, поставить предупреждения о
-неполном поиске перед списком и уточнить трактовку job counters. Подсчёт файлов
-был проверочным запросом для выбора snapshot; count_files/count-only исключены.
-Исполнитель передал `7c4f4ec9` на `codex/009-tool-selection`.
-[Независимое code review](../testing/009-review-2026-10-08.md) PASS:
-435 pass, 0 fail, 8 platform/permission skips; в tools/list изменены только три
-публичных descriptions, схемы/annotations сохранены. Draft
-[PR #8](https://github.com/obolibok/filesystem-mcp/pull/8) открыт на том же head;
-[CI Windows/Ubuntu](https://github.com/obolibok/filesystem-mcp/actions/runs/37775500386)
-PASS: 440/431 pass, 0 fail, 3/12 skips, по 443 tests. Следующий этап — тестовая
-поставка и live выбор инструментов в чистом чате; до этого done/merge не закрыты.
-Локальные wire checks и подготовка live-протокола входят в реализацию; живой
-выбор моделью проверяется после review. Sleep/Ctrl+C и нестабильный PowerShell
-helper остаются отдельными наблюдениями и в scope 009 не входят.
+[009](../tasks/009-tool-selection.md) принята и интегрирована через
+[PR #8](https://github.com/obolibok/filesystem-mcp/pull/8), merge
+`a67fa81914a543e7a4aa1595d63df0a49e287f11`. Проверенный head:
+`7c4f4ec9e0c13e5ae4a24a1a4b823d9392290f86`.
+[Независимое code review](../testing/009-review-2026-10-08.md) и полный local
+check PASS: 435 pass, 0 fail, 8 platform/permission skips.
+[CI PR](https://github.com/obolibok/filesystem-mcp/actions/runs/37775500386)
+Windows/Ubuntu PASS: 440/431 pass, 0 fail, 3/12 skips, по 443 tests.
+
+08.10.2026 пользователь сообщил, что проверка прошла неплохо, и явно разрешил
+merge. Это принятая пользовательская live проверка; trace по отдельным сценариям
+и количественные результаты не предоставлены. Полное покрытие RU/EN матрицы
+не утверждается. [Протокол](../testing/009-tool-selection.md) сохранён для
+повторных опытов. Count_files/count-only не добавлены; API и source policy прежние.
+Sleep/Ctrl+C и нестабильный PowerShell helper остаются отдельными наблюдениями.
+
+Следующий шаг — согласовать предметный опыт 005: выборку Daum/Inoplacer,
+исходный вопрос и критерии результата. Задача пока proposed, исполнитель
+не назначен; новую реализацию автоматически не начинать.
 
 Инфраструктурные задачи 007 и 008 приняты и интегрированы через
 [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7), merge
@@ -61,15 +65,16 @@ SHA/CRC/CSV проверены. После restart прежний большой
 Финальный PR head `65b7bc4c` прошёл Windows/Ubuntu: по 441 tests,
 438/429 pass, 0 fail, 3/12 skips.
 
-Актуальная чистая поставка — `out/Schwarzbeck-MCP-008-test-2026-09-25`
-и соседний ZIP, source runtime `7bf58e05`. Установленная пользовательская сборка
-совпадает с принятым runtime; повторная установка не требуется. После её
-создания исправлены тесты, зависевшие от порядка обхода, и документация.
+Последняя поставка с отдельным portable-протоколом —
+`out/Schwarzbeck-MCP-008-test-2026-09-25` и соседний ZIP, source runtime
+`7bf58e05`; изменения 009 в этот архив не входят. Точный состав установленного
+комплекта при live 009 отдельно не фиксировался. Во время merge 009 новая
+поставка не собиралась, установленный сервис не менялся.
 Внутри автономные Node/tunnel, инструкция Windows, multiple roots,
 tunnel/key/plugin, scratch/TTL. 13 portable checks PASS. Новый перенос на VM,
 Windows 11 и SMB остаются отдельными условиями deployment.
 
-После 009 — подготовка предметного опыта 005: выбрать каталоги/файлы
+Предметный опыт 005: выбрать каталоги/файлы
 Daum/Inoplacer, один исходный исследовательский вопрос и проверяемые критерии
 результата. Задача остаётся proposed; исполнитель не назначен. После согласования
 планирование оформит карточку, а отдельная задача проведёт исследование из
