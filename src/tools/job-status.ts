@@ -6,7 +6,10 @@ export const JOB_STATUS = defineTool({
   name: 'job_status',
   title: 'Get Job Status',
   description:
-    'Return bounded status, exact counters, error samples, optional fatal error, expiry, and artifact IDs for one durable background job. It never returns the inventory itself.',
+    'Get snapshot/bundle progress, counters, errors, expiry and artifact IDs. queued/running counters are provisional; ' +
+    'completed may have complete=false and does not mean full-disk coverage. ' +
+    'Snapshot filesWritten counts indexed file records, not original bytes; never add inaccessibleSkipped as files. ' +
+    'Report scope/exclusions and observation time; reuse is not current source state. get_artifact delivers index/originals.',
   input: JobIdInputSchema,
   output: JobStatusOutputSchema,
   annotations: {

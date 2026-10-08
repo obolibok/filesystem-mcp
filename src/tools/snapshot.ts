@@ -43,7 +43,10 @@ export const SNAPSHOT = defineTool({
   name: 'snapshot',
   title: 'Start Metadata Snapshot',
   description:
-    'Reuse a fresh completed snapshot, join queued/running work, or start a guarded scan. Use forceRefresh for a new scan and idempotencyKey for safe retries. Poll job_status; fetch manifest/ZIP with get_artifact.',
+    'Create/reuse a recursive metadata index (CSV/ZIP) for inventories, whole-tree exploration and file totals. ' +
+    'A known list_roots root needs no broad find_files first. Reads sources; writes scratch under policy/quota/deadline limits. ' +
+    'Reuse matching complete results within maxAgeMs or join queued/running jobs; source changes are not detected. ' +
+    'Use forceRefresh/idempotencyKey for new scans/safe retries. job_status gives counters; get_artifact delivers the index.',
   input: SnapshotInputSchema,
   output: SnapshotOutputSchema,
   annotations: {
