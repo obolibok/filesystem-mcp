@@ -3,7 +3,7 @@ import * as z from 'zod/v4';
 import { SearchStoppedReasonSchema } from '../core/concurrency.js';
 import { pageQueryKey, paginate } from '../core/cursor.js';
 import { ErrorCode } from '../core/errors.js';
-import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.js';
+import { formatCount, pageTrailer, scanWarning, truncateProgressPattern } from '../core/fmt.js';
 import { toPosixRelative } from '../core/path.js';
 import {
   CursorSchema,
@@ -192,9 +192,10 @@ export const FIND_FILES = defineTool({
   name: 'find_files',
   title: 'Find Files',
   description:
-    'Find files matching a glob pattern. Returns matched paths with optional metadata. ' +
-    'Pagination cursors reference a query-bound snapshot that expires after 60 seconds. ' +
-    'For content search use search_text; for bulk regex replacements use replace_text with the same glob.',
+    'Find specific file names or glob matches. ' +
+    `Collects at most ${MAX_SEARCH_RESULTS} matches per scan; maxResults is page size. ` +
+    'Cursors page only collected results, expire after 60 seconds, and never resume beyond cap/timeout. ' +
+    'For a recursive inventory/index or file total use snapshot; for content use search_text.',
   input: SearchFilesInputSchema,
   output: SearchFilesOutputSchema,
   annotations: {
@@ -220,6 +221,7 @@ export const FIND_FILES = defineTool({
         ? structured.results.map((r) => r.path).join('\n')
         : `No files matching '${args.pattern}'`;
     const text =
+      scanWarning(structured.stoppedReason) +
       body +
       pageTrailer({
         offset,
@@ -228,7 +230,6 @@ export const FIND_FILES = defineTool({
         noun: 'files',
         tool: 'find_files',
         nextCursor: structured.nextCursor,
-        stoppedReason: structured.stoppedReason,
       });
     if (link) {
       return { structured, text, resources: [link] };

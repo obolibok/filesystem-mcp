@@ -6,7 +6,7 @@ import * as z from 'zod/v4';
 import { SearchStoppedReasonSchema } from '../core/concurrency.js';
 import { pageQueryKey, paginate } from '../core/cursor.js';
 import { ErrorCode, FsError } from '../core/errors.js';
-import { formatCount, pageTrailer, truncateProgressPattern } from '../core/fmt.js';
+import { formatCount, pageTrailer, scanWarning, truncateProgressPattern } from '../core/fmt.js';
 import { Logger } from '../core/observability.js';
 import { toPosixRelative } from '../core/path.js';
 import {
@@ -453,6 +453,7 @@ export const SEARCH_TEXT = defineTool({
     const rows = renderRows(structured.matches, args.context > 0);
     const body = rows.length > 0 ? rows.join('\n') : `No matches for '${args.searchPattern}'`;
     const text =
+      scanWarning(structured.stoppedReason) +
       body +
       skipSummary(structured) +
       pageTrailer({
@@ -462,7 +463,6 @@ export const SEARCH_TEXT = defineTool({
         noun: 'matches',
         tool: 'search_text',
         nextCursor: structured.nextCursor,
-        stoppedReason: structured.stoppedReason,
       });
     if (link) {
       return { structured, text, resources: [link] };

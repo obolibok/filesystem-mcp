@@ -2306,11 +2306,45 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       ),
       text,
     );
-    assert.strictEqual(
-      (result._meta as { truncated?: boolean }).truncated,
-      true,
-      'the engine reports its own stop state',
-    );
+    assert(text.startsWith('// scan stopped early:'), text);
+    assert(text.indexOf('\n\nhits.txt:1:') > 0, text);
+    assert(!text.includes('snapshot'), 'content search must not be redirected to metadata');
+    const metadata = result._meta as {
+      truncated?: boolean;
+      totalMatches: number;
+      nextCursor?: string;
+      resourceUri?: string;
+    };
+    assert.equal(metadata.truncated, true, 'the engine reports its own stop state');
+    assert.equal(metadata.totalMatches, MAX_SEARCH_RESULTS);
+    assert(metadata.nextCursor && metadata.resourceUri);
+    const resource = await harness.client.readResource({ uri: metadata.resourceUri });
+    const content = resource.contents[0];
+    assert(content && 'text' in content);
+    const full = JSON.parse(content.text) as { matches: unknown[]; truncated: boolean };
+    assert.equal(full.matches.length, MAX_SEARCH_RESULTS);
+    assert.equal(full.truncated, true);
+    const last = await harness.client.callTool({
+      name: 'search_text',
+      arguments: {
+        path: file,
+        searchPattern: 'CAPPED',
+        maxResults: MAX_SEARCH_RESULTS,
+        cursor: metadata.nextCursor,
+      },
+    });
+    assert.notEqual(last.isError, true);
+    const lastMeta = last._meta as {
+      matches: unknown[];
+      truncated: boolean;
+      nextCursor?: string;
+      resourceUri?: string;
+    };
+    assert.equal(lastMeta.matches.length, MAX_SEARCH_RESULTS - 5);
+    assert.equal(lastMeta.truncated, true);
+    assert.equal(lastMeta.nextCursor, undefined);
+    assert.equal(lastMeta.resourceUri, undefined);
+    assert((firstTextBlock(last).text ?? '').startsWith('// scan stopped early:'));
   });
 
   it('HTTP pagination survives the per-request server factory', async () => {
@@ -2495,9 +2529,12 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   // tools: full/read-only are now 19/13 tools and measure 24980/14900 chars.
   // The read-only ceiling leaves 300 chars of drift budget; the full ceiling
   // already had enough room and is unchanged.
+  // Task 009 adds intent routing, the scan/page distinction, and status meaning
+  // to the three relevant descriptions. Full/read-only measure 25732/15652;
+  // only the read-only ceiling grows, to leave 248 chars of drift budget.
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
     const BUDGET_CHARS = 26_900;
-    const BUDGET_CHARS_READ_ONLY = 15_200;
+    const BUDGET_CHARS_READ_ONLY = 15_900;
 
     const full = await createTestClientPair([tmpDir]);
     try {

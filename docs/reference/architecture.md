@@ -46,6 +46,62 @@ aliases для проверок PathGuard, но при omitted path считаю
 Tool descriptions фиксируют то же правило.
 `includeIgnored` управляет фильтрами обхода, но не снимает запреты доступа PathGuard.
 
+## Выбор инструментов и трактовка инвентаризации
+
+Краткая серверная инструкция, `get-help`/instructions resource и опубликованные
+`tools/list` descriptions выбирают маршрут по намерению пользователя:
+
+| Намерение                                              | Маршрут                                  |
+| ------------------------------------------------------ | ---------------------------------------- |
+| Доступные корни                                        | `list_roots`                             |
+| Содержимое папки                                       | `list`                                   |
+| Конкретное имя/glob                                    | `find_files`                             |
+| Текст внутри файлов                                    | `search_text`                            |
+| Рекурсивный индекс/инвентаризация/число видимых файлов | `snapshot -> job_status`                 |
+| Сам индекс для анализа                                 | `snapshot -> job_status -> get_artifact` |
+| Текст / metadata одного или нескольких путей           | `read` / `stat`                          |
+| Один original                                          | `get_file`                               |
+| Выбранные originals                                    | `bundle -> job_status -> get_artifact`   |
+
+Известный root достаточен для `snapshot`; широкий `find_files(**/*)` перед ним
+не требуется. Неизвестные дочерние пути открывают через `list`/`find_files`.
+При нескольких canonical roots область выбирают явно по запросу, не подменяют
+все roots первым. Snapshot строит metadata CSV/ZIP без копирования originals;
+источники только читаются, служебное состояние/scratch меняются под прежними
+ограничениями policy/quota/deadline. Отдельного counting tool или режима нет.
+
+`find_files.maxResults` задаёт page size; сервер собирает не более 10000 matches
+за один scan. Cursor перелистывает уже собранный набор и не продолжает обход
+после cap/timeout. Предупреждение об остановке теперь стоит перед путями на каждой
+странице, включая последнюю; page trailer отдельно сообщает позицию и cursor.
+Тот же порядок действует для `search_text`, без перенаправления content search
+на metadata snapshot. Results, относительные paths, resource и metadata сохраняются.
+
+`job_status` сохраняет JSON text и `structuredContent`. Во время queued/running
+counters являются progress; даже `complete=true` в это время не доказывает завершение.
+`completed` означает успешное завершение producer, но может сопровождаться
+`complete=false`; failed/cancelled/interrupted не являются успешной инвентаризацией.
+Проверяют оба поля, errors/fatalError, stopReason, metadataPersistence и expiry.
+У завершённого snapshot `complete=true` относится к выбранной области, flags и
+исключениям; это не обещание перечислить все физические файлы диска.
+
+`filesWritten` — файловые записи, вошедшие в CSV, а не bytes originals или
+гарантированное число уникальных физических файлов. `directoriesVisited` включает
+открытый root; `entriesSeen` считает перечисленные entries без root и не является
+числом файлов. `inaccessibleSkipped` включает отказы каталогов, итераторов и ignore
+rules; прибавлять его к `filesWritten` как число дополнительных файлов нельзя.
+Для сводных counters достаточно конечного status; artifacts получают для анализа
+самого индекса или уточнения manifest policy/interval.
+
+В результате называют root, flags/исключения и interval startedAt/finishedAt;
+обход не atomic, reuse описывает прежний interval. Изменения source/.gitignore
+автоматически не отслеживаются. Требуемую свежесть задаёт `maxAgeMs` от начала
+обхода; `maxAgeMs=0` ещё допускает joining. `forceRefresh` нужен для явно нового
+обхода, с optional `idempotencyKey` для safe retry, а не для каждого запроса.
+Подробные reuse/TTL правила ниже остаются прежними. Протокол оценки фактического
+выбора LLM: [009](../testing/009-tool-selection.md); локальные wire checks не
+доказывают поведение модели в живом клиенте.
+
 ## Форматы
 
 | Данные                                  | Текущее поведение                                                                                                                  |

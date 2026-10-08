@@ -151,19 +151,19 @@ job_status сохраняет structuredContent и исходные счётчи
 
 ## Acceptance реализации
 
-- [ ] Модель получает согласованные правила выбора из опубликованных tool metadata
+- [x] Модель получает согласованные правила выбора из опубликованных tool metadata
       и краткой серверной инструкции; инвентаризация явно сопоставлена snapshot,
       targeted search — find_files, без обязательного широкого поиска перед индексом.
-- [ ] В find_files понятны общий cap и page size; cap/timeout предупреждение
+- [x] В find_files понятны общий cap и page size; cap/timeout предупреждение
       предшествует путям, cursor и metadata сохранены; соседний search_text корректен.
-- [ ] Job status и руководство не приравнивают completed к полноте, не называют
+- [x] Job status и руководство не приравнивают completed к полноте, не называют
       inaccessibleSkipped числом дополнительных файлов; JSON остаётся видимым.
-- [ ] API и политики источников/артефактов не изменены; read-only профиль корректен,
+- [x] API и политики источников/артефактов не изменены; read-only профиль корректен,
       новых инструментов и count-only режима нет.
-- [ ] Значимые regression/wire checks и полный npm run check PASS; фактические
+- [x] Значимые regression/wire checks и полный npm run check PASS; фактические
       full/read-only размеры tools/list измерены. Сначала сокращать дублирование,
       любое необходимое увеличение budget обосновать измерением и записать в Work record.
-- [ ] Reference, Work record и протокол проверки выбора готовы. В record разделены
+- [x] Reference, Work record и протокол проверки выбора готовы. В record разделены
       локальная проверка контракта и ещё не выполненная live оценка поведения LLM.
 
 ## Приёмка планированием после review
@@ -186,11 +186,91 @@ commit и передай ready for review с SHA, diff summary, проверка
 
 ## Work record
 
-Заполняет исполнитель. Реализация не начата.
+08.10.2026: **ready for review**. Локальная реализация и контрактные проверки
+завершены; acceptance планирования и live выбор LLM ещё не выполнялись.
 
-- Base / branch / head:
-- Изменения и публичное поведение:
-- Размеры tools/list до/после, решения по budget:
-- Проверки, среда, результаты и skips:
-- Выполненные/оставшиеся acceptance и live:
-- Риски и follow-up:
+- Base: `fcb801909a8861e590fc59802f4922079776e773` (launch checkpoint с карточкой).
+  Checkout перед началом чистый, HEAD совпадал с checkpoint. В существующем
+  выделенном worktree создана ветка `codex/009-tool-selection`; второй worktree
+  не создавался. Итоговый head передаётся в handoff после локального commit.
+- Правило выбора согласовано в server instructions, get-help/resource и трёх
+  опубликованных descriptions. Recursive index/inventory/file total ведёт к
+  snapshot, names/globs — к find_files. Известный root достаточен; multiple roots
+  требуют выбора scope. Для summary counters достаточно конечного job_status,
+  artifacts нужны для самого индекса/уточнения manifest или originals.
+- find_files публикует действующий MAX_SEARCH_RESULTS=10000, отличие scan cap
+  от maxResults page size и невозможность возобновить capped/timed-out scan
+  cursor-ом. Удалены ненужные optional metadata/replace_text предложения.
+- Общий formatter разделён на scanWarning и pageTrailer. Find/content search
+  показывают warning до rows на каждой странице, включая final; trailers,
+  относительные paths, cursor/resource и metadata сохранены. Content search
+  не перенаправляется на metadata snapshot; limits не изменены.
+- Job status сохранён без собственного text: JSON text и structuredContent
+  остаются видимыми. Description/help объясняют provisional progress,
+  completed/complete, filesWritten и inaccessibleSkipped, root/flags/exclusions
+  и interval/freshness. Код создаёт queued job с complete=true, поэтому help
+  явно связывает вывод о полноте с уже completed snapshot. Entries/directories
+  разобраны в подробной справке. Reuse/maxAgeMs/forceRefresh/idempotencyKey,
+  TTL/cancellation и честные scratch side effects сохраняются.
+- API, input schemas/defaults, output fields/counters/states, outputSchema
+  policy, annotations и full/read-only tool counts не изменены. Actual
+  tools/list до/после сравнен через synthetic SDK harness: все поля контрактов,
+  кроме трёх descriptions, совпадают. PathGuard/GuardedFileSystem и producers/
+  job lifecycle не менялись.
+
+### Tools/list budget
+
+Измерение `JSON.stringify(result.tools).length`; bytes в UTF-8. JSON-RPC
+envelope и tokenizer не включены.
+
+| Профиль   | Tools | До: chars / bytes | После: chars / bytes |               Ceiling |
+| --------- | ----: | ----------------: | -------------------: | --------------------: |
+| Full      |    19 |     25206 / 25224 |        25732 / 25750 | 26900 (без изменения) |
+| Read-only |    13 |     15126 / 15134 |        15652 / 15660 |    15900 (было 15200) |
+
+Рост +526 chars: find_files +30, snapshot +251, job_status +245 (около 2,1%
+full и 3,5% read-only). Сначала убрано ненужное дублирование find_files; большие
+пояснения вынесены в help. Оставшийся рост нужен для выбора и интерпретации,
+доступных непосредственно из tools/list. Старый RO ceiling имел лишь 74 chars
+запаса; увеличен на 700 с итоговым запасом 248. Full ceiling не повышен.
+TOOL-SURFACE-002 фиксирует count и оба бюджета.
+
+### Проверки
+
+- Среда: Windows, Node v24.15.0, npm 11.12.1, отдельный task checkout.
+  Обычный Windows sandbox не создавал процессы (setup helper failure);
+  команды выполнены через разрешённый escalated exec. Apply_patch также
+  недоступен; изменения записаны в UTF-8 без BOM и LF. Git EOL policy проверена.
+- `npm ci` PASS. Сняты исходные и итоговые actual tools/list/initialize
+  instructions и ответы find_files/snapshot/job_status через
+  `createTestClientPair`, только synthetic source/scratch.
+- Новые meaningful wire checks в `__tests__/tool-selection.test.ts`:
+  seeded PageSnapshotStore для cap/timeout/complete и всех collected pages;
+  настоящий read-only walk complete/partial, exact counters/manifest,
+  видимость JSON/structuredContent и прежнего interval при completed reuse.
+  Cap/timeout seam проверяет rendering/replay, а не скорость большого обхода.
+- Усилен существующий real search_text cap fixture (10001 lines в одном
+  файле): warning перед matches, 10000-result cap, first-page resource,
+  последняя страница и неизменные metadata. Tests точного prose не добавлены.
+- `node --test --import tsx __tests__/tool-selection.test.ts __tests__/tools.test.ts __tests__/snapshot.test.ts __tests__/snapshot-walk-recovery.test.ts __tests__/resources.test.ts __tests__/prompts.test.ts`
+  PASS: 172 tests, 170 pass, 0 fail, 2 skips — POSIX-only 0222 append и
+  file symlink, запрещённый Windows permissions.
+- `npm run check` PASS: build, production/test types, ESLint, Prettier, Knip;
+  443 tests, 435 pass, 0 fail, 8 skips. Skips: 3 POSIX-only (FIFO, inode/mode,
+  0222 append) и 5 file-symlink checks без Windows permission. Эти ветки не
+  объявляются проверенными; доступные junction/8.3 regressions прошли.
+- `git diff --check` PASS. Форматировались только файлы задачи; repository-wide
+  fix, версии и dependencies не изменялись.
+
+### Acceptance и оставшееся
+
+Все шесть implementation criteria выше выполнены локально. Reference обновлён;
+[протокол 009](../testing/009-tool-selection.md) содержит локальные evidence,
+естественные RU/EN prompts, expected routes и фиксацию actual calls/результата.
+Descriptions не являются доказательством выбора LLM: live после review остаётся
+планированию/пользователю. Remote CI этим локальным прогоном не заменён.
+
+Следующий шаг — review diff/контракта и интеграционная проверка, затем live по
+протоколу с действительно обновлёнными metadata в чистых чатах. Отдельно проверить
+multiple roots, partial/reused/freshness и выдачу CSV/ZIP. Центральная доска,
+push/PR/merge, установленный runtime, tunnel/key и production roots не менялись.
