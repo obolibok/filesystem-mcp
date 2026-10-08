@@ -18,7 +18,7 @@
 | 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md)            | done     | 003, 004-portable  | Принята через [PR #6](https://github.com/obolibok/filesystem-mcp/pull/6); review, live, CI и portable PASS                        |
 | 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md) | done     | 006                | Принята вместе с 008 через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, большой live и CI PASS             |
 | 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)      | done     | 007 runtime        | Принята через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, portable, live/restart и CI PASS                |
-| 009          | [Выбор инструментов и понятные результаты](../tasks/009-tool-selection.md)          | ready    | 007, 008           | Пользователь разрешил реализацию; GPT-6.1-Sol / Extra High, отдельный worktree; без count_files                                   |
+| 009          | [Выбор инструментов и понятные результаты](../tasks/009-tool-selection.md)          | active   | 007, 008           | GPT-6.1-Sol / Extra High; отдельный worktree, codex/009-tool-selection; запуск передан приложению                                 |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -33,7 +33,8 @@
 существующих инструментов по задаче пользователя, поставить предупреждения о
 неполном поиске перед списком и уточнить трактовку job counters. Подсчёт файлов
 был проверочным запросом для выбора snapshot; count_files/count-only исключены.
-Постановка готова к передаче в отдельную задачу GPT-6.1-Sol / Extra High.
+Постановка опубликована и передана в отдельную задачу GPT-6.1-Sol / Extra High;
+создание worktree и рабочей ветки независимо подтверждено.
 Локальные wire checks и подготовка live-протокола входят в реализацию; живой
 выбор моделью проверяется после review. Sleep/Ctrl+C и нестабильный PowerShell
 helper остаются отдельными наблюдениями и в scope 009 не входят.
@@ -85,6 +86,26 @@ MCP и tunnel-client, конфигурацию нескольких roots и о�
 ignored out/; templates и обезличенные доказательства хранятся в Git.
 Сборка от 24.09 историческая, актуальная указана выше. Credentials в чистую
 поставку не включены.
+
+## Запуск 009, 2026-10-08
+
+Карточка опубликована в main checkpoint
+`fcb801909a8861e590fc59802f4922079776e773` перед созданием задачи.
+Запрошенное название — `009 - tool selection and inventory guidance`, проект
+`SWB RAG Dev`, модель `gpt-6.1-sol`, effort `xhigh`, отдельный managed worktree.
+Модель уточнена пользователем до dispatch; GPT-6-Sol не запускалась.
+
+Приложение вернуло pending creation ID
+`client-new-thread:854080ef-a635-4c95-9286-dba045a1d818`.
+Worktree приложения `ec59` создан от этого checkpoint, наличие карточки и
+ветки `codex/009-tool-selection` независимо подтверждено. В списке задач API
+пока не появился настоящий threadId; первый ответ через API не прочитан.
+Pending ID не использовать как threadId; повторную задачу не создавать.
+
+Исполнителю разрешены правки в scope карточки, synthetic/wire checks, полный
+check, reference/live-протокол, Work record и локальный commit. Push/PR/merge,
+обновление установленного комплекта и живую приёмку ведёт планирование.
+Исходный экспорт остаётся вне Git; новым worktree он не требуется.
 
 ## Запуск 008, 2026-09-25
 
