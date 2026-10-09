@@ -618,7 +618,10 @@ it('list wire deadline is TIMEOUT and closes a delayed filtered iterator without
     arguments: { path: root, maxDepth: 10 },
   });
   assert.equal(result.isError, true);
-  assert.match(firstTextBlock(result).text ?? '', /^TIMEOUT:/);
+  const text = firstTextBlock(result).text ?? '';
+  assert.match(text, /^TIMEOUT:/);
+  assert.match(text, /Reduce scope or traversal depth\./);
+  assert.doesNotMatch(text, /maxResults|pageSize/);
   assert.equal(result._meta, undefined);
   assert.deepEqual(observed.opened, ['']);
   assert.deepEqual(observed.counts(), { reads: 1, closes: 1 });
@@ -707,4 +710,78 @@ it('cancellation during canonical validation starts no stat, ancestor probe or o
     /fixture cancelled in validation/,
   );
   assert.deepEqual({ stats, lstats, opens }, { stats: 0, lstats: 0, opens: 0 });
+});
+
+it('list literal continuation commands preserve nondefault scope/limit and allow a new pageSize without rescanning', async (t) => {
+  const root = await fixture(t);
+  for (let i = 0; i < 3; i++) await writeTestFile(root, `root-${String(i)}.txt`, 'fixture');
+  const scope = join(root, 'scoped folder');
+  await writeTestFile(scope, 'nested/.hidden/one.txt', 'fixture');
+  await writeTestFile(scope, 'nested/.hidden/two.txt', 'fixture');
+  for (let i = 0; i < 3; i++) await writeTestFile(scope, `file-${String(i)}.txt`, 'fixture');
+  const pair = await createTestClientPair([root]);
+  t.after(() => pair.close());
+  const observed = instrument(t, root);
+  const scoped = {
+    path: scope,
+    maxDepth: 3,
+    includeHidden: true,
+    includeIgnored: true,
+    limit: 6,
+    pageSize: 1,
+  };
+  for (const scenario of [
+    { args: { limit: 2, pageSize: 1 }, total: 2, truncated: true, changeSize: false },
+    { args: { pageSize: 1 }, total: 4, truncated: false, changeSize: false },
+    { args: scoped, total: 6, truncated: true, changeSize: false },
+    { args: scoped, total: 6, truncated: true, changeSize: true },
+  ]) {
+    let result = await pair.client.callTool({ name: 'list', arguments: scenario.args });
+    assert.notEqual(result.isError, true, firstTextBlock(result).text);
+    const afterScan = observed.counts();
+    const opensAfterScan = observed.opened.length;
+    const rulesAfterScan = observed.ignoreReads.length;
+    const entries: ListMeta['entries'] = [];
+    let expectedPageSize = 1;
+    for (;;) {
+      const meta = result._meta as unknown as ListMeta;
+      const text = firstTextBlock(result).text ?? '';
+      entries.push(...meta.entries);
+      assert(entries.length <= scenario.total, 'continuation must advance, not repeat a page');
+      assert.equal(meta.totalEntries, scenario.total);
+      assert.equal(meta.truncated, scenario.truncated);
+      assert.equal(text.startsWith('// list stopped at limit='), scenario.truncated);
+      for (const entry of meta.entries) assert(text.includes(entry.name), text);
+      if (!meta.nextCursor) {
+        assert(!text.includes('Next page:'));
+        break;
+      }
+      const match = /^\/\/ showing \d+-\d+ of \d+ entries\. Next page: list (\{.*\})$/m.exec(text);
+      assert(match?.[1], text);
+      const command = JSON.parse(match[1]) as Record<string, unknown>;
+      assert.equal(command['cursor'], meta.nextCursor);
+      const renderedPageSize = expectedPageSize;
+      const renderedCommand = { ...command };
+      if ('path' in scenario.args) {
+        assert.equal(command['path'], scenario.args.path);
+        assert.equal(command['maxDepth'], scenario.args.maxDepth);
+        assert.equal(command['includeHidden'], scenario.args.includeHidden);
+        assert.equal(command['includeIgnored'], scenario.args.includeIgnored);
+      }
+      if (scenario.changeSize) {
+        expectedPageSize = 2;
+        command['pageSize'] = expectedPageSize;
+      }
+      // Execute the server-authored command, changing only pageSize when asked.
+      result = await pair.client.callTool({ name: 'list', arguments: command });
+      assert.notEqual(result.isError, true, firstTextBlock(result).text);
+      assert.equal(renderedCommand['limit'], meta.limit);
+      assert.equal(renderedCommand['pageSize'], renderedPageSize);
+      assert.deepEqual(observed.counts(), afterScan);
+      assert.equal(observed.opened.length, opensAfterScan);
+      assert.equal(observed.ignoreReads.length, rulesAfterScan);
+    }
+    assert.equal(entries.length, scenario.total);
+    assert.equal(new Set(entries.map((e) => e.relativePath)).size, scenario.total);
+  }
 });

@@ -88,7 +88,7 @@ export function buildSectionsRecord(readOnly: boolean): Record<string, string> {
       'snapshot_scope: Report the requested root, flags/exclusions and startedAt/finishedAt observation interval. Hidden/ignored, symlink, sensitive and scratch policies affect coverage. The manifest records scope/policy details when needed. A snapshot is not atomic; reused results describe their earlier interval, not the source now.',
       `${BUNDLE.name}: Submits a durable job for an explicit bounded set of relative file paths under one guarded directory. Fetch the external manifest and every independent ZIP part; skipped or changed originals make complete=false.`,
       `ephemeral_results: When a result carries only a resource_link or resourceUri (in structuredContent or _meta), call resources/read immediately — cached results are ephemeral and expire after ~60 seconds, eviction, or restart. ${GET_FILE.name} already embeds the file bytes in its tool result and needs no resources/read follow-up.`,
-      'pagination: nextCursor appears in the result text and in _meta, backed by a snapshot on the same ~60s clock. Page through promptly; if a cursor is rejected, start again without one. resourceUri appears on the first page only.',
+      'pagination: nextCursor appears in the result text and in _meta, backed by a snapshot on the same ~60s clock. Page through promptly; if a cursor is rejected, start again without one. resourceUri appears on the first page only. For list, execute the complete JSON in Next page; it repeats the scope, limit and pageSize.',
       '```',
     ].join('\n'),
     error_recovery: [

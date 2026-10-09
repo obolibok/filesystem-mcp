@@ -127,7 +127,9 @@ default exclusions, nested ignore/negation и PathGuard source policy дейст
 `complete=true` не добавляется. Без resourceStore warning/metadata те же.
 
 Cursor хранит только этот набор, зависит от path/depth/flags/limit; pageSize можно
-менять. Сортируется лишь собранный набор, не весь источник ради глобально первых N.
+менять. Команда `Next page: list {...}` повторяет effective path, depth, flags,
+limit и pageSize; её JSON можно исполнять без ручного восстановления scope.
+Сортируется лишь собранный набор, не весь источник ради глобально первых N.
 Resource выдаётся на первой странице при paging/truncation; TTL/cap stores прежние.
 Контекст отсутствующего на странице родителя показывается отдельной relative
 строкой, поэтому nested rows на поздних страницах не теряются из текста.

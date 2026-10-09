@@ -281,6 +281,7 @@ async function handleList(
   structured: z.infer<typeof ListOutputSchema>;
   markdown: string;
   offset: number;
+  nextArgs: z.infer<typeof ListInputSchema>;
   link?: ContentBlock;
 }> {
   const path = args.path;
@@ -348,6 +349,8 @@ async function handleList(
     structured: listOutput(paged.page, paged.metadata, paged.nextCursor, paged.resource?.entry.uri),
     markdown: renderMarkdown(basename(paged.metadata.path), [...paged.page]),
     offset: paged.offset,
+    // Use the exact path that formed queryKey, including an omitted root.
+    nextArgs: { ...args, path: resolvedPath },
     ...(paged.resource ? { link: paged.resource.link } : {}),
   };
 }
@@ -375,7 +378,7 @@ export const LIST = defineTool({
   }),
   accessPaths: (args) => (args.path ? [args.path] : []),
   run: async (args, ctx) => {
-    const { structured, markdown, offset, link } = await handleList(args, ctx);
+    const { structured, markdown, offset, nextArgs, link } = await handleList(args, ctx);
     // The tree is what the model reads, so position and the collected-set URI ride
     // the text too — paging needs no second lookup. `pageTrailer` is the one
     // owner of that line, and it owes it on the last page as much as the first.
@@ -389,6 +392,7 @@ export const LIST = defineTool({
         noun: 'entries',
         tool: 'list',
         nextCursor: structured.nextCursor,
+        nextArgs,
       }) +
       (structured.resourceUri !== undefined
         ? `\ncollected entries at ${structured.resourceUri}`

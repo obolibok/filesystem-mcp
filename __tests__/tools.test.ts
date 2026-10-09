@@ -1308,17 +1308,17 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       arguments: { path: sub, pageSize: 2 },
     });
     const firstText = firstTextBlock(first).text ?? '';
-    const match = /^\/\/ showing 1-2 of 4 entries\. Next page: list \{"cursor":"([^"]+)"\}$/m.exec(
-      firstText,
-    );
+    const match = /^\/\/ showing 1-2 of 4 entries\. Next page: list (\{.*\})$/m.exec(firstText);
     assert.ok(match, `first page text should carry its position and cursor: ${firstText}`);
-    const cursor = match[1];
+    assert.ok(match[1]);
+    const nextArgs = JSON.parse(match[1]) as Record<string, unknown>;
+    const cursor = nextArgs['cursor'];
     // The model passes back verbatim what it read, so the two must agree.
     assert.strictEqual(cursor, (first._meta as { nextCursor?: string }).nextCursor);
 
     const second = await harness.client.callTool({
       name: 'list',
-      arguments: { path: sub, pageSize: 2, cursor },
+      arguments: nextArgs,
     });
     const secondText = firstTextBlock(second).text ?? '';
     // The last page carries no cursor and still owes its position, or a

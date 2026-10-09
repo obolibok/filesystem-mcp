@@ -87,7 +87,7 @@ source и scratch отдельно, запускает build stdio server в ful
 свои fixtures. Окружение stdio ограничено default environment + synthetic scratch;
 production FS settings не наследуются.
 
-Локально проверено:
+Локально проверено на первоначальном review head `7fabbe0b`:
 
 - Bounded acceptance suite: 14 PASS, 0 FAIL, 0 skips.
 - Existing targeted regression suites: 187 PASS, 0 FAIL, 6 skips.
@@ -97,7 +97,7 @@ production FS settings не наследуются.
 - Tools/list: full 19 tools / 25888 chars; read-only 13 tools / 15808 chars.
   После удаления повторов в depth/pageSize descriptions прирост к 009 — 156 chars
   в каждом профиле. Existing ceilings 26900/15900 сохранены, count не менялся.
-- Финальный полный check: 457 tests, 449 PASS, 0 FAIL, 8 skips. Три POSIX-only
+- Первоначальный полный check: 457 tests, 449 PASS, 0 FAIL, 8 skips. Три POSIX-only
   cases (FIFO, inode/mode, 0222 append target) и пять недоступных Windows
   file-symlink cases; реальные junction checks 010 PASS. Полный environment и
   skips записаны также в Work record карточки.
@@ -137,7 +137,8 @@ source policy применяется к самим rules и symlink rules не �
    время гарантийным SLA для SMB или зависшего OS I/O.
 3. Проверить limit warning до tree rows, `_meta.limit/truncated/stoppedReason`,
    entryCount<=25, totals<=100 (файлы и папки вместе); cursor перечисляет только
-   этот набор. Дойти до последней страницы: cursor отсутствует, warning остаётся.
+   этот набор. Продолжать буквальным JSON из строки `Next page: list {...}`,
+   без восстановления аргументов вручную. Дойти до последней страницы: cursor отсутствует, warning остаётся.
 4. В одном опыте поменять только pageSize между pages: entries без дублей/потерь,
    прежние totals/stop state. С другим limit или depth старый cursor отклоняется.
    Resource на первой странице содержит те же collected entries и stop metadata;
@@ -149,3 +150,46 @@ source policy применяется к самим rules и symlink rules не �
    времени/ошибок. Production paths/inventories/credentials не сохранять в Git.
    Отдельно отметить недоступные сценарии и сеть/permissions; local PASS не
    объявлять выполненной live-приёмкой.
+
+## Доработка после review R1/R2, 2026-10-09
+
+Review head `7fabbe0bf4e88eab1aa30181d9569f23b9ccacb3` опубликован планированием
+в commit `4c9ce2ebf51d3cfaf9e348ac18d906b7dc757ef9`, документ
+`docs/testing/010-review-r1-2026-10-09.md`. Он прочитан через git show; общая
+доска не переносилась в ответственность исполнителя.
+
+Новая regression до fix подтверждала actual INVALID_INPUT при исполнении
+JSON из Next page для `list({limit:2,pageSize:1})` с omitted path. Actual wire
+TIMEOUT также подтверждал прежнее `Reduce scope, depth, or maxResults.`.
+Обе проверки были красными на предыдущем head и зелёными после доработки.
+
+List теперь передаёт в общий pageTrailer nextArgs: effective path, исходные
+parsed depth/flags/limit/pageSize. Path берётся из формирования query identity,
+а не canonical output metadata (это сохраняет точное исходное spelling). При
+omitted path в команду включается фактически выбранный root. Formatter всегда
+заменяет старый cursor следующим. Identity/cache/TTL не изменены; другой limit
+или scope по-прежнему отклоняется, pageSize можно менять.
+
+Новая проверка исполняет именно извлечённую text-команду на каждой странице:
+нестандартный limit без path, default limit control, explicit path с пробелом,
+maxDepth=3, обе flags=true, limit=6; отдельно меняет только pageSize с 1 на 2.
+Собранный набор не пересканируется (native opens/reads/closes и ignore reads
+не меняются), нет дублей/потерь, final page сохраняет warning. Existing list
+text test и built stdio harness также исполняют server-authored JSON вместо
+ручного повторения args. Optional nextArgs не используется search tools;
+их прежние formatter/page/009 warning regressions проходят.
+
+Общая actual TIMEOUT suggestion теперь `Reduce scope or traversal depth.`.
+Реальный wire deadline test проверяет этот текст и отсутствие maxResults/pageSize.
+Deadline, traversal и cancellation механизм не менялись.
+
+Целевые suites `list-bounded/tools/tool-selection`: 108 tests, 106 PASS,
+0 FAIL, 2 Windows file-symlink permission skips; все 15 bounded tests PASS.
+Финальный `npm run check` после доработки: 458 tests, 450 PASS, 0 FAIL, 8 skips
+(3 POSIX-only, 5 Windows file-symlink permission), весь static stage PASS.
+Built stdio full/read-only PASS с literal командами: 4×25 entries при limit=100,
+resource совпадает, warning final page остаётся. Результаты записаны также
+в добавлении Work record.
+Tools/list schemas/descriptions не менялись; ceilings и counts прежние.
+Новый live шаг — исполнять буквальную Next page command с нестандартным limit
+до final page. Живой опыт остаётся невыполненным; push/поставка/приёмка у планирования.

@@ -219,3 +219,49 @@ checkpoint с карточкой. Прочитай AGENTS.md, docs/README.md, br
   symlink/sensitive rules не читаются. Windows SMB, POSIX skips и live требуют
   отдельной приёмки в соответствующей среде. Installed server, roots, keys,
   tunnel, центральная доска, push/PR/merge/release не затронуты.
+
+### Доработка после review R1/R2 — ready for repeat review, 2026-10-09
+
+- Parent доработки: `7fabbe0bf4e88eab1aa30181d9569f23b9ccacb3`; та же ветка
+  `codex/010-bounded-list`, clean tracked tree перед началом. Review прочитан
+  через `git show 4c9ce2ebf51d3cfaf9e348ac18d906b7dc757ef9:docs/testing/010-review-r1-2026-10-09.md`;
+  центральная доска и planning checkout не менялись. Новый локальный SHA
+  передаётся в handoff, собственный SHA в commit не записывается.
+- R1 воспроизведён новой regression на предыдущем head: actual command из text
+  для list с limit=2/pageSize=1 без path приводит к INVALID_INPUT. Исправление:
+  list передаёт parsed scope/limit/pageSize и effective query path в optional
+  nextArgs общего pageTrailer. Formatter заменяет любой предыдущий cursor новым.
+  Literal Next page JSON теперь исполним, включая continuation после смены
+  pageSize. Query identity/cache/TTL не ослаблены; mismatching limit/scope
+  по-прежнему отклоняются. Для omitted path команда фиксирует выбранный root.
+- R2: реальный wire TIMEOUT до fix подтверждал совет снижать несуществующий
+  maxResults. Общая suggestion теперь `Reduce scope or traversal depth.`.
+  Existing real-deadline regression проверяет точный совет и отсутствие
+  maxResults/pageSize. Deadline, walker и отмена не менялись.
+- Новая meaningful regression извлекает и исполняет JSON на каждой странице:
+  nondefault limit с omitted path, default-limit control, explicit path с
+  пробелом, depth=3, обе flags=true, limit=6; отдельно меняет только pageSize
+  с 1 на 2. Opens/reads/closes/ignore reads после первого сбора не увеличиваются,
+  pages продвигаются без дублей/потерь, warning есть на final page. Existing
+  TC-FUNC-075 и runnable built stdio также исполняют literal команды. Соседние
+  find_files/search_text не передают nextArgs и сохраняют прежний text/контракт;
+  их pagination и 009 warning regressions PASS.
+- Проверки: `node --test --import tsx __tests__/list-bounded.test.ts __tests__/tools.test.ts __tests__/tool-selection.test.ts`
+  — **108 tests / 106 PASS / 0 FAIL / 2 permission skips**. Все 15 bounded
+  acceptance tests PASS, skips в двух прежних Windows file-symlink tools cases.
+  `npm run check` после доработки — **458 tests / 450 PASS / 0 FAIL / 8 skips**,
+  build, production/test types, ESLint, Prettier, Knip PASS. Среда та же:
+  Windows, Node v24.15.0, npm 11.12.1, разрешённый local shell. Skips прежние:
+  3 POSIX-only, 5 недоступных Windows file-symlink cases; junction checks PASS.
+- `node scripts/list-check/local-mcp-check.mjs` на built stdio — full/read-only
+  **PASS**, literal commands доводят limit=100/pageSize=25 до 4×25, bounded
+  resource совпадает, warning final page остаётся. Tools/list прежние:
+  19/13 tools, **25888/15808 chars**, budgets 26900/15900 не менялись.
+  `git diff --check` PASS. README, architecture, instructions/help и [локальный
+  протокол](../testing/010-bounded-list.md) дополнены literal continuation step.
+- Остаточные ограничения прежние: exact N консервативно incomplete, сортируется
+  collected set, cursor не продолжает scan и имеет прежний TTL; OS I/O не может
+  быть принудительно прервано. Существующая scope-specific cursor-only подсказка
+  search tools не расширялась в этой доработке. Live не выполнен; planning ведёт
+  повторное review, поставку и приёмку. Push/PR/merge, версии/dependencies,
+  installed service, production roots, keys и tunnel не затронуты.

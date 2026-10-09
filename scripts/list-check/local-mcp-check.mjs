@@ -79,12 +79,16 @@ try {
         assert.equal(meta.stoppedReason, 'limit');
         assert(result.content[0].text.startsWith('// list stopped at limit=100;'));
         entries.push(...meta.entries);
+        assert(entries.length <= 100, 'continuation must advance');
         pageSizes.push(meta.entryCount);
         if (!meta.nextCursor) break;
-        result = await client.callTool({
-          name: 'list',
-          arguments: { ...args, cursor: meta.nextCursor },
-        });
+        const continuation =
+          /^\/\/ showing \d+-\d+ of \d+ entries\. Next page: list (\{.*\})$/m.exec(
+            result.content[0].text,
+          );
+        assert(continuation?.[1]);
+        // Execute the literal text command: no manual reconstruction of scope.
+        result = await client.callTool({ name: 'list', arguments: JSON.parse(continuation[1]) });
         assert.notEqual(result.isError, true);
         assert.equal(result._meta.resourceUri, undefined);
       }

@@ -227,7 +227,9 @@ pages. `maxEntries` is removed; old calls return a validation error.
 For example, `{"path":"/workspace","maxDepth":2,"limit":100,"pageSize":25}`
 collects at most 100 entries and returns at most four pages. Use the returned
 `nextCursor` with the same path, depth, limit and flags; only pageSize may change.
-Cursors page the cached set for about 60 seconds and never resume traversal.
+The `Next page: list {...}` text repeats the original scope, limit and pageSize;
+execute that complete JSON to continue. Cursors page the cached set for about
+60 seconds and never resume traversal.
 
 When collection reaches limit, `truncated=true` and `stoppedReason="limit"`
 appear in `_meta`. A warning precedes the tree on every page, including the last.
