@@ -193,3 +193,60 @@ resource совпадает, warning final page остаётся. Результ
 Tools/list schemas/descriptions не менялись; ceilings и counts прежние.
 Новый live шаг — исполнять буквальную Next page command с нестандартным limit
 до final page. Живой опыт остаётся невыполненным; push/поставка/приёмка у планирования.
+
+## R3: Windows 8.3 TEMP — исправление test setup, 2026-10-09
+
+Parent: `29fa8b7b2bc20371a0a7fd50e7c9e3b87798f2ef`. Planning сообщил три
+Windows CI failures draft PR #9 (job 113910207955, run 37957080981): ignore
+cancellation не отклоняет scan из-за short root, а no-follow и wire deadline
+instrumentation сравнивает canonical opens с short fixture и получает `../..`.
+
+Независимое воспроизведение до fix: новый synthetic parent с длинным именем
+в ignored scratch текущего worktree, настоящий FSO ShortPath, каноническая
+идентичность parent подтверждена. Только дочерний Node process получил TEMP/TMP
+с коротким spelling. Три exact-name cases дали **0 PASS / 3 FAIL / 0 skips**:
+Missing expected rejection, тот же warning `Bundle selectors must not contain
+symlink or junction aliases`, два mismatch observed.opened. Actual wire
+TIMEOUT происходил; провал касался путей instrumentation.
+
+Это **test-only fix**. `fixture` теперь возвращает realpath source/scratch,
+как public list после validateExistingDirectory; прямой walker больше не получает
+8.3 root вместо его canonical contract. Instrumentation использует guarded
+opendir `validPath` вместо requested spelling. Checks отмены, closes и всех
+посещений сохранены. Новые skips не добавлены; tool deadline 5 s сохранён. PathGuard/no-follow и
+код сервера не изменены: diff по `src/` к parent пуст.
+
+Public alias roots не скрыты канонизацией test setup: existing alias test расширен
+и вызывает настоящий MCP list отдельно с junction root и с полученным через
+FSO настоящим Windows 8.3 source root. Он проверяет relative paths и применение
+.gitignore к вложенному файлу (ignored log отсутствует, обычный файл видим). Оба controls PASS.
+Таким образом для публичного list runtime defect на 8.3 root не подтверждён.
+
+Воспроизводимые команды с tracked launcher, без зависимости от ignored probe:
+
+```powershell
+node --test --import tsx __tests__/list-bounded.test.ts
+node scripts/list-check/windows-short-temp.mjs targeted
+node scripts/list-check/windows-short-temp.mjs suite
+npm run check
+node scripts/list-check/windows-short-temp.mjs check
+```
+
+Launcher требует Windows и действительный short basename нового parent;
+если 8.3 names недоступны, выдаёт error, а не фиктивное доказательство. Source,
+scratch, parent и log fixtures синтетические. TEMP/TMP меняются только в child
+environment; системная конфигурация, installed server, production и tunnel не
+используются. После process exit собственный parent удаляется с проверкой
+containment внутри workspace scratch. Дополнительный wrapper deadline 300 s
+ограничивает весь repository check; tool timeout 5 s не менялся.
+
+После исправления bounded suite: обычный TEMP **15 PASS / 0 FAIL / 0 skips**,
+реальный 8.3 TEMP **15 PASS / 0 FAIL / 0 skips**. Ignore cancellation, native
+handles, canonical validation, wire timeout и literal continuation прошли в обоих
+профилях; public configured source aliases проверены в обоих. Полный обычный
+check и полный actual 8.3 check — каждый **458 tests / 450 PASS / 0 FAIL /
+8 прежних skips** (3 POSIX-only, 5 Windows file-symlink permission cases).
+Build, production/test types, ESLint, Prettier, Knip PASS в обоих профилях.
+Переносимое handoff evidence записано в добавлении Work record R3.
+Runtime источники/версии/dependencies прежние. CI rerun, portable и integration
+по-прежнему у planning; новый remote CI результат здесь не утверждается.

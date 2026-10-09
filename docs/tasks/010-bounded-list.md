@@ -265,3 +265,47 @@ checkpoint с карточкой. Прочитай AGENTS.md, docs/README.md, br
   search tools не расширялась в этой доработке. Live не выполнен; planning ведёт
   повторное review, поставку и приёмку. Push/PR/merge, версии/dependencies,
   installed service, production roots, keys и tunnel не затронуты.
+
+### Доработка после Windows CI R3 — ready for repeat review, 2026-10-09
+
+- Parent: `29fa8b7b2bc20371a0a7fd50e7c9e3b87798f2ef`, та же изолированная
+  ветка `codex/010-bounded-list`. R1/R2 закрыты независимым planning review;
+  R3 назначен после трёх Windows failures в draft PR #9, run 37957080981,
+  job 113910207955. Этот worktree не меняет PR/CI или центральную доску.
+- Независимый before-fix опыт с настоящим FSO ShortPath synthetic TEMP parent:
+  **3 tests / 0 PASS / 3 FAIL / 0 skips**. Подтверждены Missing expected
+  rejection при ignore loading и два mismatch путей opens; настоящий wire
+  TIMEOUT при этом происходил. Junction TEMP не использовался как замена 8.3.
+- **Test-only fix**: source/scratch fixtures канонизируются через realpath,
+  как roots публичного list; instrumentation записывает guarded opendir
+  `validPath`. Прямой internal walker теперь получает canonical contract,
+  относительные opens сравниваются в той же системе путей. Checks отмены,
+  handles/closes и no-follow сохранены. Diff по `src/` к parent пуст;
+  PathGuard, traversal, tool deadline 5 s, публичный контракт и schemas прежние.
+  Новые skips не добавлены, существующие assertions не ослаблены.
+- Публичный alias control отдельно вызывает actual MCP list с junction root
+  и настоящим Windows 8.3 source root: relative paths корректны,
+  .gitignore исключает вложенный log и сохраняет обычный файл. Оба PASS в обычном
+  и 8.3 TEMP; runtime defect публичного list на этих aliases не подтверждён.
+- Переносимый launcher `scripts/list-check/windows-short-temp.mjs` создаёт
+  только свои fixtures в ignored workspace scratch, требует настоящий short
+  basename и canonical identity, меняет TEMP/TMP только дочернему process,
+  удаляет созданный parent после проверки containment. Windows без actual 8.3
+  names даёт error, а не ложное evidence. Runbook и [подробный протокол](../testing/010-bounded-list.md)
+  содержат команды targeted/suite/check; ignored probe для повторения не нужен.
+- Checks: Windows, Node v24.15.0 / npm 11.12.1. Обычный
+  `node --test --import tsx __tests__/list-bounded.test.ts` и настоящий 8.3
+  `node scripts/list-check/windows-short-temp.mjs suite` — каждый
+  **15 PASS / 0 FAIL / 0 skips**. Все cancellation/late native handle,
+  canonical validation, wire deadline, no-rescan и literal continuation
+  regressions сохранены и PASS в обоих профилях.
+- Полный `npm run check` с обычным TEMP и
+  `node scripts/list-check/windows-short-temp.mjs check` с actual 8.3 TEMP —
+  каждый **458 tests / 450 PASS / 0 FAIL / 8 прежних skips**; build,
+  production/test types, ESLint, Prettier, Knip PASS. Skips: 3 POSIX-only
+  и 5 недоступных Windows file-symlink cases, без новых пропусков; реальные
+  junction/8.3 configured-root controls PASS. Финальный `git diff --check` PASS.
+- Runtime sources, versions/dependencies, installed kit/service, production
+  roots, keys и tunnel не менялись. Локальный commit SHA передаётся в handoff.
+  Push, повторный remote CI, portable, live и merge остаются у planning;
+  результаты этих действий здесь не утверждаются. Ограничения 010 прежние.

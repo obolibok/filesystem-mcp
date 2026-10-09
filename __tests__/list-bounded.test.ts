@@ -2,6 +2,7 @@ import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { McpServer } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import type { Dirent } from 'node:fs';
 import fsPromises, { mkdir, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
@@ -38,8 +39,10 @@ interface ListMeta {
 }
 
 async function fixture(t: TestContext) {
-  const root = await createTestRoot();
-  const scratch = await createTestRoot();
+  // The internal walker receives the same canonical root as the public tool.
+  // Windows TEMP may be an 8.3 spelling of a different lexical parent path.
+  const root = await fsPromises.realpath(await createTestRoot());
+  const scratch = await fsPromises.realpath(await createTestRoot());
   const savedScratch = process.env['FS_SNAPSHOT_DIR'];
   process.env['FS_SNAPSHOT_DIR'] = scratch;
   t.after(async () => {
@@ -67,7 +70,7 @@ function instrument(
     'opendir',
     async function (this: GuardedFileSystem, ...args: Parameters<GuardedFileSystem['opendir']>) {
       const result = await open.apply(this, args);
-      opened.push(relative(root, args[0]).replaceAll('\\', '/'));
+      opened.push(relative(root, result.validPath).replaceAll('\\', '/'));
       const directory = result.directory;
       const read = directory.read.bind(directory);
       const close = directory.close.bind(directory);
@@ -650,21 +653,50 @@ it('an already cancelled list walk starts no directory or ignore operations', as
   assert.deepEqual(observed.ignoreReads, []);
 });
 
-it('a configured root junction resolves canonically and preserves relative paths', async (t) => {
+it('configured root junction and Windows 8.3 aliases preserve relative paths and ignore rules through MCP', async (t) => {
   const root = await fixture(t);
-  await writeTestFile(root, 'source/parent/file.txt', 'fixture');
-  const alias = join(root, 'source-alias');
-  if (!(await trySymlink(join(root, 'source'), alias, () => t.skip('junction not permitted'))))
-    return;
-  const pair = await createTestClientPair([alias]);
-  t.after(() => pair.close());
-  const result = await pair.client.callTool({
-    name: 'list',
-    arguments: { path: alias, maxDepth: 2 },
-  });
-  assert.notEqual(result.isError, true, firstTextBlock(result).text);
-  const paths = (result._meta as unknown as ListMeta).entries.map((e) => e.relativePath);
-  assert.deepEqual(paths, ['parent', 'parent/file.txt']);
+  const source = join(root, 'source');
+  await writeTestFile(source, '.gitignore', '*.log\n');
+  await writeTestFile(source, 'parent/file.txt', 'fixture');
+  await writeTestFile(source, 'parent/drop.log', 'fixture');
+  const junction = join(root, 'source-alias');
+  if (!(await trySymlink(source, junction, () => t.skip('junction not permitted')))) return;
+  const aliases = [junction];
+  if (process.platform === 'win32') {
+    const short = execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        '$ErrorActionPreference = "Stop"; (New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:FSMCP_LIST_ALIAS_TEST).ShortPath',
+      ],
+      {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 10000,
+        env: { ...process.env, FSMCP_LIST_ALIAS_TEST: source },
+      },
+    ).trim();
+    assert(/~\d/u.test(short), 'Expected an actual Windows 8.3 root spelling');
+    assert.equal(await fsPromises.realpath(short), await fsPromises.realpath(source));
+    aliases.push(short);
+    t.diagnostic('Actual Windows 8.3 configured source root verified');
+  }
+  for (const alias of aliases) {
+    const pair = await createTestClientPair([alias]);
+    try {
+      const result = await pair.client.callTool({
+        name: 'list',
+        arguments: { path: alias, maxDepth: 2 },
+      });
+      assert.notEqual(result.isError, true, firstTextBlock(result).text);
+      const paths = (result._meta as unknown as ListMeta).entries.map((e) => e.relativePath);
+      assert.deepEqual(paths, ['parent', 'parent/file.txt']);
+    } finally {
+      await pair.close();
+    }
+  }
 });
 
 it('cancellation during canonical validation starts no stat, ancestor probe or opendir', async (t) => {
