@@ -1,6 +1,6 @@
 # Приоритеты и интеграция
 
-Владелец: планирующий чат. Обновлено: 2026-10-08.
+Владелец: планирующий чат. Обновлено: 2026-10-09.
 Это единая доска интеграционного статуса. Coding-чаты записывают свою работу в
 карточках задач, а планирование обновляет эту таблицу после review/интеграции.
 
@@ -19,6 +19,7 @@
 | 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md) | done     | 006                | Принята вместе с 008 через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, большой live и CI PASS             |
 | 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)      | done     | 007 runtime        | Принята через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, portable, live/restart и CI PASS                |
 | 009          | [Выбор инструментов и понятные результаты](../tasks/009-tool-selection.md)          | done     | 007, 008           | Принята через [PR #8](https://github.com/obolibok/filesystem-mcp/pull/8); review и CI PASS; пользователь принял live              |
+| 010          | [Ограниченный list и ясные лимиты](../tasks/010-bounded-list.md)                    | ready    | 009                | GPT-6.1-Sol / Extra High; реализация разрешена, подготовлен запуск                                                                |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -28,6 +29,14 @@
 Не придумывать task ID приложения или commit SHA.
 
 ## Текущий следующий шаг
+
+09.10.2026 пользователь разрешил [010](../tasks/010-bounded-list.md): исправить
+фактическую глубину/отмену list и добавить общий limit отдельно от pageSize.
+MaxEntries удаляется без alias; maxPages не вводится. Пагинация остаётся внутри
+bounded результата, неполнота явно видна. [Triage](../testing/010-list-depth-triage-2026-10-09.md)
+подтвердил лишний обход на synthetic данных. Пользователь сообщает о последней
+установленной сборке; точный SHA процесса отдельно не проверялся. Подготовлен
+запуск GPT-6.1-Sol / Extra High в отдельном worktree после публикации карточки.
 
 [009](../tasks/009-tool-selection.md) принята и интегрирована через
 [PR #8](https://github.com/obolibok/filesystem-mcp/pull/8), merge
@@ -45,7 +54,7 @@ merge. Это принятая пользовательская live прове�
 повторных опытов. Count_files/count-only не добавлены; API и source policy прежние.
 Sleep/Ctrl+C и нестабильный PowerShell helper остаются отдельными наблюдениями.
 
-Следующий шаг — согласовать предметный опыт 005: выборку Daum/Inoplacer,
+После 010 — согласовать предметный опыт 005: выборку Daum/Inoplacer,
 исходный вопрос и критерии результата. Задача пока proposed, исполнитель
 не назначен; новую реализацию автоматически не начинать.
 
