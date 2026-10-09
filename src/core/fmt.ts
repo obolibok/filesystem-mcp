@@ -111,6 +111,8 @@ export function pageTrailer(p: {
   noun: string;
   tool: string;
   nextCursor?: string | undefined;
+  /** Query arguments to repeat; the next cursor always replaces any old one. */
+  nextArgs?: Readonly<Record<string, unknown>>;
 }): string {
   const lines: string[] = [];
   // Position is owed on every page of a split set, including the last one —
@@ -119,7 +121,7 @@ export function pageTrailer(p: {
     const next =
       p.nextCursor === undefined
         ? ''
-        : ` Next page: ${p.tool} ${JSON.stringify({ cursor: p.nextCursor })}`;
+        : ` Next page: ${p.tool} ${JSON.stringify({ ...p.nextArgs, cursor: p.nextCursor })}`;
     lines.push(
       `// showing ${String(p.offset + 1)}-${String(p.offset + p.shown)} of ${String(p.total)} ${p.noun}.${next}`,
     );

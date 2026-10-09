@@ -79,6 +79,29 @@ Windows runner или `os.tmpdir()` может вернуть 8.3 spelling вр�
 requested и real aliases для lexical/resolved containment checks; omitted `path`
 группирует их по canonical location и требует explicit path только для разных locations.
 
+## Проверка list при настоящем Windows 8.3 TEMP
+
+`list` regression fixtures канонизируют source/scratch до вызова внутреннего
+walker; instrumentation считает посещения по guarded `validPath`. Публичный
+MCP отдельно проверяет roots через junction и настоящее 8.3 spelling с ignore rules.
+
+Самодостаточный launcher создаёт новый synthetic parent под ignored `.tmp/`,
+получает его `ShortPath` через Scripting.FileSystemObject и проверяет настоящий
+short basename и совпадение realpath. TEMP/TMP задаются только дочернему process;
+caller/system environment не меняется. Junction TEMP не заменяет этот опыт.
+
+```powershell
+node scripts/list-check/windows-short-temp.mjs targeted
+node scripts/list-check/windows-short-temp.mjs suite
+node scripts/list-check/windows-short-temp.mjs check
+```
+
+`targeted` выполняет три R3 cases, `suite` (default) — все bounded list tests,
+`check` — полный `npm run check` в том же профиле. Если у нового parent нет
+настоящего 8.3 basename, launcher завершается с error: такой запуск не является
+8.3 evidence. Собственные fixtures удаляются после завершения дочернего процесса.
+Результаты и границы: [010 local checks](../testing/010-bounded-list.md).
+
 ## Synthetic каталог и конфигурация
 
 Из корня своей рабочей копии создать маленький UTF-8 fixture:

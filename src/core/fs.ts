@@ -427,10 +427,11 @@ export class GuardedFileSystem {
       rejectPath?: (path: string) => boolean;
     },
   ): Promise<{ handle: FileHandle; stats: Stats; validPath: string }> {
+    options?.signal?.throwIfAborted();
     if (options?.root) {
       await this.pathGuard.assertNoSymlinkComponents(options.root, filePath, options.signal);
     }
-    const details = await this.pathGuard.validateExistingPathDetailed(filePath);
+    const details = await this.pathGuard.validateExistingPathDetailed(filePath, options?.signal);
     if (details.isSymlink) {
       throw new FsError(
         ErrorCode.ACCESS_DENIED,
@@ -453,8 +454,10 @@ export class GuardedFileSystem {
     if (!pathStats.isFile()) {
       throw new FsError(ErrorCode.NOT_FILE, 'Bundle selector is not a regular file', filePath);
     }
+    options?.signal?.throwIfAborted();
     const handle = await fsOpen(details.resolvedPath, 'r');
     try {
+      options?.signal?.throwIfAborted();
       const stats = await withAbort(handle.stat(), options?.signal);
       if (!stats.isFile()) {
         throw new FsError(ErrorCode.NOT_FILE, 'Bundle selector is not a regular file', filePath);
@@ -474,10 +477,19 @@ export class GuardedFileSystem {
     dirPath: string,
     options?: { signal?: AbortSignal },
   ): Promise<{ directory: Dir; validPath: string }> {
-    const validPath = await this.pathGuard.validateExistingDirectory(dirPath);
     options?.signal?.throwIfAborted();
-    const directory = await withAbort(fsOpendir(validPath), options?.signal);
-    return { directory, validPath };
+    const validPath = await this.pathGuard.validateExistingDirectory(dirPath, options?.signal);
+    options?.signal?.throwIfAborted();
+    // opendir is not abortable. Wait for its handle, then close it if the
+    // signal fired while opening; racing it would orphan the late handle.
+    const directory = await fsOpendir(validPath);
+    try {
+      options?.signal?.throwIfAborted();
+      return { directory, validPath };
+    } catch (error) {
+      await directory.close();
+      throw error;
+    }
   }
 
   // Single resolution + stat: validateExistingPathDetailed resolves the real

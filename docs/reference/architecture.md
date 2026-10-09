@@ -6,18 +6,18 @@
 
 ## Владельцы кода
 
-| Область        | Файлы                                                          | Ответственность                                       |
-| -------------- | -------------------------------------------------------------- | ----------------------------------------------------- |
-| CLI/entry      | `src/index.ts`, `src/cli.ts`, `src/core/config.ts`             | Аргументы, startup config, выбор транспорта           |
-| Hosting        | `src/transport/`, `src/transport.ts`                           | stdio/HTTP и публичный facade export                  |
-| Composition    | `src/server.ts`                                                | PathGuard, stores, registrars, lifecycle              |
-| MCP tools      | `src/tools/index.ts`, `define.ts`, отдельные tools             | Inventory, read-only gate, schemas, dispatch/response |
-| Guarded I/O    | `src/core/path.ts`, `path-utils.ts`, `fs.ts`                   | Root policy, resolution, файловые операции            |
-| Text/discovery | `src/core/read.ts`, `search.ts`, `mime.ts`, `glob.ts`          | Чтение, поиск, классификация, ignore                  |
-| Resources      | `src/resources.ts`, `src/core/file-uri.ts`                     | URI, text/blob delivery, subscriptions                |
-| State          | `src/core/store.ts`, `page-store.ts`, `watcher-registry.ts`    | Кэш результатов, страницы, уведомления                |
-| Durable jobs   | `job-manager.ts`, `snapshot-pipeline.ts`, `bundle-pipeline.ts` | Общий lifecycle и producers                           |
-| Validation     | `__tests__/`, `.github/workflows/ci.yml`                       | Unit/integration/stdio/HTTP tests и CI                |
+| Область        | Файлы                                                                                     | Ответственность                                       |
+| -------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| CLI/entry      | `src/index.ts`, `src/cli.ts`, `src/core/config.ts`                                        | Аргументы, startup config, выбор транспорта           |
+| Hosting        | `src/transport/`, `src/transport.ts`                                                      | stdio/HTTP и публичный facade export                  |
+| Composition    | `src/server.ts`                                                                           | PathGuard, stores, registrars, lifecycle              |
+| MCP tools      | `src/tools/index.ts`, `define.ts`, отдельные tools                                        | Inventory, read-only gate, schemas, dispatch/response |
+| Guarded I/O    | `src/core/path.ts`, `path-utils.ts`, `fs.ts`                                              | Root policy, resolution, файловые операции            |
+| Text/discovery | `src/core/read.ts`, `search.ts`, `mime.ts`, `glob.ts`, `list-walk.ts`, `source-ignore.ts` | Чтение, поиск, классификация, ignore                  |
+| Resources      | `src/resources.ts`, `src/core/file-uri.ts`                                                | URI, text/blob delivery, subscriptions                |
+| State          | `src/core/store.ts`, `page-store.ts`, `watcher-registry.ts`                               | Кэш результатов, страницы, уведомления                |
+| Durable jobs   | `job-manager.ts`, `snapshot-pipeline.ts`, `bundle-pipeline.ts`                            | Общий lifecycle и producers                           |
+| Validation     | `__tests__/`, `.github/workflows/ci.yml`                                                  | Unit/integration/stdio/HTTP tests и CI                |
 
 Сначала искать существующего владельца поведения. Не обходить guard прямым
 доступом к файлам в новом tool и не менять публичный transport export ради
@@ -102,6 +102,44 @@ rules; прибавлять его к `filesWritten` как число допо�
 выбора LLM: [009](../testing/009-tool-selection.md); локальные wire checks не
 доказывают поведение модели в живом клиенте.
 
+## Ограниченный list
+
+`list` использует потоковый guarded walker в `core/list-walk.ts`. `maxDepth=1`
+открывает только root, 2 — root и доступные дочерние каталоги; папки на границе
+видны, но их содержимое и локальные ignore rules не читаются. `.gitignore`
+загружается только для открытого каталога, до перечисления его детей. Hidden,
+default exclusions, nested ignore/negation и PathGuard source policy действуют
+до yield; symlink/junction entries не используются для рекурсии.
+
+`limit` — общий максимум доступных entries (default/cap 20000), `pageSize` —
+размер одного ответа (default 1000, cap 20000). Оба имеют диапазон 1..20000;
+`maxEntries` удалён без alias, `maxPages` нет. Файлы, папки, symlink/other
+считаются одинаково в limit. Policy-excluded raw entries могут потребовать
+больше OS calls; depth и deadline дополнительно сдерживают работу.
+
+После N-й допустимой записи обход закрывает все handles без look-ahead и
+дальнейшего подсчёта дерева. `truncated=true`, `stoppedReason=limit` и
+эффективный `limit` остаются в `_meta` каждой страницы и JSON resource;
+`totalEntries/totalDirectories` считают собранный набор, а `totalFiles`
+сохраняет прежнее значение: все non-directory entries, включая symlink/other.
+При exact N тоже сообщается неподтверждённая полнота. Warning перед tree rows
+на каждой странице объясняет limit, смысл totals и отсутствие scan continuation.
+`complete=true` не добавляется. Без resourceStore warning/metadata те же.
+
+Cursor хранит только этот набор, зависит от path/depth/flags/limit; pageSize можно
+менять. Команда `Next page: list {...}` повторяет effective path, depth, flags,
+limit и pageSize; её JSON можно исполнять без ручного восстановления scope.
+Сортируется лишь собранный набор, не весь источник ради глобально первых N.
+Resource выдаётся на первой странице при paging/truncation; TTL/cap stores прежние.
+Контекст отсутствующего на странице родителя показывается отдельной relative
+строкой, поэтому nested rows на поздних страницах не теряются из текста.
+Отмена проверяется до/после перечисления, включая excluded entries и ignore reads;
+активный неотменяемый opendir/read завершается, после чего handle закрывается.
+Принудительного прерывания зависшего OS I/O нет; TIMEOUT/CANCELLED не выдаются
+как успешные полные results. Общий glob соседних tools сохраняет свой контракт.
+
+Проверки и следующий live: [010 bounded list](../testing/010-bounded-list.md).
+
 ## Форматы
 
 | Данные                                  | Текущее поведение                                                                                                                  |
@@ -136,7 +174,7 @@ blob SDK-клиентом само по себе не доказывает ма�
 | Batch read budget                     | 512 KiB по умолчанию                                                              | `core/util.ts`, `tools/read.ts` |
 | Search timeout                        | 5 секунд; конфиг 100–60000 ms                                                     | `core/util.ts`                  |
 | Search results                        | До 10000 собранных результатов; page size отдельно                                | `core/util.ts`, search tools    |
-| List entries                          | До 20000                                                                          | `core/util.ts`, `tools/list.ts` |
+| List entries                          | limit default/cap 20000; pageSize default 1000, cap 20000                         | `core/util.ts`, `tools/list.ts` |
 | Search context                        | До 10 строк с каждой стороны                                                      | `tools/search-text.ts`          |
 | Page snapshots                        | 32 snapshots, TTL 60 секунд                                                       | `core/page-store.ts`            |
 | Cached result resources               | 64 записи; 10 MiB на запись, 25 MiB суммарно; TTL 60 секунд                       | `core/store.ts`                 |

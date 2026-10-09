@@ -75,7 +75,7 @@ const DEFAULT_SUGGESTIONS: Readonly<Partial<Record<ErrorCode, string>>> = {
   [ErrorCode.NOT_FILE]: 'Target is a directory, not a file.',
   [ErrorCode.NOT_DIRECTORY]: 'Target is a file, not a directory.',
   [ErrorCode.TOO_LARGE]: 'Use head/tail or line ranges to read partially.',
-  [ErrorCode.TIMEOUT]: 'Reduce scope, depth, or maxResults.',
+  [ErrorCode.TIMEOUT]: 'Reduce scope or traversal depth.',
   [ErrorCode.INVALID_PATTERN]: 'Check syntax and escape special characters.',
   [ErrorCode.PERMISSION_DENIED]: 'Check OS file permissions.',
   [ErrorCode.SYMLINK_NOT_ALLOWED]: 'Symlink escapes allowed directories.',

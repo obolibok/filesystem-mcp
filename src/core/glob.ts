@@ -1,15 +1,13 @@
 import { glob as fsGlob, readFile as fsReadFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, posix, relative, resolve } from 'node:path';
 
-import type { Ignore } from 'ignore';
-import ignore from 'ignore';
-
 import { processInParallel } from './concurrency.js';
 import { formatUnknownErrorMessage } from './errors.js';
 import { Logger } from './observability.js';
 import { isWindowsDriveRelativePath } from './path-utils.js';
 import { type DirentLike, toPosixPath } from './primitives.js';
 import type { EntryType } from './primitives.js';
+import { DEFAULT_EXCLUDE_PATTERNS, GitignoreManager } from './source-ignore.js';
 
 export type { EntryType };
 
@@ -44,10 +42,8 @@ async function loadGitignoreFiles(
       const absPath = join(root, relPath);
       try {
         const contents = await fsReadFile(absPath, { encoding: 'utf-8', signal });
-        const matcher = ignore();
-        matcher.add(contents);
         const dir = toPosixPath(dirname(relPath));
-        manager.addMatcher(dir === '.' ? '' : dir, matcher);
+        manager.addRules(dir, contents);
       } catch (error) {
         if (error instanceof Error && error.name === 'AbortError') throw error;
         Logger.warn(`Failed to read .gitignore at ${absPath}: ${formatUnknownErrorMessage(error)}`);
@@ -58,117 +54,40 @@ async function loadGitignoreFiles(
   );
 }
 
-class GitignoreManager {
-  private matchers = new Map<string, Ignore>();
-
-  addMatcher(dir: string, matcher: Ignore): void {
-    this.matchers.set(dir, matcher);
-  }
-
-  static async load(root: string, signal?: AbortSignal): Promise<GitignoreManager> {
-    const manager = new GitignoreManager();
-    try {
-      const gitignorePaths: string[] = [];
-      const gitignoreEntries = fsGlob('**/.gitignore', {
-        cwd: root,
-        exclude: (entry: string) => {
-          const name = basename(entry);
-          if (name === 'node_modules' || name === '.git' || name === '.hg' || name === '.svn') {
-            return true;
-          }
-          return false;
-        },
-      });
-      for await (const match of gitignoreEntries) {
-        if (signal?.aborted) break;
-        gitignorePaths.push(match);
-      }
-
-      await loadGitignoreFiles(root, gitignorePaths, manager, signal);
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') throw error;
-      Logger.warn(
-        `Failed to enumerate .gitignore files under ${root}: ${formatUnknownErrorMessage(error)}`,
-      );
-    }
-    return manager;
-  }
-
-  size(): number {
-    return this.matchers.size;
-  }
-
-  isIgnored(relativePath: string, isDirectory: boolean): boolean {
-    const normalized = toPosixPath(relativePath);
-    if (normalized === '' || normalized === '.') return false;
-    const parts = normalized.split('/');
-
-    // 1. Check parent directories first
-    let currentDir = '';
-    for (let i = 0; i < parts.length - 1; i++) {
-      const part = parts[i];
-      if (!part) continue;
-      currentDir = currentDir ? `${currentDir}/${part}` : part;
-
-      if (this.checkPath(currentDir, true)) {
-        return true;
-      }
+async function loadGitignoreManager(root: string, signal?: AbortSignal): Promise<GitignoreManager> {
+  const manager = new GitignoreManager();
+  try {
+    const gitignorePaths: string[] = [];
+    const gitignoreEntries = fsGlob('**/.gitignore', {
+      cwd: root,
+      exclude: (entry: string) => {
+        const name = basename(entry);
+        if (name === 'node_modules' || name === '.git' || name === '.hg' || name === '.svn') {
+          return true;
+        }
+        return false;
+      },
+    });
+    for await (const match of gitignoreEntries) {
+      if (signal?.aborted) break;
+      gitignorePaths.push(match);
     }
 
-    // 2. Check the file/directory itself
-    return this.checkPath(normalized, isDirectory);
+    await loadGitignoreFiles(root, gitignorePaths, manager, signal);
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') throw error;
+    Logger.warn(
+      `Failed to enumerate .gitignore files under ${root}: ${formatUnknownErrorMessage(error)}`,
+    );
   }
-
-  private checkPath(posixPath: string, isDirectory: boolean): boolean {
-    const parts = posixPath.split('/');
-    const pathToCheck = isDirectory
-      ? posixPath.endsWith('/')
-        ? posixPath
-        : `${posixPath}/`
-      : posixPath;
-
-    let ignored = false;
-
-    // Check root level
-    const rootMatcher = this.matchers.get('');
-    if (rootMatcher) {
-      const res = rootMatcher.test(pathToCheck);
-      if (res.ignored) ignored = true;
-      if (res.unignored) ignored = false;
-    }
-
-    // Check subdirectories
-    let currentDir = '';
-    for (let i = 0; i < parts.length - 1; i++) {
-      const part = parts[i];
-      if (!part) continue;
-      currentDir = currentDir ? `${currentDir}/${part}` : part;
-
-      const matcher = this.matchers.get(currentDir);
-      if (matcher) {
-        const relParts = parts.slice(i + 1);
-        const relPath = relParts.join('/');
-        const relPathToCheck = isDirectory
-          ? relPath.endsWith('/')
-            ? relPath
-            : `${relPath}/`
-          : relPath;
-
-        const res = matcher.test(relPathToCheck);
-        if (res.ignored) ignored = true;
-        if (res.unignored) ignored = false;
-      }
-    }
-
-    return ignored;
-  }
+  return manager;
 }
 
 async function loadRootGitignore(
   root: string,
   signal?: AbortSignal,
 ): Promise<GitignoreManager | null> {
-  const manager = await GitignoreManager.load(root, signal);
+  const manager = await loadGitignoreManager(root, signal);
   if (manager.size() === 0) {
     return null;
   }
@@ -422,47 +341,3 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
     yield* processGlobPattern(pattern, plan, seen, onlyFiles, excludeFunc);
   }
 }
-
-const DEFAULT_EXCLUDE_PATTERNS = [
-  '**/node_modules',
-  '**/node_modules/**',
-  '**/dist',
-  '**/dist/**',
-  '**/build',
-  '**/build/**',
-  '**/coverage',
-  '**/coverage/**',
-  '**/.git',
-  '**/.git/**',
-  '**/.vscode',
-  '**/.vscode/**',
-  '**/.idea',
-  '**/.idea/**',
-  '**/.DS_Store',
-  '**/.next',
-  '**/.next/**',
-  '**/.nuxt',
-  '**/.nuxt/**',
-  '**/.output',
-  '**/.output/**',
-  '**/.svelte-kit',
-  '**/.svelte-kit/**',
-  '**/.cache',
-  '**/.cache/**',
-  '**/.yarn',
-  '**/.yarn/**',
-  '**/jspm_packages',
-  '**/jspm_packages/**',
-  '**/bower_components',
-  '**/bower_components/**',
-  '**/out',
-  '**/out/**',
-  '**/tmp',
-  '**/tmp/**',
-  '**/.temp',
-  '**/.temp/**',
-  '**/npm-debug.log',
-  '**/yarn-debug.log',
-  '**/yarn-error.log',
-  '**/Thumbs.db',
-];

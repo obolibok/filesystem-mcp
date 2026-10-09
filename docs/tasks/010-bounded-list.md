@@ -106,28 +106,28 @@ multi-root job, версии/dependencies, Ctrl+C/Sleep и flaky PowerShell help
 
 ## Проверки и acceptance
 
-- [ ] Synthetic instrumentation доказывает отсутствие descent за maxDepth, включая
+- [x] Synthetic instrumentation доказывает отсутствие descent за maxDepth, включая
       1/2, hidden папки и includeIgnored=false с глубокими .gitignore. Проверять
       реальные посещения/открытия, не только итоговый отфильтрованный массив.
-- [ ] На широком/глубоком дереве limit прекращает traversal, ограничивает весь
+- [x] На широком/глубоком дереве limit прекращает traversal, ограничивает весь
       набор до N, а pageSize меняет только страницу. Проверены 0/1/N-1/N/N+1
       найденных записей, limit меньше/равно/больше pageSize и validation bounds.
-- [ ] Cap result не объявляется полным; counters/text/_meta/resource согласованы.
+- [x] Cap result не объявляется полным; counters/text/_meta/resource согласованы.
       Pages без дублей/потерь; последняя страница без cursor сохраняет warning.
       Cursor query mismatch/expiry и изменение pageSize работают корректно.
-- [ ] При delayed iterator и отмене завершается работа и закрываются handles;
+- [x] При delayed iterator и отмене завершается работа и закрываются handles;
       вложенные отфильтрованные элементы и ignore discovery не прячут отмену.
       Стабильные tests по событиям/счётчикам; wall-clock только с разумным запасом.
-- [ ] No-follow/allowed boundaries/sensitive paths, Windows canonical aliases,
+- [x] No-follow/allowed boundaries/sensitive paths, Windows canonical aliases,
       hidden/.gitignore/default exclusions сохранены. Соседние find_files и
       search_text проверены при затрагивании общей логики; 009 warnings не сломаны.
-- [ ] Wire tools/list публикует limit/pageSize, не maxEntries; старое имя даёт
+- [x] Wire tools/list публикует limit/pageSize, не maxEntries; старое имя даёт
       понятную validation error. Actual request/response и defaults проверены.
       Описания однозначно разделяют collect cap, page size и число страниц.
-- [ ] Полный npm run check PASS; environment/skips записаны. Actual full/read-only
+- [x] Полный npm run check PASS; environment/skips записаны. Actual full/read-only
       tools/list размеры измерены; сначала сократить дублирование. Необходимое
       увеличение budget обосновать измерениями, не менять count без нового tool.
-- [ ] Reference/runnable examples и Work record обновлены. Протокол live включает
+- [x] Reference/runnable examples и Work record обновлены. Протокол live включает
       обновление каталога tools в подключении, быстрый верхний уровень большого
       root, limit/pageSize и последнюю страницу; live ещё не объявлять выполненным.
 
@@ -145,10 +145,167 @@ checkpoint с карточкой. Прочитай AGENTS.md, docs/README.md, br
 
 ## Work record
 
-Заполняет исполнитель. Реализация не начата.
+2026-10-09 — **ready for review**. Центральную доску исполнитель не менял;
+приёмка/интеграция и live остаются у планирования.
 
-- Base / branch / итоговый head:
-- Изменения и решение по traversal:
-- Контракт limit/pageSize, неполнота и counters:
-- Checks, environment, результаты/skips и tools/list budget:
-- Acceptance, риски, live и handoff:
+- Base: `151dfa1feefcd74b80c69e939f3e8b5ec30ee7cb`, точный launch checkpoint,
+  карточка присутствовала; исходный diff пуст. Managed worktree приложения,
+  собственная ветка `codex/010-bounded-list`. Итоговый локальный commit SHA
+  передаётся в handoff после создания, собственный SHA в commit не записывается.
+- Воспроизведение: actual in-memory MCP, synthetic 3×10×2; ради 3 верхних папок
+  glob выдал 93 raw matches из 34 parent directories, 90 глубже запроса. С 15 ms
+  на глубокий yield — TIMEOUT через 1627 ms, 37 matches после 1000 ms. Подробное
+  переносимое evidence: [локальные проверки и live](../testing/010-bounded-list.md).
+- Traversal: отдельный streaming `core/list-walk.ts` выбран вместо изменения
+  общего glob matching/hidden expansion соседних tools. Используются guarded
+  opendir/Dir.read, depth pruning до descent, lazy guarded rules только открытых
+  каталогов; cap закрывает iterator до рекурсии после N-го yield. Общий ignore
+  matcher/default exclusions вынесен в `core/source-ignore.ts`; семантика glob
+  consumers прежняя. В PathGuard validation добавлен optional signal, чтобы
+  не начинать stat/ancestor probing после отмены в realpath; guarded opendir
+  закрывает late OS handle. No-follow checks, source policy и canonical roots
+  сохранены; pipeline/transport/dependencies/версии не менялись.
+- Контракт: `limit` default/cap=20000, `pageSize` default=1000/cap=20000,
+  оба 1..20000. `maxEntries` удалён и явно отклоняется strict validation;
+  `maxPages` отсутствует. Limit считает все доступные entry types вместе.
+  Cursor identity включает effective limit + path/depth/flags, pageSize можно
+  менять. Cursors только листают собранный набор; TTL/resource правила прежние.
+- Неполнота: `limit`, `truncated` (boolean всегда), optional
+  `stoppedReason='limit'` в каждой `_meta` и JSON resource. Warning перед rows
+  на каждой странице, включая последнюю без cursor, называет limit, смысл totals
+  и отсутствие scan continuation. Exact N консервативно truncated без look-ahead;
+  `complete` не добавлен. `totalEntries/totalDirectories` — collected counters,
+  `totalFiles` сохраняет прежние non-directory entries (symlink/other включены).
+  Без resourceStore тот же результат; текст поздних nested pages показывает
+  relative parent, даже если сам parent был на прошлой странице.
+- Checks: Windows, Node v24.15.0 / npm 11.12.1, `npm ci` внутри своего worktree.
+  Shell sandbox и Node REPL не запускались из-за local setup refresh/runtime
+  errors; разрешённый local shell работал. Форматировались только touched files,
+  repository-wide fix не запускался. Финальный `npm run check` **PASS**:
+  build, production/test types, ESLint, Prettier, Knip + **457 tests / 449 PASS /
+  0 FAIL / 8 skips**. Предыдущий полный прогон до дополнительной guard cancellation
+  regression: 448 PASS/0 FAIL/8 skips; это не финальное evidence.
+- Skips полного прогона: 3 POSIX-only cases (FIFO, inode/mode, 0222 append target)
+  и 5 недоступных Windows file-symlink cases (3 append variants, sensitive-target
+  PathGuard validation, stat own-link). Эти ветки не объявляются проверенными.
+  Настоящие Windows junction escape/no-follow и configured-root alias в 010 PASS.
+- Bounded acceptance suite: **14 PASS / 0 FAIL / 0 skips**. Instrumentation
+  настоящих opens/reads/closes: depth 1/2 и hidden/ignore matrix, cap/EOF
+  0/1/N-1/N/N+1, wide/deep cap stop, cache/no-rescan, warning/resource/no-store,
+  query mismatch/expiry, validation/defaults, delayed filtered cancellation,
+  ignore cancellation, late opendir и отмена во время canonical validation.
+  Реальный wire deadline оставлен 5 s; TIMEOUT закрывает iterator (1 read/1 close)
+  и не возвращает success metadata. Уже отменённый walk начинает 0 operations.
+- Existing targeted suites `tools/core-fs/security/tool-selection/stdio/http-transport`:
+  **187 PASS / 0 FAIL / 6 skips** до дополнительной guard regression; финальный
+  полный check повторно включает их, snapshot/bundle и все остальные suites.
+- Actual built stdio harness `node scripts/list-check/local-mcp-check.mjs`
+  **PASS** в full и read-only после финальных runtime правок. Defaults дают
+  page=1000/total=1008; limit=100/pageSize=25 — 4×25, 100 unique entries, resource
+  тот же bounded set, warning последней страницы остаётся, old name отклоняется.
+- Actual tools/list: **19/13 tools, 25888/15808 chars** (full/read-only).
+  Убраны повторные depth/default/page descriptions; прирост к 009 — 156 chars.
+  Existing budgets **26900/15900** и tool counts сохранены, budget не увеличен.
+  Server instructions/help, README, architecture и runnable examples обновлены.
+- Acceptance локально выполнен; живой опыт **не выполнен**. Короткий live-протокол
+  в [010 testing](../testing/010-bounded-list.md): обновить connection/tool catalog,
+  maxDepth=1 на большом явном root с обеими ignore flags, limit/pageSize,
+  последняя страница/resource, changed pageSize и mismatch, LLM distinction.
+- Ограничения/риски: сортируется только collected set, не глобально первые N;
+  exact N не доказывает EOF. Excluded entries/OS read-ahead могут превышать limit,
+  это не OS-call budget. Отмена ждёт начатый неотменяемый OS I/O, зависший OS call
+  принудительно не прерывается. Source не atomic; прежний TOCTOU window guard
+  сохраняется. Ignore read failures остаются best-effort с log warning;
+  symlink/sensitive rules не читаются. Windows SMB, POSIX skips и live требуют
+  отдельной приёмки в соответствующей среде. Installed server, roots, keys,
+  tunnel, центральная доска, push/PR/merge/release не затронуты.
+
+### Доработка после review R1/R2 — ready for repeat review, 2026-10-09
+
+- Parent доработки: `7fabbe0bf4e88eab1aa30181d9569f23b9ccacb3`; та же ветка
+  `codex/010-bounded-list`, clean tracked tree перед началом. Review прочитан
+  через `git show 4c9ce2ebf51d3cfaf9e348ac18d906b7dc757ef9:docs/testing/010-review-r1-2026-10-09.md`;
+  центральная доска и planning checkout не менялись. Новый локальный SHA
+  передаётся в handoff, собственный SHA в commit не записывается.
+- R1 воспроизведён новой regression на предыдущем head: actual command из text
+  для list с limit=2/pageSize=1 без path приводит к INVALID_INPUT. Исправление:
+  list передаёт parsed scope/limit/pageSize и effective query path в optional
+  nextArgs общего pageTrailer. Formatter заменяет любой предыдущий cursor новым.
+  Literal Next page JSON теперь исполним, включая continuation после смены
+  pageSize. Query identity/cache/TTL не ослаблены; mismatching limit/scope
+  по-прежнему отклоняются. Для omitted path команда фиксирует выбранный root.
+- R2: реальный wire TIMEOUT до fix подтверждал совет снижать несуществующий
+  maxResults. Общая suggestion теперь `Reduce scope or traversal depth.`.
+  Existing real-deadline regression проверяет точный совет и отсутствие
+  maxResults/pageSize. Deadline, walker и отмена не менялись.
+- Новая meaningful regression извлекает и исполняет JSON на каждой странице:
+  nondefault limit с omitted path, default-limit control, explicit path с
+  пробелом, depth=3, обе flags=true, limit=6; отдельно меняет только pageSize
+  с 1 на 2. Opens/reads/closes/ignore reads после первого сбора не увеличиваются,
+  pages продвигаются без дублей/потерь, warning есть на final page. Existing
+  TC-FUNC-075 и runnable built stdio также исполняют literal команды. Соседние
+  find_files/search_text не передают nextArgs и сохраняют прежний text/контракт;
+  их pagination и 009 warning regressions PASS.
+- Проверки: `node --test --import tsx __tests__/list-bounded.test.ts __tests__/tools.test.ts __tests__/tool-selection.test.ts`
+  — **108 tests / 106 PASS / 0 FAIL / 2 permission skips**. Все 15 bounded
+  acceptance tests PASS, skips в двух прежних Windows file-symlink tools cases.
+  `npm run check` после доработки — **458 tests / 450 PASS / 0 FAIL / 8 skips**,
+  build, production/test types, ESLint, Prettier, Knip PASS. Среда та же:
+  Windows, Node v24.15.0, npm 11.12.1, разрешённый local shell. Skips прежние:
+  3 POSIX-only, 5 недоступных Windows file-symlink cases; junction checks PASS.
+- `node scripts/list-check/local-mcp-check.mjs` на built stdio — full/read-only
+  **PASS**, literal commands доводят limit=100/pageSize=25 до 4×25, bounded
+  resource совпадает, warning final page остаётся. Tools/list прежние:
+  19/13 tools, **25888/15808 chars**, budgets 26900/15900 не менялись.
+  `git diff --check` PASS. README, architecture, instructions/help и [локальный
+  протокол](../testing/010-bounded-list.md) дополнены literal continuation step.
+- Остаточные ограничения прежние: exact N консервативно incomplete, сортируется
+  collected set, cursor не продолжает scan и имеет прежний TTL; OS I/O не может
+  быть принудительно прервано. Существующая scope-specific cursor-only подсказка
+  search tools не расширялась в этой доработке. Live не выполнен; planning ведёт
+  повторное review, поставку и приёмку. Push/PR/merge, версии/dependencies,
+  installed service, production roots, keys и tunnel не затронуты.
+
+### Доработка после Windows CI R3 — ready for repeat review, 2026-10-09
+
+- Parent: `29fa8b7b2bc20371a0a7fd50e7c9e3b87798f2ef`, та же изолированная
+  ветка `codex/010-bounded-list`. R1/R2 закрыты независимым planning review;
+  R3 назначен после трёх Windows failures в draft PR #9, run 37957080981,
+  job 113910207955. Этот worktree не меняет PR/CI или центральную доску.
+- Независимый before-fix опыт с настоящим FSO ShortPath synthetic TEMP parent:
+  **3 tests / 0 PASS / 3 FAIL / 0 skips**. Подтверждены Missing expected
+  rejection при ignore loading и два mismatch путей opens; настоящий wire
+  TIMEOUT при этом происходил. Junction TEMP не использовался как замена 8.3.
+- **Test-only fix**: source/scratch fixtures канонизируются через realpath,
+  как roots публичного list; instrumentation записывает guarded opendir
+  `validPath`. Прямой internal walker теперь получает canonical contract,
+  относительные opens сравниваются в той же системе путей. Checks отмены,
+  handles/closes и no-follow сохранены. Diff по `src/` к parent пуст;
+  PathGuard, traversal, tool deadline 5 s, публичный контракт и schemas прежние.
+  Новые skips не добавлены, существующие assertions не ослаблены.
+- Публичный alias control отдельно вызывает actual MCP list с junction root
+  и настоящим Windows 8.3 source root: relative paths корректны,
+  .gitignore исключает вложенный log и сохраняет обычный файл. Оба PASS в обычном
+  и 8.3 TEMP; runtime defect публичного list на этих aliases не подтверждён.
+- Переносимый launcher `scripts/list-check/windows-short-temp.mjs` создаёт
+  только свои fixtures в ignored workspace scratch, требует настоящий short
+  basename и canonical identity, меняет TEMP/TMP только дочернему process,
+  удаляет созданный parent после проверки containment. Windows без actual 8.3
+  names даёт error, а не ложное evidence. Runbook и [подробный протокол](../testing/010-bounded-list.md)
+  содержат команды targeted/suite/check; ignored probe для повторения не нужен.
+- Checks: Windows, Node v24.15.0 / npm 11.12.1. Обычный
+  `node --test --import tsx __tests__/list-bounded.test.ts` и настоящий 8.3
+  `node scripts/list-check/windows-short-temp.mjs suite` — каждый
+  **15 PASS / 0 FAIL / 0 skips**. Все cancellation/late native handle,
+  canonical validation, wire deadline, no-rescan и literal continuation
+  regressions сохранены и PASS в обоих профилях.
+- Полный `npm run check` с обычным TEMP и
+  `node scripts/list-check/windows-short-temp.mjs check` с actual 8.3 TEMP —
+  каждый **458 tests / 450 PASS / 0 FAIL / 8 прежних skips**; build,
+  production/test types, ESLint, Prettier, Knip PASS. Skips: 3 POSIX-only
+  и 5 недоступных Windows file-symlink cases, без новых пропусков; реальные
+  junction/8.3 configured-root controls PASS. Финальный `git diff --check` PASS.
+- Runtime sources, versions/dependencies, installed kit/service, production
+  roots, keys и tunnel не менялись. Локальный commit SHA передаётся в handoff.
+  Push, повторный remote CI, portable, live и merge остаются у planning;
+  результаты этих действий здесь не утверждаются. Ограничения 010 прежние.
