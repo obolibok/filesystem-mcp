@@ -19,7 +19,7 @@
 | 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md) | done     | 006                | Принята вместе с 008 через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, большой live и CI PASS             |
 | 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)      | done     | 007 runtime        | Принята через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, portable, live/restart и CI PASS                |
 | 009          | [Выбор инструментов и понятные результаты](../tasks/009-tool-selection.md)          | done     | 007, 008           | Принята через [PR #8](https://github.com/obolibok/filesystem-mcp/pull/8); review и CI PASS; пользователь принял live              |
-| 010          | [Ограниченный list и ясные лимиты](../tasks/010-bounded-list.md)                    | ready    | 009                | GPT-6.1-Sol / Extra High; реализация разрешена, подготовлен запуск                                                                |
+| 010          | [Ограниченный list и ясные лимиты](../tasks/010-bounded-list.md)                    | active   | 009                | GPT-6.1-Sol / Extra High; запуск передан, отдельный worktree 22c3 создан                                                          |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -32,11 +32,12 @@
 
 09.10.2026 пользователь разрешил [010](../tasks/010-bounded-list.md): исправить
 фактическую глубину/отмену list и добавить общий limit отдельно от pageSize.
-MaxEntries удаляется без alias; maxPages не вводится. Пагинация остаётся внутри
+maxEntries удаляется без alias; maxPages не вводится. Пагинация остаётся внутри
 bounded результата, неполнота явно видна. [Triage](../testing/010-list-depth-triage-2026-10-09.md)
 подтвердил лишний обход на synthetic данных. Пользователь сообщает о последней
-установленной сборке; точный SHA процесса отдельно не проверялся. Подготовлен
-запуск GPT-6.1-Sol / Extra High в отдельном worktree после публикации карточки.
+установленной сборке; точный SHA процесса отдельно не проверялся. Постановка
+опубликована и передана GPT-6.1-Sol / Extra High; отдельный worktree 22c3 создан
+от checkpoint с карточкой и triage. Подробности запуска ниже.
 
 [009](../tasks/009-tool-selection.md) принята и интегрирована через
 [PR #8](https://github.com/obolibok/filesystem-mcp/pull/8), merge
@@ -106,6 +107,25 @@ MCP и tunnel-client, конфигурацию нескольких roots и о�
 ignored out/; templates и обезличенные доказательства хранятся в Git.
 Сборка от 24.09 историческая, актуальная указана выше. Credentials в чистую
 поставку не включены.
+
+## Запуск 010, 2026-10-09
+
+Карточка и triage опубликованы в main checkpoint
+`151dfa1feefcd74b80c69e939f3e8b5ec30ee7cb` перед созданием задачи.
+Запрошенное название — `010 - bounded list traversal and result limits`,
+проект `SWB RAG Dev`, модель `gpt-6.1-sol`, effort `xhigh`, managed worktree.
+
+Приложение приняло запуск и вернуло pending creation ID
+`client-new-thread:8b8ef23b-5dc8-45f4-a203-850184494493`.
+В Git подтверждён новый worktree `22c3` на checkpoint; карточка и triage доступны.
+Настоящий threadId/первый ответ пока не получены через API. Pending ID не является
+threadId; повторный запрос создания не отправлять. Исполнитель создаёт ветку
+`codex/010-bounded-list` в своём checkout.
+
+Переданы разрешение на реализацию, scope, чистый контракт limit/pageSize,
+regressions/full check, docs и локальный commit/handoff. Центральную доску,
+push/PR/merge, новую поставку и live ведёт планирование. Production roots,
+установленный сервис и tunnel/key не являются зависимостями реализации.
 
 ## Запуск 009, 2026-10-08
 
