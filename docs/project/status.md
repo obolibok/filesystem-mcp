@@ -19,7 +19,7 @@
 | 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md) | done     | 006                | Принята вместе с 008 через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, большой live и CI PASS             |
 | 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)      | done     | 007 runtime        | Принята через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, portable, live/restart и CI PASS                |
 | 009          | [Выбор инструментов и понятные результаты](../tasks/009-tool-selection.md)          | done     | 007, 008           | Принята через [PR #8](https://github.com/obolibok/filesystem-mcp/pull/8); review и CI PASS; пользователь принял live              |
-| 010          | [Ограниченный list и ясные лимиты](../tasks/010-bounded-list.md)                    | active   | 009                | GPT-6.1-Sol / Extra High; запуск передан, отдельный worktree 22c3 создан                                                          |
+| 010          | [Ограниченный list и ясные лимиты](../tasks/010-bounded-list.md)                    | review   | 009                | Review R1: нужна доработка подсказки пагинации; независимый check 449 pass, 0 fail                                                |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -38,6 +38,15 @@ bounded результата, неполнота явно видна. [Triage](.
 установленной сборке; точный SHA процесса отдельно не проверялся. Постановка
 опубликована и передана GPT-6.1-Sol / Extra High; отдельный worktree 22c3 создан
 от checkpoint с карточкой и triage. Подробности запуска ниже.
+
+Независимое [review R1](../testing/010-review-r1-2026-10-09.md) head
+`7fabbe0bf4e88eab1aa30181d9569f23b9ccacb3`: основное ограничение обхода
+подтверждено, полный check PASS (449 pass, 0 fail, 8 skips), built stdio full/RO
+PASS. Перед приёмкой исправить команду Next page: при нестандартном limit
+подсказка передаёт только cursor и приводит к Invalid cursor. Сопутствующее
+замечание — прежний TIMEOUT hint советует отсутствующий у list maxResults.
+Доработка остаётся у того же исполнителя; затем повторное review, поставка и live.
+Runtime 010 ещё не опубликован/не интегрирован, установленный сервис не менялся.
 
 [009](../tasks/009-tool-selection.md) принята и интегрирована через
 [PR #8](https://github.com/obolibok/filesystem-mcp/pull/8), merge
@@ -117,10 +126,13 @@ ignored out/; templates и обезличенные доказательства
 
 Приложение приняло запуск и вернуло pending creation ID
 `client-new-thread:8b8ef23b-5dc8-45f4-a203-850184494493`.
-В Git подтверждён новый worktree `22c3` на checkpoint; карточка и triage доступны.
-Настоящий threadId/первый ответ пока не получены через API. Pending ID не является
-threadId; повторный запрос создания не отправлять. Исполнитель создаёт ветку
-`codex/010-bounded-list` в своём checkout.
+В Git подтверждён worktree `22c3` на checkpoint; карточка и triage доступны.
+При review установлен настоящий threadId `01a1213c-22fa-7ed2-95e4-66591c4dcd23`,
+host `local`; checkout и готовый результат подтверждены через read_thread.
+Pending ID сохранён только как история создания; повторную задачу не создавать.
+Ветка исполнителя `codex/010-bounded-list`, первый review head
+`7fabbe0bf4e88eab1aa30181d9569f23b9ccacb3`. Review и замечания — в
+[протоколе R1](../testing/010-review-r1-2026-10-09.md).
 
 Переданы разрешение на реализацию, scope, чистый контракт limit/pageSize,
 regressions/full check, docs и локальный commit/handoff. Центральную доску,
