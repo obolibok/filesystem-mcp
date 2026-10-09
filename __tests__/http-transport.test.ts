@@ -194,7 +194,7 @@ describe('HTTP 2025-era (legacy) clients', () => {
 
     const result = await legacy.callTool({
       name: 'list',
-      arguments: { path: join(tmpDir, 'legacy_pages'), maxEntries: 1 },
+      arguments: { path: join(tmpDir, 'legacy_pages'), pageSize: 1 },
     });
     const structured = result._meta as { resourceUri?: string };
     assert.ok(structured.resourceUri, 'an incomplete first page must carry the full-list URI');

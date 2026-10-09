@@ -106,28 +106,28 @@ multi-root job, версии/dependencies, Ctrl+C/Sleep и flaky PowerShell help
 
 ## Проверки и acceptance
 
-- [ ] Synthetic instrumentation доказывает отсутствие descent за maxDepth, включая
+- [x] Synthetic instrumentation доказывает отсутствие descent за maxDepth, включая
       1/2, hidden папки и includeIgnored=false с глубокими .gitignore. Проверять
       реальные посещения/открытия, не только итоговый отфильтрованный массив.
-- [ ] На широком/глубоком дереве limit прекращает traversal, ограничивает весь
+- [x] На широком/глубоком дереве limit прекращает traversal, ограничивает весь
       набор до N, а pageSize меняет только страницу. Проверены 0/1/N-1/N/N+1
       найденных записей, limit меньше/равно/больше pageSize и validation bounds.
-- [ ] Cap result не объявляется полным; counters/text/_meta/resource согласованы.
+- [x] Cap result не объявляется полным; counters/text/_meta/resource согласованы.
       Pages без дублей/потерь; последняя страница без cursor сохраняет warning.
       Cursor query mismatch/expiry и изменение pageSize работают корректно.
-- [ ] При delayed iterator и отмене завершается работа и закрываются handles;
+- [x] При delayed iterator и отмене завершается работа и закрываются handles;
       вложенные отфильтрованные элементы и ignore discovery не прячут отмену.
       Стабильные tests по событиям/счётчикам; wall-clock только с разумным запасом.
-- [ ] No-follow/allowed boundaries/sensitive paths, Windows canonical aliases,
+- [x] No-follow/allowed boundaries/sensitive paths, Windows canonical aliases,
       hidden/.gitignore/default exclusions сохранены. Соседние find_files и
       search_text проверены при затрагивании общей логики; 009 warnings не сломаны.
-- [ ] Wire tools/list публикует limit/pageSize, не maxEntries; старое имя даёт
+- [x] Wire tools/list публикует limit/pageSize, не maxEntries; старое имя даёт
       понятную validation error. Actual request/response и defaults проверены.
       Описания однозначно разделяют collect cap, page size и число страниц.
-- [ ] Полный npm run check PASS; environment/skips записаны. Actual full/read-only
+- [x] Полный npm run check PASS; environment/skips записаны. Actual full/read-only
       tools/list размеры измерены; сначала сократить дублирование. Необходимое
       увеличение budget обосновать измерениями, не менять count без нового tool.
-- [ ] Reference/runnable examples и Work record обновлены. Протокол live включает
+- [x] Reference/runnable examples и Work record обновлены. Протокол live включает
       обновление каталога tools в подключении, быстрый верхний уровень большого
       root, limit/pageSize и последнюю страницу; live ещё не объявлять выполненным.
 
@@ -145,10 +145,77 @@ checkpoint с карточкой. Прочитай AGENTS.md, docs/README.md, br
 
 ## Work record
 
-Заполняет исполнитель. Реализация не начата.
+2026-10-09 — **ready for review**. Центральную доску исполнитель не менял;
+приёмка/интеграция и live остаются у планирования.
 
-- Base / branch / итоговый head:
-- Изменения и решение по traversal:
-- Контракт limit/pageSize, неполнота и counters:
-- Checks, environment, результаты/skips и tools/list budget:
-- Acceptance, риски, live и handoff:
+- Base: `151dfa1feefcd74b80c69e939f3e8b5ec30ee7cb`, точный launch checkpoint,
+  карточка присутствовала; исходный diff пуст. Managed worktree приложения,
+  собственная ветка `codex/010-bounded-list`. Итоговый локальный commit SHA
+  передаётся в handoff после создания, собственный SHA в commit не записывается.
+- Воспроизведение: actual in-memory MCP, synthetic 3×10×2; ради 3 верхних папок
+  glob выдал 93 raw matches из 34 parent directories, 90 глубже запроса. С 15 ms
+  на глубокий yield — TIMEOUT через 1627 ms, 37 matches после 1000 ms. Подробное
+  переносимое evidence: [локальные проверки и live](../testing/010-bounded-list.md).
+- Traversal: отдельный streaming `core/list-walk.ts` выбран вместо изменения
+  общего glob matching/hidden expansion соседних tools. Используются guarded
+  opendir/Dir.read, depth pruning до descent, lazy guarded rules только открытых
+  каталогов; cap закрывает iterator до рекурсии после N-го yield. Общий ignore
+  matcher/default exclusions вынесен в `core/source-ignore.ts`; семантика glob
+  consumers прежняя. В PathGuard validation добавлен optional signal, чтобы
+  не начинать stat/ancestor probing после отмены в realpath; guarded opendir
+  закрывает late OS handle. No-follow checks, source policy и canonical roots
+  сохранены; pipeline/transport/dependencies/версии не менялись.
+- Контракт: `limit` default/cap=20000, `pageSize` default=1000/cap=20000,
+  оба 1..20000. `maxEntries` удалён и явно отклоняется strict validation;
+  `maxPages` отсутствует. Limit считает все доступные entry types вместе.
+  Cursor identity включает effective limit + path/depth/flags, pageSize можно
+  менять. Cursors только листают собранный набор; TTL/resource правила прежние.
+- Неполнота: `limit`, `truncated` (boolean всегда), optional
+  `stoppedReason='limit'` в каждой `_meta` и JSON resource. Warning перед rows
+  на каждой странице, включая последнюю без cursor, называет limit, смысл totals
+  и отсутствие scan continuation. Exact N консервативно truncated без look-ahead;
+  `complete` не добавлен. `totalEntries/totalDirectories` — collected counters,
+  `totalFiles` сохраняет прежние non-directory entries (symlink/other включены).
+  Без resourceStore тот же результат; текст поздних nested pages показывает
+  relative parent, даже если сам parent был на прошлой странице.
+- Checks: Windows, Node v24.15.0 / npm 11.12.1, `npm ci` внутри своего worktree.
+  Shell sandbox и Node REPL не запускались из-за local setup refresh/runtime
+  errors; разрешённый local shell работал. Форматировались только touched files,
+  repository-wide fix не запускался. Финальный `npm run check` **PASS**:
+  build, production/test types, ESLint, Prettier, Knip + **457 tests / 449 PASS /
+  0 FAIL / 8 skips**. Предыдущий полный прогон до дополнительной guard cancellation
+  regression: 448 PASS/0 FAIL/8 skips; это не финальное evidence.
+- Skips полного прогона: 3 POSIX-only cases (FIFO, inode/mode, 0222 append target)
+  и 5 недоступных Windows file-symlink cases (3 append variants, sensitive-target
+  PathGuard validation, stat own-link). Эти ветки не объявляются проверенными.
+  Настоящие Windows junction escape/no-follow и configured-root alias в 010 PASS.
+- Bounded acceptance suite: **14 PASS / 0 FAIL / 0 skips**. Instrumentation
+  настоящих opens/reads/closes: depth 1/2 и hidden/ignore matrix, cap/EOF
+  0/1/N-1/N/N+1, wide/deep cap stop, cache/no-rescan, warning/resource/no-store,
+  query mismatch/expiry, validation/defaults, delayed filtered cancellation,
+  ignore cancellation, late opendir и отмена во время canonical validation.
+  Реальный wire deadline оставлен 5 s; TIMEOUT закрывает iterator (1 read/1 close)
+  и не возвращает success metadata. Уже отменённый walk начинает 0 operations.
+- Existing targeted suites `tools/core-fs/security/tool-selection/stdio/http-transport`:
+  **187 PASS / 0 FAIL / 6 skips** до дополнительной guard regression; финальный
+  полный check повторно включает их, snapshot/bundle и все остальные suites.
+- Actual built stdio harness `node scripts/list-check/local-mcp-check.mjs`
+  **PASS** в full и read-only после финальных runtime правок. Defaults дают
+  page=1000/total=1008; limit=100/pageSize=25 — 4×25, 100 unique entries, resource
+  тот же bounded set, warning последней страницы остаётся, old name отклоняется.
+- Actual tools/list: **19/13 tools, 25888/15808 chars** (full/read-only).
+  Убраны повторные depth/default/page descriptions; прирост к 009 — 156 chars.
+  Existing budgets **26900/15900** и tool counts сохранены, budget не увеличен.
+  Server instructions/help, README, architecture и runnable examples обновлены.
+- Acceptance локально выполнен; живой опыт **не выполнен**. Короткий live-протокол
+  в [010 testing](../testing/010-bounded-list.md): обновить connection/tool catalog,
+  maxDepth=1 на большом явном root с обеими ignore flags, limit/pageSize,
+  последняя страница/resource, changed pageSize и mismatch, LLM distinction.
+- Ограничения/риски: сортируется только collected set, не глобально первые N;
+  exact N не доказывает EOF. Excluded entries/OS read-ahead могут превышать limit,
+  это не OS-call budget. Отмена ждёт начатый неотменяемый OS I/O, зависший OS call
+  принудительно не прерывается. Source не atomic; прежний TOCTOU window guard
+  сохраняется. Ignore read failures остаются best-effort с log warning;
+  symlink/sensitive rules не читаются. Windows SMB, POSIX skips и live требуют
+  отдельной приёмки в соответствующей среде. Installed server, roots, keys,
+  tunnel, центральная доска, push/PR/merge/release не затронуты.

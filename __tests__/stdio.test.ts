@@ -143,14 +143,14 @@ describe('Stdio Transport (real subprocess)', () => {
 
     const first = await harness.client.callTool({
       name: 'list',
-      arguments: { path: pageDir, maxEntries: 1 },
+      arguments: { path: pageDir, pageSize: 1 },
     });
     const cursor = (first._meta as { nextCursor?: string }).nextCursor;
     assert.ok(cursor);
 
     const second = await harness.client.callTool({
       name: 'list',
-      arguments: { path: pageDir, maxEntries: 10, cursor },
+      arguments: { path: pageDir, pageSize: 10, cursor },
     });
     assert.notStrictEqual(second.isError, true);
     assert.deepStrictEqual(

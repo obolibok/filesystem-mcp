@@ -1230,7 +1230,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     for (let i = 0; i < 4; i++) await writeFile(join(sub, `f${i}.txt`), 'x');
     const r1 = await harness.client.callTool({
       name: 'list',
-      arguments: { path: sub, maxEntries: 2 },
+      arguments: { path: sub, pageSize: 2 },
     });
     const s1 = r1._meta as {
       nextCursor?: string;
@@ -1242,7 +1242,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.ok(s1.resourceUri, 'an incomplete first page carries the URI of the full entry list');
     const r2 = await harness.client.callTool({
       name: 'list',
-      arguments: { path: sub, maxEntries: 2, cursor: s1.nextCursor },
+      arguments: { path: sub, pageSize: 2, cursor: s1.nextCursor },
     });
     const s2 = r2._meta as { nextCursor?: string; entryCount?: number; resourceUri?: string };
     assert.strictEqual(s2.entryCount, 2);
@@ -1305,7 +1305,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
 
     const first = await harness.client.callTool({
       name: 'list',
-      arguments: { path: sub, maxEntries: 2 },
+      arguments: { path: sub, pageSize: 2 },
     });
     const firstText = firstTextBlock(first).text ?? '';
     const match = /^\/\/ showing 1-2 of 4 entries\. Next page: list \{"cursor":"([^"]+)"\}$/m.exec(
@@ -1318,7 +1318,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
 
     const second = await harness.client.callTool({
       name: 'list',
-      arguments: { path: sub, maxEntries: 2, cursor },
+      arguments: { path: sub, pageSize: 2, cursor },
     });
     const secondText = firstTextBlock(second).text ?? '';
     // The last page carries no cursor and still owes its position, or a
@@ -1335,7 +1335,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     }
     const first = await harness.client.callTool({
       name: 'list',
-      arguments: { path: sub, maxEntries: 1 },
+      arguments: { path: sub, pageSize: 1 },
     });
     const firstStructured = first._meta as {
       entries?: { name: string }[];
@@ -1347,7 +1347,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     await rm(sub, { recursive: true, force: true });
     const second = await harness.client.callTool({
       name: 'list',
-      arguments: { path: sub, maxEntries: 10, cursor },
+      arguments: { path: sub, pageSize: 10, cursor },
     });
     assert.notStrictEqual(second.isError, true);
     const secondStructured = second._meta as { entries?: { name: string }[] };
@@ -1361,7 +1361,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
 
     const replay = await harness.client.callTool({
       name: 'list',
-      arguments: { path: tmpDir, maxEntries: 10, cursor },
+      arguments: { path: tmpDir, pageSize: 10, cursor },
     });
     assert.strictEqual(replay.isError, true);
     assert.match(firstTextBlock(replay).text ?? '', /INVALID_INPUT/);
@@ -2356,7 +2356,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       const client = await http.makeClient('http-pagination');
       const first = await client.callTool({
         name: 'list',
-        arguments: { path: join(root, 'http-pages'), maxEntries: 1 },
+        arguments: { path: join(root, 'http-pages'), pageSize: 1 },
       });
       const firstStructured = first._meta as { nextCursor?: string };
       const cursor = firstStructured.nextCursor;
@@ -2364,7 +2364,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
 
       const second = await client.callTool({
         name: 'list',
-        arguments: { path: join(root, 'http-pages'), maxEntries: 10, cursor },
+        arguments: { path: join(root, 'http-pages'), pageSize: 10, cursor },
       });
       assert.notStrictEqual(second.isError, true);
       const secondStructured = second._meta as { entries?: { name: string }[] };
@@ -2532,6 +2532,8 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   // Task 009 adds intent routing, the scan/page distinction, and status meaning
   // to the three relevant descriptions. Full/read-only measure 25732/15652;
   // only the read-only ceiling grows, to leave 248 chars of drift budget.
+  // Task 010 publishes separate limit/pageSize after compacting repeated
+  // descriptions: 25888/15808 chars, still within both existing ceilings.
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
     const BUDGET_CHARS = 26_900;
     const BUDGET_CHARS_READ_ONLY = 15_900;

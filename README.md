@@ -218,6 +218,37 @@ All tools are scoped to the configured roots. Call `list_roots` first to discove
 | `list`       | List directory contents. Returns entries (dirs-first, alphabetical) and an ASCII tree. |
 | `find_files` | Find files by glob pattern (e.g. `**/*.ts`). Returns matching files with metadata.     |
 
+`list` uses `maxDepth` to bound actual traversal (default 1: only this folder's
+children). `limit` caps collected entries across every page, including files,
+directories, symlinks and other accessible types (default 20000; range 1–20000).
+`pageSize` caps one response (default 1000; range 1–20000) and can change between
+pages. `maxEntries` is removed; old calls return a validation error.
+
+For example, `{"path":"/workspace","maxDepth":2,"limit":100,"pageSize":25}`
+collects at most 100 entries and returns at most four pages. Use the returned
+`nextCursor` with the same path, depth, limit and flags; only pageSize may change.
+Cursors page the cached set for about 60 seconds and never resume traversal.
+
+When collection reaches limit, `truncated=true` and `stoppedReason="limit"`
+appear in `_meta`. A warning precedes the tree on every page, including the last.
+Totals count collected entries; they are not exact tree totals. Even exactly
+limit entries are conservatively marked incomplete: the walk does not read
+another entry to establish EOF. The first response includes `resourceUri` when
+paged or truncated; that resource has the same bounded entries and stop state.
+Collected entries are sorted after traversal; they are not guaranteed to be the
+first limit entries of a globally sorted tree. Hidden, ignored and sensitive
+source policies apply before collection. A deadline/cancellation returns an
+error after active OS I/O can finish and handles close; it cannot forcibly
+interrupt hung OS I/O. For a recursive index or file total, use `snapshot`.
+
+Reproducible synthetic checks (Node >=24; no production roots):
+
+```bash
+npm run build
+node scripts/list-check/local-mcp-check.mjs
+node --test --import tsx __tests__/list-bounded.test.ts
+```
+
 #### Inspect
 
 | Tool          | Description                                                                                     |

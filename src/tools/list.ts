@@ -7,9 +7,9 @@ import * as z from 'zod/v4';
 import { pageQueryKey, paginate } from '../core/cursor.js';
 import { ErrorCode } from '../core/errors.js';
 import { pageTrailer } from '../core/fmt.js';
+import type { GuardedFileSystem } from '../core/fs.js';
 import type { EntryType } from '../core/glob.js';
-import { globEntries } from '../core/glob.js';
-import type { PathGuard } from '../core/path.js';
+import { walkListEntries } from '../core/list-walk.js';
 import { toPosixRelative } from '../core/path.js';
 import { resolveEntryType } from '../core/primitives.js';
 import {
@@ -43,13 +43,14 @@ interface CollectOptions {
   includeHidden: boolean;
   includeIgnored: boolean;
   signal: AbortSignal;
-  pathGuard: PathGuard;
-  /** Upper bound on the stored, paginable entry array. */
+  fs: GuardedFileSystem;
+  /** Stop traversal immediately after this many accessible entries. */
   entryCap: number;
   onProgress?: (progress: { current: number; total?: number }) => void;
 }
 
 interface CollectResult {
+  truncated: boolean;
   entries: CollectedEntry[];
   totalEntries: number;
   totalFiles: number;
@@ -83,18 +84,14 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
   let totalFiles = 0;
   let totalDirectories = 0;
 
-  for await (const entry of globEntries({
-    cwd: rootPath,
-    pattern: '**/*',
-    skipIgnored: !options.includeIgnored,
-    signal: options.signal,
+  let truncated = false;
+  for await (const entry of walkListEntries({
+    fs: options.fs,
+    root: rootPath,
+    maxDepth: options.maxDepth,
     includeHidden: options.includeHidden,
-    baseNameMatch: false,
-    // ListInputSchema.maxDepth is 1-based (1 = top-level only); the shared
-    // globEntries primitive is now 0-based, so subtract one here. options.maxDepth
-    // is guaranteed >= 1 by its PositiveInt schema, so this never underflows.
-    maxDepth: options.maxDepth - 1,
-    onlyFiles: false,
+    includeIgnored: options.includeIgnored,
+    signal: options.signal,
   })) {
     options.signal.throwIfAborted();
     scanned++;
@@ -103,9 +100,6 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
     const entryType: EntryType = resolveEntryType(entry.dirent);
     const relPath = toPosixRelative(rootPath, entry.path);
     const name = basename(relPath);
-
-    const accessible = await options.pathGuard.isEntryAccessible(entry.path);
-    if (!accessible) continue;
 
     totalEntries++;
     if (entryType === 'directory') {
@@ -120,8 +114,11 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
       type: entryType,
     };
 
-    if (entries.length < options.entryCap) {
-      entries.push(collectedEntry);
+    entries.push(collectedEntry);
+    if (entries.length === options.entryCap) {
+      // No look-ahead: exact N is conservatively incomplete until EOF is known.
+      truncated = true;
+      break;
     }
   }
 
@@ -129,11 +126,18 @@ async function collect(rootPath: string, options: CollectOptions): Promise<Colle
   entries.sort(compareEntries);
 
   return {
+    truncated,
     entries,
     totalEntries,
     totalFiles,
     totalDirectories,
   };
+}
+
+function limitWarning(metadata: Pick<ListPageMetadata, 'limit' | 'truncated'>): string {
+  return metadata.truncated
+    ? `// list stopped at limit=${String(metadata.limit)}; completeness is unconfirmed. Totals count collected entries only. Cursors do not resume traversal.\n\n`
+    : '';
 }
 
 const TEE = '├── ';
@@ -174,6 +178,15 @@ function renderMarkdown(rootName: string, entries: readonly CollectedEntry[]): s
   }
 
   renderChildren('', '');
+  // A page may start below a parent that appeared on an earlier page. Render
+  // each disconnected subtree with its relative parent so no page rows vanish.
+  const entryPaths = new Set(entries.map((entry) => entry.relativePath));
+  for (const parent of childrenOf.keys()) {
+    if (parent !== '' && !entryPaths.has(parent)) {
+      lines.push(INDENT + parent + '/');
+      renderChildren(parent, INDENT);
+    }
+  }
   return lines.join('\n');
 }
 
@@ -186,14 +199,15 @@ const ListInputSchema = z.strictObject({
   ),
   maxDepth: PositiveInt.max(MAX_TREE_DEPTH)
     .default(DEFAULT_LIST_DEPTH)
+    .describe("Traversal depth; 1 lists only this directory's children."),
+  limit: PositiveInt.max(MAX_LIST_ENTRIES)
+    .default(MAX_LIST_ENTRIES)
     .describe(
-      `Max directory depth to traverse (default: ${String(DEFAULT_LIST_DEPTH)} = top-level only; increase to recurse deeper)`,
+      'Collect cap across all pages, including files and directories; stops traversal. Totals count collected entries.',
     ),
-  maxEntries: PositiveInt.max(MAX_LIST_ENTRIES)
+  pageSize: PositiveInt.max(MAX_LIST_ENTRIES)
     .default(DEFAULT_LIST_ENTRIES)
-    .describe(
-      `Page size (default: ${String(DEFAULT_LIST_ENTRIES)}). Continue with nextCursor; an incomplete first page also carries resourceUri for the whole list.`,
-    ),
+    .describe('Entries per response; can change between pages. Does not limit traversal.'),
   includeHidden: includeHiddenField(),
   includeIgnored: includeIgnoredField(),
   cursor: CursorSchema,
@@ -209,28 +223,31 @@ const ListOutputSchema = z.strictObject({
         type: FileTypeEnum.describe('Entry type: file, directory, symlink, or other'),
       }),
     )
-    .describe('Inline directory entries sorted directories-first then alphabetically by name'),
-  // No `markdown` field: the ASCII tree is the call's text content already, and
-  // carrying it here too doubled every list response for a string the client
-  // has in hand. The stored full-tree resource still holds its own copy — that
-  // one is a *different* (uncapped) tree and is never sent inline.
+    .describe('Collected entries sorted by parent, then directories-first and name'),
+  // The tree rides text; only the cached collected-set resource has a copy.
   entryCount: NonNegInt.describe('Number of entries included in this response'),
-  totalEntries: NonNegInt.describe('Total entries found before the maxEntries cap was applied'),
-  totalFiles: NonNegInt.describe('Total number of files found'),
-  totalDirectories: NonNegInt.describe('Total number of directories found'),
+  totalEntries: NonNegInt.describe(
+    'Entries collected across all pages; not a whole-tree total when truncated',
+  ),
+  totalFiles: NonNegInt.describe(
+    'Collected non-directory entries, including symlinks and other types',
+  ),
+  totalDirectories: NonNegInt.describe('Collected directories'),
+  limit: PositiveInt.describe('Effective collect cap'),
+  truncated: z.boolean().describe('Traversal stopped at limit without establishing EOF'),
+  stoppedReason: z.literal('limit').optional(),
   resourceUri: z
     .string()
     .optional()
-    .describe(
-      'URI to the full entry list in the resource store; first page only, whenever the response is ' +
-        'incomplete — more pages follow, or the hard cap cut the listing. The stored list is itself ' +
-        'bounded by that cap and marked truncated if exceeded.',
-    ),
+    .describe('First-page URI for the collected set when paged or truncated'),
   nextCursor: NextCursorSchema,
 });
 
 interface ListPageMetadata {
   readonly path: string;
+  readonly limit: number;
+  readonly truncated: boolean;
+  readonly stoppedReason?: 'limit';
   readonly totalEntries: number;
   readonly totalFiles: number;
   readonly totalDirectories: number;
@@ -244,6 +261,9 @@ function listOutput(
 ): z.infer<typeof ListOutputSchema> {
   return {
     path: metadata.path,
+    limit: metadata.limit,
+    truncated: metadata.truncated,
+    ...(metadata.stoppedReason ? { stoppedReason: metadata.stoppedReason } : {}),
     entries: [...entries],
     entryCount: entries.length,
     totalEntries: metadata.totalEntries,
@@ -268,6 +288,7 @@ async function handleList(
   const queryKey = pageQueryKey({
     method: 'list',
     path: resolvedPath,
+    limit: args.limit,
     maxDepth: args.maxDepth,
     includeHidden: args.includeHidden,
     includeIgnored: args.includeIgnored,
@@ -278,43 +299,47 @@ async function handleList(
     store: ctx.pageStore,
     queryKey,
     cursor: args.cursor,
-    pageSize: args.maxEntries,
+    pageSize: args.pageSize,
     produce: async () => {
-      const validDir = await ctx.fs.pathGuard.validateExistingDirectory(resolvedPath);
+      const validDir = await ctx.fs.pathGuard.validateExistingDirectory(resolvedPath, ctx.signal);
       const result = await collect(validDir, {
         maxDepth: args.maxDepth,
         includeHidden: args.includeHidden,
         includeIgnored: args.includeIgnored,
         signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(DEFAULT_SEARCH_TIMEOUT_MS)]),
-        pathGuard: ctx.fs.pathGuard,
-        entryCap: MAX_LIST_ENTRIES,
+        fs: ctx.fs,
+        entryCap: args.limit,
         ...(ctx.onProgress ? { onProgress: ctx.onProgress } : {}),
       });
       return {
         items: result.entries,
         metadata: {
           path: validDir,
+          limit: args.limit,
+          truncated: result.truncated,
+          ...(result.truncated ? { stoppedReason: 'limit' as const } : {}),
           totalEntries: result.totalEntries,
           totalFiles: result.totalFiles,
           totalDirectories: result.totalDirectories,
         },
-        truncated: result.totalEntries > result.entries.length,
+        truncated: result.truncated,
       };
     },
     externalize: resourceStore
       ? (entries, metadata) => {
           const name = basename(metadata.path);
-          // The stored tree is the whole collected set — itself bounded by the
-          // hard cap, and marked when the cap cut it.
+          // Store only the bounded collected set, with the same stop state.
           const fullOutput = {
             entries,
-            markdown: renderMarkdown(name, entries),
+            markdown: limitWarning(metadata) + renderMarkdown(name, entries),
+            limit: metadata.limit,
+            truncated: metadata.truncated,
+            ...(metadata.stoppedReason ? { stoppedReason: metadata.stoppedReason } : {}),
             totalEntries: metadata.totalEntries,
             totalFiles: metadata.totalFiles,
             totalDirectories: metadata.totalDirectories,
-            ...(metadata.totalEntries > entries.length ? { truncated: true } : {}),
           };
-          return putJsonResource(resourceStore, `${name} tree`, fullOutput);
+          return putJsonResource(resourceStore, `${name} collected entries`, fullOutput);
         }
       : undefined,
   });
@@ -332,13 +357,10 @@ export const LIST = defineTool({
   title: 'List',
   description:
     'List sorted directory entries and an ASCII tree. maxDepth=1 is top-level. ' +
-    'maxEntries sets page size; continue with nextCursor. An incomplete first page also carries resourceUri for the whole list.',
+    'limit caps collection (files and folders); pageSize caps one response. Cursors page only collected entries; a limit warning means tree totals are unknown.',
   input: ListInputSchema,
   output: ListOutputSchema,
-  // Not published: every field is a plainly-named scalar (`entryCount`,
-  // `totalFiles`, `nextCursor`) that one sample response teaches, and the
-  // schema costs 1599 chars of every session start. Publishing is reserved for
-  // the value-XOR-error union shape a sample cannot convey.
+  // Metadata stays in _meta so clients display the authored tree and warning.
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -354,10 +376,11 @@ export const LIST = defineTool({
   accessPaths: (args) => (args.path ? [args.path] : []),
   run: async (args, ctx) => {
     const { structured, markdown, offset, link } = await handleList(args, ctx);
-    // The tree is what the model reads, so position and the full-list URI ride
+    // The tree is what the model reads, so position and the collected-set URI ride
     // the text too — paging needs no second lookup. `pageTrailer` is the one
     // owner of that line, and it owes it on the last page as much as the first.
     const text =
+      limitWarning(structured) +
       markdown +
       pageTrailer({
         offset,
@@ -367,7 +390,9 @@ export const LIST = defineTool({
         tool: 'list',
         nextCursor: structured.nextCursor,
       }) +
-      (structured.resourceUri !== undefined ? `\nfull tree at ${structured.resourceUri}` : '');
+      (structured.resourceUri !== undefined
+        ? `\ncollected entries at ${structured.resourceUri}`
+        : '');
     return {
       structured,
       text,

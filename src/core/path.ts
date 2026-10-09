@@ -259,13 +259,15 @@ export class PathGuard {
    * errno/fs errors return false (the entry is filtered, not fatal). The
    * accepted TOCTOU window is documented at the class docstring above.
    */
-  async isEntryAccessible(entryPath: string): Promise<boolean> {
+  async isEntryAccessible(entryPath: string, signal?: AbortSignal): Promise<boolean> {
+    signal?.throwIfAborted();
     const isSensitive = (requestedPath: string, resolvedPath: string): boolean =>
       this.isSensitive(requestedPath) || this.isSensitive(resolvedPath);
     try {
-      const validated = await this.validateExistingPathDetailed(entryPath);
+      const validated = await this.validateExistingPathDetailed(entryPath, signal);
       return !isSensitive(validated.requestedPath, validated.resolvedPath);
     } catch (error) {
+      signal?.throwIfAborted();
       if (isFsError(error)) {
         if (SKIPPABLE_FS_CODES.has(error.code)) return false;
         throw error;
@@ -557,7 +559,9 @@ export class PathGuard {
     allowedDirs: string[],
     accessDeniedHint: string,
     requestedPath: string,
+    signal?: AbortSignal,
   ): Promise<never> {
+    signal?.throwIfAborted();
     if (isNotFoundErrno(error)) {
       // Resolve the nearest existing ancestor to detect out-of-sandbox symlinks.
       // e.g. if `link -> C:\external` and path is `link\nonexistent.txt`, the
@@ -566,6 +570,7 @@ export class PathGuard {
         const { realAncestor, resolvedTarget } = await this.resolveNearestExistingAncestor(
           requestedPath,
           normalizedRequested,
+          signal,
         );
         if (
           !isPathWithinDirectories(realAncestor, allowedDirs) ||
@@ -574,6 +579,7 @@ export class PathGuard {
           this.throwAccessDenied(requestedPath, accessDeniedHint);
         }
       } catch (ancestorErr) {
+        signal?.throwIfAborted();
         // Rethrow any FsError — collapsing e.g. UNKNOWN to NOT_FOUND would mask
         // incomplete sandbox checks and make bugs invisible to callers.
         if (isFsError(ancestorErr)) {
@@ -594,7 +600,11 @@ export class PathGuard {
     );
   }
 
-  async validateExistingPathDetailed(requestedPath: string): Promise<ValidatedPathDetails> {
+  async validateExistingPathDetailed(
+    requestedPath: string,
+    signal?: AbortSignal,
+  ): Promise<ValidatedPathDetails> {
+    signal?.throwIfAborted();
     const { normalizedRequested, allowedDirs, accessDeniedHint } =
       this.validateAccessAndSensitivity(requestedPath);
 
@@ -608,9 +618,11 @@ export class PathGuard {
         allowedDirs,
         accessDeniedHint,
         requestedPath,
+        signal,
       );
     }
 
+    signal?.throwIfAborted();
     const normalizedReal = normalizePath(realPath);
 
     if (!isPathWithinDirectories(normalizedReal, allowedDirs)) {
@@ -629,13 +641,15 @@ export class PathGuard {
     };
   }
 
-  async validateExistingDirectory(requestedPath: string): Promise<string> {
-    const details = await this.validateExistingPathDetailed(requestedPath);
+  async validateExistingDirectory(requestedPath: string, signal?: AbortSignal): Promise<string> {
+    const details = await this.validateExistingPathDetailed(requestedPath, signal);
+    signal?.throwIfAborted();
 
     let stats: Stats;
     try {
       stats = await stat(details.resolvedPath);
     } catch (error) {
+      signal?.throwIfAborted();
       throw new FsError(
         ErrorCode.UNKNOWN,
         'Cannot access directory',
@@ -644,6 +658,7 @@ export class PathGuard {
       );
     }
 
+    signal?.throwIfAborted();
     if (!stats.isDirectory()) {
       throw new FsError(ErrorCode.NOT_DIRECTORY, 'Not a directory', requestedPath);
     }
@@ -720,22 +735,28 @@ export class PathGuard {
   private async resolveNearestExistingAncestor(
     requestedPath: string,
     currentPath: string,
+    signal?: AbortSignal,
   ): Promise<{ realAncestor: string; resolvedTarget: string }> {
     const missingSegments: string[] = [];
     let current = currentPath;
     for (;;) {
+      signal?.throwIfAborted();
       try {
         const realAncestor = normalizePath(await realpath(current));
+        signal?.throwIfAborted();
         const resolvedTarget =
           missingSegments.length === 0
             ? realAncestor
             : normalizePath(join(realAncestor, ...missingSegments.reverse()));
         return { realAncestor, resolvedTarget };
       } catch (error) {
+        signal?.throwIfAborted();
         try {
           const stats = await lstat(current);
+          signal?.throwIfAborted();
           if (stats.isSymbolicLink()) {
             const target = await readlink(current);
+            signal?.throwIfAborted();
             const resolvedTarget = isAbsolute(target) ? target : resolve(dirname(current), target);
             const normalizedTarget = normalizePath(resolvedTarget);
             const allowedDirs = this.getAllowedDirectories();
@@ -744,6 +765,7 @@ export class PathGuard {
             }
           }
         } catch (lstatErr) {
+          signal?.throwIfAborted();
           if (isFsError(lstatErr) && lstatErr.code === ErrorCode.ACCESS_DENIED) {
             throw lstatErr;
           }
