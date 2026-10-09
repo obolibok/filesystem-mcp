@@ -19,7 +19,7 @@
 | 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md) | done     | 006                | Принята вместе с 008 через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, большой live и CI PASS             |
 | 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)      | done     | 007 runtime        | Принята через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, portable, live/restart и CI PASS                |
 | 009          | [Выбор инструментов и понятные результаты](../tasks/009-tool-selection.md)          | done     | 007, 008           | Принята через [PR #8](https://github.com/obolibok/filesystem-mcp/pull/8); review и CI PASS; пользователь принял live              |
-| 010          | [Ограниченный list и ясные лимиты](../tasks/010-bounded-list.md)                    | review   | 009                | R1–R3, local/CI/portable PASS; комплект 010 готов для live; draft PR #9                                                           |
+| 010          | [Ограниченный list и ясные лимиты](../tasks/010-bounded-list.md)                    | done     | 009                | Принята пользователем; R1–R3, local/CI/portable PASS; интегрирована через PR #9                                                   |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -30,31 +30,27 @@
 
 ## Текущий следующий шаг
 
-09.10.2026 пользователь разрешил [010](../tasks/010-bounded-list.md): исправить
-фактическую глубину/отмену list и добавить общий limit отдельно от pageSize.
-maxEntries удаляется без alias; maxPages не вводится. Пагинация остаётся внутри
-bounded результата, неполнота явно видна. [Triage](../testing/010-list-depth-triage-2026-10-09.md)
-подтвердил лишний обход на synthetic данных. Пользователь сообщает о последней
-установленной сборке; точный SHA процесса отдельно не проверялся. Постановка
-опубликована и передана GPT-6.1-Sol / Extra High; отдельный worktree 22c3 создан
-от checkpoint с карточкой и triage. Подробности запуска ниже.
+[010](../tasks/010-bounded-list.md) принята пользователем 09.10.2026 и
+[слита через PR #9](https://github.com/obolibok/filesystem-mcp/pull/9) в main,
+merge `c84f238b48a65fcd4c00fde49ee99c725cf0e608`. Reviewed head
+`346d4b691a40331f3a0b634c572685e0b372abf7`; merged runtime/tests/scripts совпадают.
+[Review R3](../testing/010-review-r3-2026-10-09.md) и
+[интеграция](../testing/010-integration-2026-10-09.md): R1–R3 закрыты,
+обычный bounded suite 15/0/0, actual 8.3 TEMP check 450/0/8; CI Windows 455/0/3,
+Ubuntu 446/0/12, все 13 portable checks PASS. Пользователь явно принял результат
+и разрешил merge; отдельный live-отчёт/trace не предоставлен, полное выполнение
+live-матрицы не утверждается.
 
-[Финальное review R3](../testing/010-review-r3-2026-10-09.md) head
-`346d4b691a40331f3a0b634c572685e0b372abf7` — PASS. R1/R2 закрыты ранее;
-R3 исправляет только тестовые fixtures/измерения при Windows 8.3 TEMP.
-Независимый обычный bounded suite 15/0/0, полный short-TEMP check 450/0/8.
-[CI 37959837620](https://github.com/obolibok/filesystem-mcp/actions/runs/37959837620)
-PASS: Windows 455/0/3, Ubuntu 446/0/12 (pass/fail/skips, 458 tests каждый).
-`codex/010-integration` обновлена до reviewed head;
-[draft PR #9](https://github.com/obolibok/filesystem-mcp/pull/9) ожидает live.
+list ограничивает реальный обход по maxDepth и общему limit, pageSize задаёт
+размер страницы. maxEntries удалён без alias; maxPages не добавлен. Literal
+Next page сохраняет scope/limit. Комплект
+`out/Schwarzbeck-MCP-010-test-2026-10-09` и ZIP соответствуют принятому runtime;
+BUILD.json source `29fa8b7b`, R3 менял только tests/docs. Установленный сервис
+во время интеграции не менялся, release не публиковался.
 
-Комплект `out/Schwarzbeck-MCP-010-test-2026-10-09` и ZIP готовы для установки
-и живого опыта. BUILD.json сохраняет source `29fa8b7b`: после него runtime
-не менялся. 272 dist files и package/lock побайтово сверены со свежим build
-reviewed head; hashes поставки и ZIP совпадают с [portable review](../testing/010-review-r2-2026-10-09.md).
-Следующий шаг — повтор list на большом root, limit/pageSize и literal continuation
-через ChatGPT. Live, merge и окончательная приёмка ещё не выполнены;
-установленный сервис не менялся.
+Следующий плановый этап — согласовать предметный опыт 005: выборку
+Daum/Inoplacer, вопрос и проверяемые критерии. Пока proposed, исполнитель
+не назначен; новый coding-чат автоматически не создавать.
 
 Отдельное наблюдение CI: первый Windows attempt на новом head застал failed
 snapshot до завершения очистки artifacts; неизменённый повтор PASS. Job-manager

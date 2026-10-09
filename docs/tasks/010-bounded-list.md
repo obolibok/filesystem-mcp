@@ -309,3 +309,13 @@ checkpoint с карточкой. Прочитай AGENTS.md, docs/README.md, br
   roots, keys и tunnel не менялись. Локальный commit SHA передаётся в handoff.
   Push, повторный remote CI, portable, live и merge остаются у planning;
   результаты этих действий здесь не утверждаются. Ограничения 010 прежние.
+
+## Приёмка планированием, 2026-10-09
+
+Пользователь принял результат и явно разрешил merge. [PR #9](https://github.com/obolibok/filesystem-mcp/pull/9)
+слит в main, merge `c84f238b48a65fcd4c00fde49ee99c725cf0e608`, reviewed head
+`346d4b691a40331f3a0b634c572685e0b372abf7`. R1–R3 закрыты, local/CI/portable PASS.
+[Протокол интеграции и происхождение дефектов](../testing/010-integration-2026-10-09.md)
+фиксирует результаты и ограничения. Отдельный live-отчёт/trace не предоставлен,
+полное выполнение live-матрицы не утверждается. Наблюдение snapshot terminal/cleanup
+остаётся отдельным follow-up; оно не исправлялось задачей 010.
