@@ -19,7 +19,7 @@
 | 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md) | done     | 006                | Принята вместе с 008 через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, большой live и CI PASS             |
 | 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)      | done     | 007 runtime        | Принята через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, portable, live/restart и CI PASS                |
 | 009          | [Выбор инструментов и понятные результаты](../tasks/009-tool-selection.md)          | done     | 007, 008           | Принята через [PR #8](https://github.com/obolibok/filesystem-mcp/pull/8); review и CI PASS; пользователь принял live              |
-| 010          | [Ограниченный list и ясные лимиты](../tasks/010-bounded-list.md)                    | review   | 009                | R1/R2 закрыты; R3: Windows 8.3 TEMP в тестах, передано исполнителю; draft PR #9                                                   |
+| 010          | [Ограниченный list и ясные лимиты](../tasks/010-bounded-list.md)                    | review   | 009                | R1–R3, local/CI/portable PASS; комплект 010 готов для live; draft PR #9                                                           |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -39,20 +39,28 @@ bounded результата, неполнота явно видна. [Triage](.
 опубликована и передана GPT-6.1-Sol / Extra High; отдельный worktree 22c3 создан
 от checkpoint с карточкой и triage. Подробности запуска ниже.
 
-Повторное [review R2 и portable](../testing/010-review-r2-2026-10-09.md) head
-`29fa8b7b2bc20371a0a7fd50e7c9e3b87798f2ef`: R1/R2 закрыты,
-локальный check 450 pass, 0 fail, 8 skips; built stdio full/RO и все 13 portable
-checks PASS. Команда Next page сохраняет scope/limit; TIMEOUT hint исправлен.
-Опубликована `codex/010-integration`, создан
-[draft PR #9](https://github.com/obolibok/filesystem-mcp/pull/9).
-CI Ubuntu PASS, Windows FAIL: три новых теста смешивают короткое и canonical
-написание TEMP. Независимо воспроизведено на настоящем 8.3 пути; R3 передан
-тому же исполнителю. Прежний flaky PowerShell helper к этим падениям не относится.
-Комплект `out/Schwarzbeck-MCP-010-test-2026-10-09` и ZIP упакованы, но пока
-не объявляются готовыми к установке. Сначала R3, повторное review и зелёный CI,
-затем live на большом root. Merge и окончательная приёмка ещё не выполнены;
-установленный сервис не менялся. Первое
-[review R1](../testing/010-review-r1-2026-10-09.md) сохранено как история замечаний.
+[Финальное review R3](../testing/010-review-r3-2026-10-09.md) head
+`346d4b691a40331f3a0b634c572685e0b372abf7` — PASS. R1/R2 закрыты ранее;
+R3 исправляет только тестовые fixtures/измерения при Windows 8.3 TEMP.
+Независимый обычный bounded suite 15/0/0, полный short-TEMP check 450/0/8.
+[CI 37959837620](https://github.com/obolibok/filesystem-mcp/actions/runs/37959837620)
+PASS: Windows 455/0/3, Ubuntu 446/0/12 (pass/fail/skips, 458 tests каждый).
+`codex/010-integration` обновлена до reviewed head;
+[draft PR #9](https://github.com/obolibok/filesystem-mcp/pull/9) ожидает live.
+
+Комплект `out/Schwarzbeck-MCP-010-test-2026-10-09` и ZIP готовы для установки
+и живого опыта. BUILD.json сохраняет source `29fa8b7b`: после него runtime
+не менялся. 272 dist files и package/lock побайтово сверены со свежим build
+reviewed head; hashes поставки и ZIP совпадают с [portable review](../testing/010-review-r2-2026-10-09.md).
+Следующий шаг — повтор list на большом root, limit/pageSize и literal continuation
+через ChatGPT. Live, merge и окончательная приёмка ещё не выполнены;
+установленный сервис не менялся.
+
+Отдельное наблюдение CI: первый Windows attempt на новом head застал failed
+snapshot до завершения очистки artifacts; неизменённый повтор PASS. Job-manager
+и этот тест не менялись в 010. [Evidence и follow-up](../testing/010-review-r3-2026-10-09.md)
+сохранены: уточнить terminal/cleanup контракт и сделать тест детерминированным.
+Это не считается устранённым повтором CI и не смешивается с закрытым R3.
 
 [009](../tasks/009-tool-selection.md) принята и интегрирована через
 [PR #8](https://github.com/obolibok/filesystem-mcp/pull/8), merge
@@ -90,7 +98,7 @@ SHA/CRC/CSV проверены. После restart прежний большой
 Финальный PR head `65b7bc4c` прошёл Windows/Ubuntu: по 441 tests,
 438/429 pass, 0 fail, 3/12 skips.
 
-Последняя поставка с отдельным portable-протоколом —
+Историческая поставка 008 с отдельным portable-протоколом —
 `out/Schwarzbeck-MCP-008-test-2026-09-25` и соседний ZIP, source runtime
 `7bf58e05`; изменения 009 в этот архив не входят. Точный состав установленного
 комплекта при live 009 отдельно не фиксировался. Во время merge 009 новая
