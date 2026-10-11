@@ -20,8 +20,8 @@
 | 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)      | done     | 007 runtime        | Принята через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, portable, live/restart и CI PASS                |
 | 009          | [Выбор инструментов и понятные результаты](../tasks/009-tool-selection.md)          | done     | 007, 008           | Принята через [PR #8](https://github.com/obolibok/filesystem-mcp/pull/8); review и CI PASS; пользователь принял live              |
 | 010          | [Ограниченный list и ясные лимиты](../tasks/010-bounded-list.md)                    | done     | 009                | Принята пользователем; R1–R3, local/CI/portable PASS; интегрирована через PR #9                                                   |
-| 011          | [Ограниченный поиск и пагинация](../tasks/011-bounded-search.md)                    | review   | 010, triage        | `011 — Ограниченный поиск и пагинация`; `codex/011-bounded-search`; review f50ff9bb PASS; R1–R4 закрыты, ожидает интеграции       |
-| 012          | [Память и TTL пагинации](../tasks/012-pagination-memory-study.md)                   | review   | 010, triage        | `012 — Память и TTL пагинации`; `codex/012-pagination-memory-study`; review 160e0c45 PASS; R1/R2 закрыты, ожидает интеграции      |
+| 011          | [Ограниченный поиск и пагинация](../tasks/011-bounded-search.md)                    | done     | 010, triage        | R1–R4 закрыты; PR #10 слит, CI/portable PASS; новый ChatGPT live ожидается                                                        |
+| 012          | [Память и TTL пагинации](../tasks/012-pagination-memory-study.md)                   | done     | 010, triage        | R1/R2 закрыты; PR #10 слит; исследование и post-011 проверки приняты, runtime budgets прежние                                     |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -32,7 +32,15 @@
 
 ## Текущий следующий шаг
 
-Повторное review 011 и 012 завершено; **обе задачи review PASS**:
+**011 и 012 приняты и слиты через [PR #10](https://github.com/obolibok/filesystem-mcp/pull/10)**,
+merge `a82abf91d69f52117e442643576b7bbb4ee2a5fd`. Следующий шаг — пользовательская
+live-проверка новой сборки по [памятке](../../scripts/windows-portable/template/TEST-011-012.md).
+[Протокол интеграции и SHA-256](../testing/011-012-integration-2026-10-11.md):
+CI Windows 485/0/3, Ubuntu 474/0/14; все 13 portable scenarios и 30 дополнительных
+MCP вызовов поиска PASS. Комплект `out/Schwarzbeck-MCP-011-012-test-2026-10-11`
+и ZIP собраны из принятого merge. Установленный сервис не изменялся.
+
+Основание приёмки:
 
 - [011 review R4](../testing/011-review-r4-2026-10-11.md), head `f50ff9bb`:
   **R1–R4 закрыты**, новых блокирующих замечаний нет. Независимый full check
@@ -43,10 +51,8 @@
   и negative cap control. На финальном 011 f50ff9bb повторены 6 совместных cases
   с 198 fresh queries. HTTP TTL 61 s ранее прошёл на f5315d0b; stores/TTL не менялись.
 
-Следующий шаг — интеграция проверенных 011 и 012, затем подготовка сборки для
-целевой live-матрицы 011. До merge статусы остаются review, не done. Код задач
-пока не слит; portable и установленный сервис не менялись. История замечаний,
-исправлений и проверок сохранена в отдельных review protocols.
+Целевая live-матрица 011 в ChatGPT на новой сборке ещё не выполнена. История
+замечаний, исправлений и локальных проверок сохранена в отдельных review protocols.
 012 не вводит runtime изменений: 64 MiB budget / cleanup 15 s остаются
 предложениями, новые count/TTL defaults не приняты. Предметный опыт 005 пока
 proposed; его выборка и вопрос требуют отдельного согласования.
@@ -65,12 +71,10 @@ GPT-6.1-Sol / Extra High; получены первые ответы. Git под
 - 012: `012 — Память и TTL пагинации`, thread
   `01a12b6f-c4b1-7bf3-98cf-4d2de757edfe`, managed checkout `a7b9/filesystem-mcp`.
 
-012 может идти параллельно, так как владеет только своими scripts/docs; после
-интеграции 011 планирование повторит ключевые измерения. Изменение ignore defaults,
-повышение cache limits, новый runtime из 012 и выпуск сборки пока не назначены.
-
-Порядок приёмки: review/интеграция 011, review результатов 012 и нужный повтор;
-далее согласование предметного опыта 005. Центральную доску ведёт планирование.
+012 выполнялась параллельно, так как владеет только своими scripts/docs. Совместные
+измерения на финальном runtime 011 прошли до merge. Изменение ignore defaults,
+повышение cache limits и новый runtime из 012 не назначены. После live новой
+сборки — согласование предметного опыта 005. Центральную доску ведёт планирование.
 
 [010](../tasks/010-bounded-list.md) принята пользователем 09.10.2026 и
 [слита через PR #9](https://github.com/obolibok/filesystem-mcp/pull/9) в main,

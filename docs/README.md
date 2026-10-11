@@ -50,7 +50,10 @@
 - [Интеграция 007+008](testing/008-integration-2026-09-25.md): устойчивость обхода
   и Windows metadata, code review/CI; [большой live и restart](testing/008-live-2026-09-25.md) —
   приёмка результатов и повторной выдачи manifest после перезапуска;
-  [актуальная переносимая поставка](testing/008-portable-2026-09-25.md).
+  [поставка 008](testing/008-portable-2026-09-25.md).
+- [Интеграция 011+012 и новая portable-сборка](testing/011-012-integration-2026-10-11.md):
+  bounded search, исследование памяти, CI и проверка комплекта;
+  [памятка живого опыта](../scripts/windows-portable/template/TEST-011-012.md).
 - [Архитектура, форматы и лимиты](reference/architecture.md): карта владельцев кода
   и текущие возможности и ограничения.
 - [Baseline от 19 сентября](testing/baseline-2026-09-19.md): проверенные наблюдения,
