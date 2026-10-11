@@ -20,6 +20,8 @@
 | 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)      | done     | 007 runtime        | Принята через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, portable, live/restart и CI PASS                |
 | 009          | [Выбор инструментов и понятные результаты](../tasks/009-tool-selection.md)          | done     | 007, 008           | Принята через [PR #8](https://github.com/obolibok/filesystem-mcp/pull/8); review и CI PASS; пользователь принял live              |
 | 010          | [Ограниченный list и ясные лимиты](../tasks/010-bounded-list.md)                    | done     | 009                | Принята пользователем; R1–R3, local/CI/portable PASS; интегрирована через PR #9                                                   |
+| 011          | [Ограниченный поиск и пагинация](../tasks/011-bounded-search.md)                    | ready    | 010, triage        | Запуск GPT-6.1-Sol / Extra High; `codex/011-bounded-search`                                                                       |
+| 012          | [Память и TTL пагинации](../tasks/012-pagination-memory-study.md)                   | ready    | 010, triage        | Параллельный baseline на GPT-6.1-Sol / Extra High; `codex/012-pagination-memory-study`                                            |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -30,13 +32,18 @@
 
 ## Текущий следующий шаг
 
-11.10 выполнен [triage внешнего обзора](../testing/report-triage-2026-10-11.md).
-Обзор существенно расходится с текущим main. На synthetic MCP подтверждены
-неограниченный глубиной raw glob обход у find_files/search_text и неисполняемые
-literal Next page команды этих tools. Предложен отдельный follow-up поиска;
-задача и исполнитель ещё не назначены. Память/TTL paging требуют измерений,
-изменение ignore defaults или повышение лимитов не принято. Принятая 010 и
-статус предметного опыта 005 остаются прежними.
+11.10 пользователь разрешил планирование и запуск одобренных направлений
+из [triage внешнего обзора](../testing/report-triage-2026-10-11.md).
+[011](../tasks/011-bounded-search.md) исправляет фактические границы/отмену поиска,
+вводит limit/pageSize и полную команду Next page. [012](../tasks/012-pagination-memory-study.md)
+снимает baseline памяти и TTL отдельным synthetic harness без изменения runtime.
+Карточки готовы; отдельные managed worktrees, GPT-6.1-Sol / Extra High.
+012 может идти параллельно, так как владеет только своими scripts/docs; после
+интеграции 011 планирование повторит ключевые измерения. Изменение ignore defaults,
+повышение cache limits, новый runtime из 012 и выпуск сборки пока не назначены.
+
+Порядок приёмки: review/интеграция 011, review результатов 012 и нужный повтор;
+далее согласование предметного опыта 005. Центральную доску ведёт планирование.
 
 [010](../tasks/010-bounded-list.md) принята пользователем 09.10.2026 и
 [слита через PR #9](https://github.com/obolibok/filesystem-mcp/pull/9) в main,
@@ -56,7 +63,7 @@ Next page сохраняет scope/limit. Комплект
 BUILD.json source `29fa8b7b`, R3 менял только tests/docs. Установленный сервис
 во время интеграции не менялся, release не публиковался.
 
-Следующий плановый этап — согласовать предметный опыт 005: выборку
+После 011 и оценки результатов 012 — согласовать предметный опыт 005: выборку
 Daum/Inoplacer, вопрос и проверяемые критерии. Пока proposed, исполнитель
 не назначен; новый coding-чат автоматически не создавать.
 
@@ -82,7 +89,7 @@ merge. Это принятая пользовательская live прове�
 повторных опытов. Count_files/count-only не добавлены; API и source policy прежние.
 Sleep/Ctrl+C и нестабильный PowerShell helper остаются отдельными наблюдениями.
 
-После 010 — согласовать предметный опыт 005: выборку Daum/Inoplacer,
+После 011 и оценки результатов 012 — согласовать предметный опыт 005: выборку Daum/Inoplacer,
 исходный вопрос и критерии результата. Задача пока proposed, исполнитель
 не назначен; новую реализацию автоматически не начинать.
 
