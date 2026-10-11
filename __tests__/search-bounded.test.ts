@@ -39,6 +39,7 @@ interface SearchMeta {
   totalMatches: number;
   filesScanned: number;
   filesMatched?: number;
+  skippedInaccessible?: number;
   truncated: boolean;
   stoppedReason?: 'limit' | 'timeout';
   nextCursor?: string;
@@ -277,6 +278,239 @@ function observe(
   });
   return { opened, ignoreReads, textReads, counts: () => ({ reads, closes }) };
 }
+
+function paths(meta: SearchMeta): string[] {
+  return meta.results?.map((r) => r.path) ?? (meta.matches ?? []).map((m) => m.file);
+}
+
+it('dot and repeated-separator glob spellings preserve results, depth and collect pruning through MCP', async (t) => {
+  const root = await fixture(t);
+  for (const file of ['Wanted/a.txt', 'Wanted/nested/b.txt', 'Wanted/nested/deeper/c.txt'])
+    await writeTestFile(root, file, 'token');
+  await writeTestFile(root, 'Wanted/.gitignore', '*.log\n');
+  await writeTestFile(root, 'Wanted/skip.log', 'token');
+  await writeTestFile(root, 'Unrelated/deep/other.txt', 'token');
+  const pair = await createTestClientPair([root]);
+  t.after(() => pair.close());
+  const readNames: (string | null)[] = [];
+  const observed = observe(t, root, (entry) => {
+    readNames.push(entry?.name ?? null);
+  });
+  for (const name of tools)
+    for (const maxDepth of [0, 1, 2])
+      for (const limit of [1, 100]) {
+        let control: string[] | undefined;
+        for (const pattern of [
+          'Wanted/**/*.txt',
+          './Wanted/**/*.txt',
+          '././Wanted//**/*.txt',
+          'Wanted/./**/*.txt',
+        ]) {
+          observed.opened.length = observed.ignoreReads.length = observed.textReads.length = 0;
+          readNames.length = 0;
+          const before = observed.counts();
+          const response = await pair.client.callTool({
+            name,
+            arguments: { ...query(name, root), pattern, maxDepth, limit },
+          });
+          assert.notEqual(response.isError, true, firstTextBlock(response).text);
+          const meta = response._meta as unknown as SearchMeta;
+          const actual = paths(meta);
+          if (control === undefined) control = actual;
+          else assert.deepEqual(actual, control, `${name}: ${pattern}`);
+          assert.equal(actual.length, Math.min(maxDepth, limit));
+          assert.equal(meta.truncated, maxDepth > 0 && limit === 1);
+          assert.equal(meta.stoppedReason, meta.truncated ? 'limit' : undefined);
+          assert(observed.opened.every((p) => !p.startsWith('Unrelated')));
+          assert(observed.opened.every((p) => !p.includes('deeper')));
+          assert(observed.opened.length <= 1 + maxDepth);
+          if (limit === 100) assert.equal(observed.opened.length, 1 + maxDepth);
+          if (limit === 1 && maxDepth > 0) {
+            assert.equal(readNames.filter((p) => p?.endsWith('.txt')).length, 1);
+            assert(readNames.at(-1)?.endsWith('.txt'), 'no directory read after the Nth match');
+          }
+          assert.equal(observed.ignoreReads.length, observed.opened.length);
+          assert.equal(observed.textReads.length, name === 'search_text' ? actual.length : 0);
+          assert.equal(observed.counts().closes - before.closes, observed.opened.length);
+        }
+      }
+});
+
+it('initial literal prefix and filename lookup follows filesystem case while wildcard matching retains native semantics', async (t) => {
+  const root = await fixture(t);
+  await writeTestFile(root, 'Wanted/a.txt', 'token');
+  await writeTestFile(root, 'Wanted/nested/b.txt', 'token');
+  await writeTestFile(root, 'Wanted/Mixed.TXT', 'token');
+  await writeTestFile(root, '.env', 'token');
+  await writeTestFile(root, 'Unrelated/deep/other.txt', 'token');
+  const pair = await createTestClientPair([root]);
+  t.after(() => pair.close());
+  const observed = observe(t, root);
+  const insensitive = await fsPromises.realpath(join(root, 'wanted', 'a.TXT')).then(
+    () => true,
+    () => false,
+  );
+  if (process.platform === 'linux')
+    assert.equal(insensitive, false, 'Linux fixture must be case sensitive');
+  for (const pattern of [
+    'Wanted/**/*.txt',
+    'wanted/**/*.txt',
+    './wanted//**/*.txt',
+    'Wanted/a.txt',
+    'wanted/a.TXT',
+    'Wanted/Mixed.TXT',
+    'wanted/MIXED.txt',
+    'Wanted/nested/b.txt',
+    'wanted/NESTED/b.TXT',
+    'Wanted/*/b.txt',
+    'Wanted/*/B.TXT',
+    'wanted/*/B.TXT',
+    'wante?/NESTED/b.TXT',
+    'Wanted/**/*.TXT',
+    'wante?/**/*.txt',
+    '**/Wanted/*.txt',
+    '**/wanted/*.txt',
+    'wanted/**/B.TXT',
+  ]) {
+    const expected: string[] = [];
+    for await (const file of fsPromises.glob(pattern, { cwd: root }))
+      expected.push(
+        relative(root, await fsPromises.realpath(join(root, file))).replaceAll('\\', '/'),
+      );
+    expected.sort();
+    if (pattern === 'wanted/a.TXT') assert.deepEqual(expected, insensitive ? ['Wanted/a.txt'] : []);
+    if (pattern === '**/wanted/*.txt' || pattern === 'wanted/**/B.TXT')
+      assert.deepEqual(expected, []);
+    for (const name of tools) {
+      observed.opened.length = observed.textReads.length = 0;
+      const response = await pair.client.callTool({
+        name,
+        arguments: { ...query(name, root), pattern, includeIgnored: true },
+      });
+      assert.notEqual(response.isError, true, firstTextBlock(response).text);
+      const meta = response._meta as unknown as SearchMeta;
+      assert.deepEqual(paths(meta).sort(), expected, `${name}: ${pattern}`);
+      assert.equal(meta.truncated, false);
+      if (!pattern.startsWith('**') && !pattern.startsWith('wante?'))
+        assert(observed.opened.every((p) => !p.startsWith('Unrelated')));
+      assert.equal(observed.textReads.length, name === 'search_text' ? expected.length : 0);
+    }
+  }
+  for (const name of tools) {
+    const response = await pair.client.callTool({
+      name,
+      arguments: { ...query(name, root), pattern: './.env', includeHidden: true },
+    });
+    assert.notEqual(response.isError, true, firstTextBlock(response).text);
+    const meta = response._meta as unknown as SearchMeta;
+    assert.equal(meta.totalMatches, 0);
+    assert.equal(meta.skippedInaccessible, 1, 'literal resolution retains walker skip accounting');
+    assert.equal(meta.truncated, false);
+  }
+  for (const pattern of ['wanted/**/*.txt', 'Wanted/*/B.TXT']) {
+    const native: string[] = [];
+    for await (const file of fsPromises.glob(pattern, { cwd: root }))
+      native.push(
+        relative(root, await fsPromises.realpath(join(root, file))).replaceAll('\\', '/'),
+      );
+    for (const maxDepth of [0, 1, 2])
+      for (const name of tools) {
+        observed.opened.length = observed.textReads.length = 0;
+        const expected = native.filter((p) => p.split('/').length - 1 <= maxDepth);
+        const response = await pair.client.callTool({
+          name,
+          arguments: { ...query(name, root), pattern, maxDepth, limit: 1, includeIgnored: true },
+        });
+        assert.notEqual(response.isError, true, firstTextBlock(response).text);
+        const meta = response._meta as unknown as SearchMeta;
+        assert.equal(meta.totalMatches, Math.min(expected.length, 1));
+        assert(paths(meta).every((p) => expected.includes(p)));
+        assert.equal(meta.truncated, expected.length > 0);
+        assert.equal(observed.textReads.length, name === 'search_text' ? meta.totalMatches : 0);
+        assert(observed.opened.every((p) => p === '' || p.split('/').length <= maxDepth));
+        assert(observed.opened.every((p) => !p.startsWith('Unrelated')));
+      }
+  }
+});
+
+it(
+  'Windows 8.3 aliases inside glob patterns resolve literal directories and filenames without following junctions',
+  { skip: process.platform !== 'win32' },
+  async (t) => {
+    const root = await fixture(t);
+    const folder = join(root, 'long synthetic pattern directory');
+    const file = await writeTestFile(
+      root,
+      'long synthetic pattern directory/long synthetic filename.txt',
+      'token',
+    );
+    await writeTestFile(folder, 'nested/second.txt', 'token');
+    await writeTestFile(folder, '.gitignore', '*.log\n');
+    await writeTestFile(folder, 'ignored.log', 'token');
+    const shortPaths = execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        '$fso = New-Object -ComObject Scripting.FileSystemObject; $fso.GetFolder($env:FSMCP_PATTERN_FOLDER).ShortPath; $fso.GetFile($env:FSMCP_PATTERN_FILE).ShortPath',
+      ],
+      {
+        env: { ...process.env, FSMCP_PATTERN_FOLDER: folder, FSMCP_PATTERN_FILE: file },
+        encoding: 'utf8',
+        windowsHide: true,
+      },
+    )
+      .trim()
+      .split(/\r?\n/u);
+    const shortFolder = shortPaths[0],
+      shortFile = shortPaths[1];
+    assert(shortFolder && shortFile);
+    if (!/~\d/u.test(basename(shortFolder)) || !/~\d/u.test(basename(shortFile))) {
+      t.skip('actual 8.3 pattern names unavailable on fixture volume');
+      return;
+    }
+    assert.equal(await fsPromises.realpath(shortFolder), folder);
+    assert.equal(await fsPromises.realpath(shortFile), file);
+    const alias = join(root, 'junction');
+    if (!(await trySymlink(folder, alias, () => t.skip('junction unavailable')))) return;
+    const pair = await createTestClientPair([root]);
+    t.after(() => pair.close());
+    const observed = observe(t, root);
+    const shortPrefix = basename(shortFolder);
+    for (const [pattern, expected] of [
+      [
+        `${shortPrefix}/**/*.txt`,
+        [
+          'long synthetic pattern directory/long synthetic filename.txt',
+          'long synthetic pattern directory/nested/second.txt',
+        ],
+      ],
+      [
+        `./${shortPrefix}//${basename(shortFile)}`,
+        ['long synthetic pattern directory/long synthetic filename.txt'],
+      ],
+      [
+        `*/${basename(shortFile)}`,
+        ['long synthetic pattern directory/long synthetic filename.txt'],
+      ],
+      ['junction/**/*.txt', []],
+      [`${shortPrefix}/ignored.log`, []],
+    ] as const)
+      for (const name of tools) {
+        observed.opened.length = 0;
+        const response = await pair.client.callTool({
+          name,
+          arguments: { ...query(name, root), pattern },
+        });
+        assert.notEqual(response.isError, true, firstTextBlock(response).text);
+        const meta = response._meta as unknown as SearchMeta;
+        assert.deepEqual(paths(meta), expected, `${name}: ${pattern}`);
+        assert.equal(meta.truncated, false);
+        assert(observed.opened.every((p) => !p.startsWith('junction')));
+      }
+  },
+);
 
 it('search depth 0/1/2 prunes actual opens and ignore discovery for hidden/ignored and unmatched globs', async (t) => {
   const root = await fixture(t);

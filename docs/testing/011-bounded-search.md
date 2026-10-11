@@ -99,6 +99,82 @@ Wire surface: full/read-only 26932/16852 chars, 19/13 tools. Budget увелич
 явно до 27200/17100 за два отдельных collect/page параметра и accurate depth /
 continuation descriptions; assertions не отключались.
 
+## Повторное review: R1/R2
+
+Замечания прочитаны из `14fa2e75:docs/testing/011-review-2026-10-11.md`;
+проверенный planning head — `7cbd14420e93b2e91e6da336a7f63c58ae7b32ab`.
+Planning commit не переносился в ветку реализации. Приведённые выше 473 tests
+относятся к первоначальному handoff; актуальные результаты после R1/R2 — ниже.
+
+На synthetic `Wanted/a.txt` и `Wanted/nested/b.txt` настоящий MCP подтвердил:
+`Wanted/**/*.txt` возвращал оба файла, а `./Wanted/**/*.txt` и Windows
+`wanted/**/*.txt` давали полный пустой результат. Native glob возвращал оба.
+Дополнительно проверены repeated separators, literal filenames и wildcard controls.
+
+R1: для matching и pruning теперь используется одна нормализация literal `.`
+и пустых path segments. Тесты сравнивают `Wanted/**/*.txt`, `./Wanted/**/*.txt`,
+`././Wanted//**/*.txt` и `Wanted/./**/*.txt` при depth 0/1/2 и limit 1/100.
+Они считают реальные directory opens, ignore reads, closes и content reads;
+после N-го совпадения нет следующего directory read. Проверка не зависит от
+порядка Dirents: на Linux первым может встретиться вложенный файл.
+
+R2: fixed literal prefix, включая полностью literal filename, разрешается через
+PathGuard с проверкой no-follow перед realpath. Matching/pruning используют
+canonical spelling; доступ определяется реальной filesystem, без общего case-fold.
+Для finite patterns literal segments после wildcard directories также проверяются
+guarded lookup, например `Wanted/*/B.TXT` и `wante?/NESTED/b.TXT`.
+Wildcard segments остаются у Node matcher; globstar matching не заменяется
+регистронезависимым сравнением. Полное дерево не собирается и повторно не сканируется.
+Недоступный literal `.env` сохраняет walker `skippedInaccessible=1`.
+
+MCP matrix обоих tools сверяет canonical results с настоящим `fs.promises.glob`:
+разный/совпадающий регистр prefix и filename, finite literal lookup после wildcard,
+`Wanted/**/*.TXT`, `wante?/**/*.txt`, `**/Wanted/*.txt`, `**/wanted/*.txt` и
+`wanted/**/B.TXT`. Последние два literal-after-globstar controls остаются пустыми
+на проверенной Windows, тогда как wildcard `.TXT` возвращает обычные `.txt`.
+На Linux filesystem literal lookup и wildcard extension остаются case-sensitive.
+Отдельная Windows fixture проверяет настоящие 8.3 directory/file names **внутри
+pattern**, включая `*/SHORTNAME.TXT`, source ignore rules и no-follow junction.
+Depth/limit controls распространяются и на другой регистр spelling.
+
+Windows команды те же, что в разделе выше. Окончательный runtime:
+
+| Проверка                        | Итог                                                  |
+| ------------------------------- | ----------------------------------------------------- |
+| R1/R2 MCP cases                 | PASS: 3 tests, 3 pass, 0 fail, 0 skips                |
+| Windows targeted suites         | PASS: 165 tests, 159 pass, 0 fail, 6 skips            |
+| Actual 8.3 TEMP search + list   | PASS: 33 tests, 33 pass, 0 fail, 0 skips              |
+| Windows npm run check           | PASS: static + 476 tests, 468 pass, 0 fail, 8 skips   |
+| Linux search + list, WSL Ubuntu | PASS: 33 tests, 31 pass, 0 fail, 2 Windows-only skips |
+
+Linux проверен настоящим Node v24.15.0 `linux-x64`, а не Windows executable через
+WSL. Одноразовый wrapper проверил официальный SHA256, извлёк runtime в собственный
+`/tmp` и удалил его после проверки; зависимости/глобальная конфигурация не менялись.
+Fixtures создавались в Linux `/tmp`; test oracle явно подтвердил case sensitivity.
+Чтобы использовать существующие JS dependencies без Windows-only esbuild binary,
+tests предварительно скомпилированы тем же TypeScript. Эквивалентные команды после
+подготовки Linux Node (фактический локальный запуск wrapper —
+`wsl -d Ubuntu -- bash .tmp/011-linux-check.sh`):
+
+```text
+node node_modules/typescript/bin/tsc -p tsconfig.test.json --noEmit false --outDir .tmp/011-linux-tests --declaration false --declarationMap false
+node --test .tmp/011-linux-tests/__tests__/search-bounded.test.js .tmp/011-linux-tests/__tests__/list-bounded.test.js
+```
+
+Промежуточные результаты сохранены явно: первый Windows full check прошёл static,
+но дал **467 pass / 1 fail / 8 skips** (476 tests). Известный cleanup flake в
+`snapshot.test.ts`, `keeps startup available when expired artifact deletion is
+temporarily blocked`: `directoryBytes` получил ENOENT для исчезнувшего
+`job.<id>.metadata-tmp`. Snapshot/jobs не менялись; failure не отменён последующими
+PASS и follow-up не объявлен исправленным. Повторные full checks потребовались
+после сохранения literal skip accounting и добавления finite literal lookup,
+а не для маскировки flake. Первые regressions также обнаружили ошибочные assertions
+об обходе unrelated branches при wildcard prefix и о порядке Linux Dirents;
+исправлены test oracles, исходный runtime R1/R2 подтверждён отдельным MCP baseline.
+Windows skips прежние: 3 POSIX-only и 5 file-symlink permissions. Linux skips —
+два Windows-only search alias cases; настоящий configured root junction list case
+выполнен. Linux CI и целевой клиент этой локальной проверкой не заменяются.
+
 ## Короткая целевая live-матрица
 
 Это следующий опыт планирования после review; локальный SDK не доказывает

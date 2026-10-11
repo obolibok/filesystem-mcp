@@ -2,7 +2,14 @@ import { glob as fsGlob, readFile as fsReadFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, posix, relative, resolve } from 'node:path';
 
 import { processInParallel } from './concurrency.js';
-import { formatUnknownErrorMessage } from './errors.js';
+import {
+  ErrorCode,
+  formatUnknownErrorMessage,
+  isFsError,
+  isNodeError,
+  SKIPPABLE_ERRNOS,
+  SKIPPABLE_FS_CODES,
+} from './errors.js';
 import type { GuardedFileSystem } from './fs.js';
 import { walkListEntries } from './list-walk.js';
 import { Logger } from './observability.js';
@@ -237,6 +244,129 @@ function normalizeGlobOptions(options: GlobEntriesOptions): NormalizedGlob {
   return normalized;
 }
 
+interface WalkPattern {
+  readonly prefix: string;
+  readonly remainder: string;
+  readonly directoryOnly: boolean;
+}
+
+function normalizeWalkPattern(pattern: string): string {
+  // Normalize literal dot/empty segments for both matching and pruning. Keep
+  // a trailing separator: it restricts a native glob to directory results.
+  const segments = pattern.split(SEP);
+  const normalized = segments.filter((segment) => segment !== '.' && segment !== '').join(SEP);
+  return pattern.endsWith(SEP) ? `${normalized}/` : normalized;
+}
+
+function isSkippableGlobError(error: unknown): boolean {
+  return (
+    (isFsError(error) &&
+      (SKIPPABLE_FS_CODES.has(error.code) || error.code === ErrorCode.NOT_DIRECTORY)) ||
+    (isNodeError(error) &&
+      error.code !== undefined &&
+      (SKIPPABLE_ERRNOS.has(error.code) || error.code === 'ENOTDIR' || error.code === 'EPERM'))
+  );
+}
+
+async function resolveWalkPattern(
+  pattern: string,
+  root: string,
+  fs: GuardedFileSystem,
+  signal: AbortSignal,
+  maxDepth: number,
+): Promise<WalkPattern | null> {
+  const directoryOnly = pattern.endsWith(SEP);
+  const segments = (directoryOnly ? pattern.slice(0, -1) : pattern).split(SEP);
+  const magic = segments.findIndex((segment) => PREFIX_MAGIC_RE.test(segment));
+  const literalCount = magic < 0 ? segments.length : magic;
+  if (literalCount === 0) return { prefix: '', remainder: segments.join(SEP), directoryOnly };
+  if (literalCount > maxDepth + 1) return null;
+
+  const literalPath = join(root, ...segments.slice(0, literalCount));
+  try {
+    // Native glob looks up the initial literal path, including a literal
+    // filename, through the filesystem. realpath preserves that filesystem's
+    // case/8.3 semantics without making subsequent glob literals nocase.
+    // Resolve only this fixed path; no directory enumeration or link following.
+    await fs.pathGuard.assertNoSymlinkComponents(root, literalPath, signal);
+    const { resolvedPath } = await fs.pathGuard.validateExistingPathDetailed(literalPath, signal);
+    signal.throwIfAborted();
+    return {
+      prefix: toPosixPath(relative(root, resolvedPath)),
+      remainder: segments.slice(literalCount).join(SEP),
+      directoryOnly,
+    };
+  } catch (error) {
+    signal.throwIfAborted();
+    if (isSkippableGlobError(error)) {
+      // Let the walker apply its accessibility filter and count an existing
+      // inaccessible literal file. Dropping the pattern here would erase that
+      // counter. Unresolved spellings still cannot bypass guarded descent.
+      return {
+        prefix: segments.slice(0, literalCount).join(SEP),
+        remainder: segments.slice(literalCount).join(SEP),
+        directoryOnly,
+      };
+    }
+    throw error;
+  }
+}
+
+function matchesWalkPattern(path: string, pattern: WalkPattern): boolean {
+  const { prefix, remainder } = pattern;
+  if (!prefix) return posix.matchesGlob(path, remainder);
+  if (!remainder) return path === prefix;
+  if (path === prefix) return posix.matchesGlob('', remainder);
+  return (
+    path.startsWith(`${prefix}/`) && posix.matchesGlob(path.slice(prefix.length + 1), remainder)
+  );
+}
+
+async function matchesFiniteLiteralPath(
+  entry: GlobEntry,
+  pattern: WalkPattern,
+  root: string,
+  fs: GuardedFileSystem,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (pattern.directoryOnly && !entry.dirent.isDirectory()) return false;
+  const rel = toPosixPath(relative(root, entry.path));
+  if (pattern.prefix && !rel.startsWith(`${pattern.prefix}/`)) return false;
+  const suffix = pattern.prefix ? rel.slice(pattern.prefix.length + 1) : rel;
+  const names = suffix.split(SEP);
+  const segments = pattern.remainder.split(SEP);
+  // Finite patterns perform literal lookups after wildcard directories too.
+  // Keep globstar and compound slash-containing patterns on the Node matcher;
+  // their literal matching has different traversal semantics.
+  if (segments.includes('**') || segments.length !== names.length) return false;
+  const requested: string[] = [];
+  let needsLookup = false;
+  for (const [index, segment] of segments.entries()) {
+    const name = names[index];
+    if (name === undefined) return false;
+    if (PREFIX_MAGIC_RE.test(segment)) {
+      if (!posix.matchesGlob(name, segment)) return false;
+      requested.push(name);
+    } else {
+      requested.push(segment);
+      if (segment !== name) needsLookup = true;
+    }
+  }
+  if (!needsLookup) return false;
+  const path = join(root, pattern.prefix, ...requested);
+  try {
+    signal.throwIfAborted();
+    await fs.pathGuard.assertNoSymlinkComponents(root, path, signal);
+    const { resolvedPath } = await fs.pathGuard.validateExistingPathDetailed(path, signal);
+    signal.throwIfAborted();
+    return resolvedPath === entry.path;
+  } catch (error) {
+    signal.throwIfAborted();
+    if (isSkippableGlobError(error)) return false;
+    throw error;
+  }
+}
+
 function resolveDirentBase(cwd: string, parentPath: string | undefined): string {
   if (!parentPath) return cwd;
   return isAbsolute(parentPath) ? parentPath : resolve(cwd, parentPath);
@@ -339,23 +469,29 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
     const signal = options.signal ?? new AbortController().signal;
     // Without globstar no path can match beyond its slash count. Braces that
     // contain slashes can overestimate this bound, never underestimate it.
-    const patternDepth = plan.patterns.some((pattern) => pattern.includes('**'))
+    const patterns = plan.patterns.map(normalizeWalkPattern);
+    const patternDepth = patterns.some((pattern) => pattern.includes('**'))
       ? 100
-      : Math.max(...plan.patterns.map((pattern) => pattern.split(SEP).length - 1));
-    const prefixes = plan.patterns.map((pattern) => {
-      const segments = pattern.split(SEP);
-      const magic = segments.findIndex((segment) => PREFIX_MAGIC_RE.test(segment));
-      return segments.slice(0, magic < 0 ? -1 : magic).join(SEP);
-    });
+      : Math.max(...patterns.map((pattern) => pattern.split(SEP).length - 1));
+    const maxDepth = Math.min(options.maxDepth ?? 100, patternDepth);
+    const walkPatterns: WalkPattern[] = [];
+    for (const pattern of patterns) {
+      signal.throwIfAborted();
+      const resolved = await resolveWalkPattern(pattern, plan.cwd, options.fs, signal, maxDepth);
+      if (resolved) walkPatterns.push(resolved);
+    }
+    signal.throwIfAborted();
     const matches = (entry: GlobEntry): boolean =>
       (!(options.onlyFiles ?? true) || entry.dirent.isFile()) &&
-      plan.patterns.some((pattern) =>
-        posix.matchesGlob(toPosixPath(relative(plan.cwd, entry.path)), pattern),
+      walkPatterns.some(
+        (pattern) =>
+          (!pattern.directoryOnly || entry.dirent.isDirectory()) &&
+          matchesWalkPattern(toPosixPath(relative(plan.cwd, entry.path)), pattern),
       );
     const entries = walkListEntries({
       fs: options.fs,
       root: plan.cwd,
-      maxDepth: Math.min(options.maxDepth ?? 100, patternDepth) + 1,
+      maxDepth: maxDepth + 1,
       includeHidden: options.includeHidden ?? false,
       includeIgnored: !options.skipIgnored,
       signal,
@@ -368,8 +504,8 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
         : {}),
       shouldDescend: (path) => {
         const rel = toPosixPath(relative(plan.cwd, path));
-        return prefixes.some(
-          (prefix) =>
+        return walkPatterns.some(
+          ({ prefix }) =>
             !prefix ||
             prefix === rel ||
             prefix.startsWith(`${rel}/`) ||
@@ -379,7 +515,16 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
     });
     for await (const entry of entries) {
       signal.throwIfAborted();
-      if (matches(entry)) yield entry;
+      if (matches(entry)) {
+        yield entry;
+      } else if (!(options.onlyFiles ?? true) || entry.dirent.isFile()) {
+        for (const pattern of walkPatterns) {
+          if (await matchesFiniteLiteralPath(entry, pattern, plan.cwd, options.fs, signal)) {
+            yield entry;
+            break;
+          }
+        }
+      }
     }
     signal.throwIfAborted();
     return;

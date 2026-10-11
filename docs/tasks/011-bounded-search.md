@@ -160,7 +160,8 @@ base/head/branch, проверками и ready for review; review не подм
 
 ## Work record
 
-Реализация завершена 11.10.2026; состояние: **ready for review**.
+Реализация завершена 11.10.2026; после исправления R1/R2 состояние:
+**ready for repeat review**.
 Проверки и короткая live-матрица: [протокол 011](../testing/011-bounded-search.md).
 
 - Base: `7d58beac5a95cd2014d2e37f966c4074d6e5d5ec`; приложение создало чистый
@@ -217,3 +218,38 @@ base/head/branch, проверками и ready for review; review не подм
   установленный сервис, credentials, production roots, portable сборка, push/PR/
   merge/release не затрагивались. Изменения сохранены локальными commits; фактический
   HEAD передаётся в handoff, без self-SHA внутри этого record.
+
+### R1/R2 после независимого review
+
+Замечания прочитаны из `14fa2e75:docs/testing/011-review-2026-10-11.md` на
+immutable reviewed head `7cbd14420e93b2e91e6da336a7f63c58ae7b32ab`. Исправления
+сделаны в прежнем worktree/ветке; planning commit и центральная доска не изменялись.
+
+- R1 воспроизведён через MCP: `./Wanted/**/*.txt` терял оба файла при работающем
+  `Wanted/**/*.txt`. Теперь dot/repeated separator normalization общая для matcher
+  и prefix pruning. Regression обоих tools сравнивает четыре spellings, depth
+  0/1/2 и limit 1/100, реальные opens/ignore reads/closes и отсутствие N+1 read.
+- R2 воспроизведён на Windows: `wanted/**/*.txt` и literal filename с другим
+  регистром теряли результаты. Literal prefix/full filename и finite literal
+  segments после wildcard directories разрешаются guarded filesystem lookup,
+  с no-follow перед realpath. Wildcards остаются у Node; общий case-fold не введён.
+  Настоящие 8.3 directory/file aliases внутри pattern, junction cutoff, source
+  ignore и literal `.env` skip accounting покрыты обоими MCP tools. Results
+  сверены с native glob; depth/limit/cancellation/continuation контракт сохранён.
+- Окончательный targeted command из [протокола](../testing/011-bounded-search.md):
+  **165 tests, 159 pass / 0 fail / 6 skips**. Launcher
+  `node scripts/search-check/windows-short-temp.mjs`: **33 / 0 / 0**.
+  `npm run check`: все static стадии PASS, **476 tests / 69 suites,
+  468 pass / 0 fail / 8 skips**. Wire budget прежний, dependencies/versions прежние.
+- Дополнительный Linux control: настоящий Linux Node v24.15.0 в WSL Ubuntu,
+  case-sensitive synthetic `/tmp`, compiled search/list tests: **31 pass /
+  0 fail / 2 Windows-only skips**, 33 tests. Runtime временный, checksum проверен;
+  команды, oracle и ограничения записаны в протоколе. Это локальный Linux опыт,
+  не remote CI и не целевой live клиент.
+- Первый full check после review воспроизвёл прежний cleanup flake:
+  **467 pass / 1 fail / 8 skips**, ENOENT при `directoryBytes` для исчезнувшего
+  metadata-temp в snapshot startup cleanup test. Он не исправлялся и не скрыт
+  green повтором; следующие full checks обусловлены изменениями literal skip
+  accounting и finite matching. Остальные ограничения/live NOT RUN сохранены.
+  Scope локального revision: `src/core/glob.ts`, search regressions, этот record
+  и protocol. Файлы 012, portable/установленный сервис, push/PR/merge не затрагивались.
