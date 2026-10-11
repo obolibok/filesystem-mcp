@@ -1,5 +1,4 @@
-import { stat } from 'node:fs/promises';
-import { basename, dirname } from 'node:path';
+import { dirname } from 'node:path';
 
 import * as z from 'zod/v4';
 
@@ -35,14 +34,14 @@ import { defineTool, type ToolCtx } from './define.js';
 
 /**
  * `FS_MAX_INLINE_MATCHES` used to cap how many matches a page showed inline
- * and, past it, push the rest into the resource store. `maxResults` is the one
+ * and, past it, push the rest into the resource store. `pageSize` is the one
  * page size now, and the full list is externalized whenever a response is
  * incomplete, so the variable does nothing. It is still read so an operator who
  * set it hears why it stopped mattering; the read goes at the next major.
  */
 if (process.env['FS_MAX_INLINE_MATCHES'] !== undefined) {
   Logger.warn(
-    'FS_MAX_INLINE_MATCHES is deprecated and ignored: maxResults sets the search_text page size. It will be removed in the next major release.',
+    'FS_MAX_INLINE_MATCHES is deprecated and ignored: pageSize sets the search_text page size; limit caps collected matching lines. It will be removed in the next major release.',
   );
 }
 
@@ -53,6 +52,7 @@ type SearchMatchPayload = NonNullable<SearchOutput['matches']>[number];
 type SearchResultValue = Awaited<ReturnType<typeof searchContent>>;
 
 interface SearchContentPageMetadata {
+  readonly limit: number;
   readonly totalMatches: number;
   readonly filesScanned: number;
   readonly filesMatched?: number;
@@ -86,13 +86,16 @@ const GrepInputSchema = z.strictObject({
   includeHidden: includeHiddenField(),
   includeIgnored: includeIgnoredField(),
   caseSensitive: defaultFalseBoolean('Enable case-sensitive matching (default: case-insensitive)'),
-  maxResults: z
-    .uint32()
-    .min(1)
-    .max(MAX_SEARCH_RESULTS)
-    .optional()
+  limit: PositiveInt.max(MAX_SEARCH_RESULTS)
+    .default(MAX_SEARCH_RESULTS)
+    .describe(
+      'Collect at most this many matching lines across all pages; occurrences/context do not consume extra limit (default/cap 10000).',
+    ),
+  pageSize: PositiveInt.max(MAX_SEARCH_RESULTS)
     .default(DEFAULT_SEARCH_CONTENT_RESULTS)
-    .describe('Maximum number of matching lines to return per page'),
+    .describe(
+      'Matching lines per page; can change between pages (default 500). Does not limit traversal.',
+    ),
   context: z
     .uint32()
     .max(10)
@@ -128,6 +131,7 @@ const GrepOutputSchema = z.strictObject({
   totalMatches: NonNegInt.optional().describe(
     "Total matching lines, one per entry in matches (not per occurrence); see that entry's matchCount for occurrences on a line.",
   ),
+  limit: PositiveInt.describe('Effective matching-line collect cap'),
   filesMatched: NonNegInt.optional().describe('Number of files containing at least one match'),
   filesScanned: NonNegInt.optional().describe(
     'Accessible files whose metadata or text classification were examined, including files reported by a skip counter',
@@ -146,12 +150,11 @@ const GrepOutputSchema = z.strictObject({
   ),
   truncated: z
     .boolean()
-    .optional()
     .describe(
       'True when the search engine cut the match list — the hard result cap or the time limit. Paging is not truncation: a set that spans pages has nextCursor instead.',
     ),
   stoppedReason: SearchStoppedReasonSchema.describe(
-    'Why the search ended early: maxResults = result cap reached, timeout = time limit hit or the request was cancelled. Absent when the scan ran to completion.',
+    'Why collection stopped: limit = collect cap reached (completeness unconfirmed), timeout = time limit hit or cancelled. Absent after completion.',
   ),
   resourceUri: z
     .string()
@@ -246,10 +249,11 @@ function searchContentOutput(
 ): SearchOutput {
   return {
     matches: [...matches],
+    limit: metadata.limit,
     totalMatches: metadata.totalMatches,
     filesScanned: metadata.filesScanned,
     ...(metadata.filesMatched ? { filesMatched: metadata.filesMatched } : {}),
-    ...(metadata.truncated ? { truncated: true } : {}),
+    truncated: metadata.truncated,
     ...(metadata.stoppedReason !== undefined ? { stoppedReason: metadata.stoppedReason } : {}),
     ...(metadata.skippedInaccessible ? { skippedInaccessible: metadata.skippedInaccessible } : {}),
     ...(metadata.skippedTooLarge ? { skippedTooLarge: metadata.skippedTooLarge } : {}),
@@ -294,42 +298,35 @@ function buildSearchContentOptions(args: SearchInput, signal?: AbortSignal): Sea
     filePattern: args.pattern ?? '**/*',
     caseSensitive: args.caseSensitive,
     isRegex: args.isRegex,
-    maxResults: args.maxResults,
+    maxResults: args.limit,
     skipIgnored: !args.includeIgnored,
     context: args.context,
-    ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
+    maxDepth: args.maxDepth,
     ...(signal ? { signal } : {}),
   };
 }
 
 /**
  * `path` is documented as "file to search, or directory to search under", but
- * the scan itself only walks directories. A file path is therefore rewritten
- * into the scan it means: its parent as the base, its own name as the glob.
- * Naming a file is an explicit request for that file, so hidden/ignored
- * filtering is lifted for it — otherwise `search_text` on a path the caller can
- * see returned nothing.
+ * a file path bypasses directory discovery. Use its parent only for relative
+ * result paths; keep the file itself literal, without glob/hidden/ignore filters.
  */
 async function resolveSearchScope(
   args: SearchInput,
   ctx: ToolCtx,
-): Promise<{ basePath: string; args: SearchInput }> {
+): Promise<{ basePath: string; singleFile?: string }> {
   const requested = await ctx.fs.pathGuard.resolvePathOrRoot(args.path, ctx.signal);
   // One resolution, one stat: validateExistingDirectory would redo both.
-  const resolved = await ctx.fs.pathGuard.validateExistingPath(requested);
-  const stats = await stat(resolved);
+  const { validPath: resolved, stats } = await ctx.fs.stat(requested, { signal: ctx.signal });
   if (!stats.isFile()) {
     if (!stats.isDirectory()) {
       throw new FsError(ErrorCode.NOT_DIRECTORY, 'Not a directory', requested);
     }
-    return { basePath: resolved, args };
+    return { basePath: resolved };
   }
   return {
     basePath: dirname(resolved),
-    // ponytail: the name goes through as a glob, so a file whose name contains
-    // glob metacharacters (`[id].ts`) matches as a pattern rather than
-    // literally. Escape it here if that ever bites.
-    args: { ...args, pattern: basename(resolved), includeHidden: true, includeIgnored: true },
+    singleFile: resolved,
   };
 }
 
@@ -340,13 +337,14 @@ async function handleSearchContent(
   structured: SearchOutput;
   offset: number;
   total: number;
+  nextArgs: SearchInput;
   link?: ReturnType<typeof putJsonResource>['link'];
 }> {
   const requestedPath = await ctx.fs.pathGuard.resolvePathOrRoot(args.path, ctx.signal);
   const queryKey = pageQueryKey({
     method: 'search_text',
     path: requestedPath,
-    pattern: args.pattern,
+    pattern: args.pattern ?? '**/*',
     searchPattern: args.searchPattern,
     isRegex: args.isRegex,
     includeHidden: args.includeHidden,
@@ -354,6 +352,7 @@ async function handleSearchContent(
     caseSensitive: args.caseSensitive,
     maxDepth: args.maxDepth,
     context: args.context,
+    limit: args.limit,
   });
   const { resourceStore } = ctx;
 
@@ -361,14 +360,14 @@ async function handleSearchContent(
     store: ctx.pageStore,
     queryKey,
     cursor: args.cursor,
-    pageSize: args.maxResults,
+    pageSize: args.pageSize,
     produce: async () => {
-      const { basePath, args: scoped } = await resolveSearchScope(args, ctx);
+      const { basePath, singleFile } = await resolveSearchScope(args, ctx);
 
       const result = await searchContent(
         basePath,
-        scoped.searchPattern,
-        buildSearchContentOptions({ ...scoped, maxResults: MAX_SEARCH_RESULTS }, ctx.signal),
+        args.searchPattern,
+        { ...buildSearchContentOptions(args, ctx.signal), ...(singleFile ? { singleFile } : {}) },
         ctx.fs.pathGuard,
       );
 
@@ -376,6 +375,7 @@ async function handleSearchContent(
       return {
         items,
         metadata: {
+          limit: args.limit,
           totalMatches: result.summary.matchingLines,
           filesScanned: result.summary.filesScanned,
           ...(result.summary.filesMatched ? { filesMatched: result.summary.filesMatched } : {}),
@@ -416,6 +416,7 @@ async function handleSearchContent(
     ),
     offset: paged.offset,
     total: paged.metadata.totalMatches,
+    nextArgs: { ...args, path: requestedPath },
     ...(paged.resource ? { link: paged.resource.link } : {}),
   };
 }
@@ -429,6 +430,8 @@ export const SEARCH_TEXT = defineTool({
     'Set context=N to also return N lines either side of each match (grep -C). ' +
     'Scope to specific file types with pattern (e.g. **/*.ts). ' +
     'Binary and unsupported-encoding files are skipped and counted in the response. ' +
+    'limit caps matching lines across pages (default/cap 10000); pageSize sets response size (default 500). ' +
+    'maxDepth prunes directory traversal: 0 = base only, default/cap 100. Sorts the collected subset, not globally first N. maxResults is removed; use limit/pageSize. ' +
     'Set includeHidden=true to include dotfiles. Use find_files to search by filename instead.',
   input: GrepInputSchema,
   output: GrepOutputSchema,
@@ -449,20 +452,21 @@ export const SEARCH_TEXT = defineTool({
   }),
   accessPaths: (args) => (args.path ? [args.path] : []),
   run: async (args, ctx) => {
-    const { structured, offset, total, link } = await handleSearchContent(args, ctx);
+    const { structured, offset, total, nextArgs, link } = await handleSearchContent(args, ctx);
     const rows = renderRows(structured.matches, args.context > 0);
     const body = rows.length > 0 ? rows.join('\n') : `No matches for '${args.searchPattern}'`;
     const text =
-      scanWarning(structured.stoppedReason) +
+      scanWarning(structured.stoppedReason, structured.limit) +
       body +
       skipSummary(structured) +
       pageTrailer({
         offset,
-        shown: rows.length,
+        shown: structured.matches.length,
         total,
         noun: 'matches',
         tool: 'search_text',
         nextCursor: structured.nextCursor,
+        nextArgs,
       });
     if (link) {
       return { structured, text, resources: [link] };

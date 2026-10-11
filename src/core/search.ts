@@ -1,12 +1,14 @@
 import type { Stats } from 'node:fs';
 import { stat as fsStat } from 'node:fs/promises';
 import { basename } from 'node:path';
+import { setImmediate } from 'node:timers/promises';
 
 import type { RE2ExecArray } from '@adguard/re2-wasm';
 import { RE2 } from '@adguard/re2-wasm';
 
 import { ErrorCode, isFsError } from './errors.js';
-import { globEntries, type GlobEntry } from './glob.js';
+import { GuardedFileSystem } from './fs.js';
+import { globEntries } from './glob.js';
 import type { PathGuard } from './path.js';
 import { escapeRegexLiteral } from './primitives.js';
 import { readFileWithStats } from './read.js';
@@ -25,6 +27,9 @@ interface SearchResult {
 }
 
 export type Regex = RE2;
+interface SearchEntry {
+  path: string;
+}
 export interface RegexCompileOptions {
   caseSensitive?: boolean;
 }
@@ -160,10 +165,12 @@ export function* execMatches(regex: Regex, text: string): Generator<RegexMatch, 
 function findLineMatches(
   regex: Regex,
   line: string,
+  signal?: AbortSignal,
 ): { count: number; column: number } | undefined {
   let count = 0;
   let column = -1;
   for (const match of execMatches(regex, line)) {
+    signal?.throwIfAborted();
     if (column === -1) column = match.start;
     count++;
     if (count >= MAX_MATCHES_PER_LINE) break;
@@ -176,6 +183,8 @@ export interface SearchContentOptions {
   isRegex?: boolean;
   maxResults?: number;
   filePattern?: string;
+  /** Explicit file scope bypasses directory discovery and glob/ignore filters. */
+  singleFile?: string;
   skipIgnored?: boolean;
   includeHidden?: boolean;
   maxDepth?: number;
@@ -205,12 +214,7 @@ export interface SearchContentOutcome {
     skippedBinary: number;
     /** Files skipped because their BOM declares an unsupported text encoding. */
     skippedUnsupportedEncoding: number;
-    /**
-     * `StoppedReason` narrowed to the stops these scans can produce: both call
-     * only `hitMaxResults`/`hitAbort` (see concurrency.ts) — never
-     * `hitMaxFiles`, which belongs to `replace_text`'s per-file cap.
-     */
-    stoppedReason?: 'maxResults' | 'timeout';
+    stoppedReason?: 'limit' | 'timeout';
   };
 }
 
@@ -229,15 +233,21 @@ export async function searchContent(
     const maxFileSize = getMaxTextFileSize();
     const context = options.context ?? 0;
 
-    const entries = globEntries({
-      cwd: directory,
-      pattern: options.filePattern ?? '**/*',
-      includeHidden: Boolean(options.includeHidden),
-      skipIgnored: Boolean(options.skipIgnored),
-      ...(options.signal ? { signal: options.signal } : {}),
-      maxDepth: options.maxDepth ?? 100,
-      suppressErrors: true,
-    });
+    const counters = { skippedInaccessible: 0, stoppedByAbort: false };
+    const entries = options.singleFile
+      ? [{ path: options.singleFile }]
+      : globEntries({
+          fs: new GuardedFileSystem(pathGuard),
+          onInaccessible: () => {
+            counters.skippedInaccessible++;
+          },
+          cwd: directory,
+          pattern: options.filePattern ?? '**/*',
+          includeHidden: Boolean(options.includeHidden),
+          skipIgnored: Boolean(options.skipIgnored),
+          ...(options.signal ? { signal: options.signal } : {}),
+          maxDepth: options.maxDepth ?? 100,
+        });
 
     let filesScanned = 0;
     let filesMatched = 0;
@@ -245,7 +255,6 @@ export async function searchContent(
     let skippedTooLarge = 0;
     let skippedBinary = 0;
     let skippedUnsupportedEncoding = 0;
-    const counters = { skippedInaccessible: 0, stoppedByAbort: false };
 
     for await (const entry of guardedEntries(entries, pathGuard, options.signal, counters)) {
       if (matches.length >= maxResults) break;
@@ -254,8 +263,14 @@ export async function searchContent(
       // them: "no matches" for a reason other than the pattern must be visible.
       let stats: Stats;
       try {
+        options.signal?.throwIfAborted();
         stats = await fsStat(entry.path);
+        options.signal?.throwIfAborted();
       } catch {
+        if (options.signal?.aborted) {
+          counters.stoppedByAbort = true;
+          break;
+        }
         counters.skippedInaccessible++;
         continue;
       }
@@ -281,12 +296,16 @@ export async function searchContent(
         const lineCount = content.endsWith('\n') ? lines.length - 1 : lines.length;
         let matchedFile = false;
         for (let i = 0; i < lines.length; i++) {
+          // Allow deadline/cancel events to run even in a file with no matches.
+          if (i % 256 === 0) await setImmediate();
+          options.signal?.throwIfAborted();
           const line = lines[i];
           if (line === undefined) continue;
           // One scan per line: findLineMatches resets lastIndex itself, so it
           // doubles as the "does this line match" test.
-          const found = findLineMatches(regex, line);
+          const found = findLineMatches(regex, line, options.signal);
           if (found) {
+            if (!matchedFile) filesMatched++;
             matchedFile = true;
             matchingLines++;
             matches.push({
@@ -305,7 +324,8 @@ export async function searchContent(
             if (matches.length >= maxResults) break;
           }
         }
-        if (matchedFile) filesMatched++;
+        // Stop on N, without requesting/validating N+1 from the walker.
+        if (matches.length >= maxResults) break;
       } catch (error: unknown) {
         // A read failure while the signal is aborted IS the abort, not an
         // unreadable file — stop rather than spend another iteration and then
@@ -344,7 +364,7 @@ export async function searchContent(
     // iteration, matching StopReasonTracker's precedence for the two stops this
     // scan can record (see the summary type's narrowing note).
     const stoppedReason =
-      matches.length >= maxResults ? 'maxResults' : counters.stoppedByAbort ? 'timeout' : undefined;
+      matches.length >= maxResults ? 'limit' : counters.stoppedByAbort ? 'timeout' : undefined;
 
     return {
       basePath: directory,
@@ -367,26 +387,32 @@ export async function searchContent(
 }
 
 async function* guardedEntries(
-  entries: AsyncIterable<GlobEntry>,
+  entries: AsyncIterable<SearchEntry> | Iterable<SearchEntry>,
   pathGuard: PathGuard,
   signal: AbortSignal | undefined,
   counters: { skippedInaccessible: number; stoppedByAbort: boolean },
-): AsyncGenerator<GlobEntry> {
+): AsyncGenerator<SearchEntry> {
   // The signal carries both client cancellation and the tool's search timeout,
   // so an abort means "return what we have, marked incomplete" rather than
   // throw — but it must never be reported as a finished scan.
-  for await (const entry of entries) {
-    if (signal?.aborted) {
-      counters.stoppedByAbort = true;
-      return;
+  try {
+    signal?.throwIfAborted();
+    for await (const entry of entries) {
+      signal?.throwIfAborted();
+      try {
+        await pathGuard.validateExistingPathDetailed(entry.path, signal);
+        signal?.throwIfAborted();
+      } catch {
+        signal?.throwIfAborted();
+        counters.skippedInaccessible++;
+        continue;
+      }
+      yield entry;
     }
-    try {
-      await pathGuard.validateExistingPath(entry.path);
-    } catch {
-      counters.skippedInaccessible++;
-      continue;
-    }
-    yield entry;
+    signal?.throwIfAborted();
+  } catch (error) {
+    if (!signal?.aborted) throw error;
+    counters.stoppedByAbort = true;
   }
 }
 
@@ -410,28 +436,31 @@ export async function searchFiles(
     filesScanned: number;
     truncated: boolean;
     skippedInaccessible: number;
-    /** Narrowed like SearchContentOutcome's — scans never hit `hitMaxFiles`. */
-    stoppedReason?: 'maxResults' | 'timeout';
+    stoppedReason?: 'limit' | 'timeout';
   };
 }> {
   const maxResults = options.maxResults ?? 100;
+  const counters = { skippedInaccessible: 0, stoppedByAbort: false };
   const entries = globEntries({
+    fs: new GuardedFileSystem(pathGuard),
+    onInaccessible: () => {
+      counters.skippedInaccessible++;
+    },
     cwd: directory,
     pattern,
     includeHidden: Boolean(options.includeHidden),
     skipIgnored: Boolean(options.skipIgnored),
     ...(options.signal ? { signal: options.signal } : {}),
     maxDepth: options.maxDepth ?? 100,
-    suppressErrors: true,
   });
   const results: { path: string }[] = [];
   let filesScanned = 0;
-  const counters = { skippedInaccessible: 0, stoppedByAbort: false };
 
   for await (const entry of guardedEntries(entries, pathGuard, options.signal, counters)) {
     if (results.length >= maxResults) break;
     filesScanned++;
     results.push({ path: entry.path });
+    if (results.length >= maxResults) break;
   }
 
   // Sorting — only name / path are supported; size / modified were removed
@@ -444,7 +473,7 @@ export async function searchFiles(
 
   // Same precedence as above: the result cap wins over a same-iteration abort.
   const stoppedReason =
-    results.length >= maxResults ? 'maxResults' : counters.stoppedByAbort ? 'timeout' : undefined;
+    results.length >= maxResults ? 'limit' : counters.stoppedByAbort ? 'timeout' : undefined;
 
   return {
     basePath: directory,

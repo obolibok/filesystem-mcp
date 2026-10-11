@@ -1,0 +1,380 @@
+# 011: bounded search — локальный протокол и live-матрица
+
+Проверки задачи [011](../tasks/011-bounded-search.md), база
+`7d58beac5a95cd2014d2e37f966c4074d6e5d5ec`, ветка `codex/011-bounded-search`.
+Дата: 11.10.2026. Windows, Node v24.15.0, npm 11.12.1. Только synthetic fixtures;
+установленный сервис, production roots, туннель и credentials не использовались.
+
+## Независимое воспроизведение на базе
+
+Через SDK in-memory MCP client/server созданы три root `.txt` и три ветви,
+в каждой десять вложенных папок с `.txt`; все 33 файла содержат `triage-token`.
+Обёртка настоящего `fs.promises.glob` считает raw Dirents до depth filtering.
+Fixture canonicalized через realpath, поэтому Windows TEMP alias не искажает
+счётчик глубины. Вызов обоих tools: explicit path, `pattern="**/*.txt"`,
+`maxDepth=0`, `maxResults=1`, `includeIgnored=true`; text дополнительно получает
+`searchPattern="triage-token"`.
+
+| Tool        | Raw glob | Ниже depth 0 | Собрано | Первая страница | Literal Next page                     |
+| ----------- | -------: | -----------: | ------: | --------------: | ------------------------------------- |
+| find_files  |       33 |           30 |       3 |               1 | validation: отсутствует pattern       |
+| search_text |       33 |           30 |       3 |               1 | validation: отсутствует searchPattern |
+
+Повтор с исходными аргументами и cursor проходит в обоих случаях. Это собственный
+baseline задачи, независимо от [triage](report-triage-2026-10-11.md). Полные
+локальные логи/fixtures в Git не нужны: постоянная regression suite ниже
+воспроизводит структуру и проверяет реальные opens/reads уже исправленного кода.
+
+## Решение и доказательства
+
+Read-only searches выбирают guarded ветку `globEntries` с walker из 010.
+На filesystem entry выполняются source policy и Node glob matching; ignore rules
+читаются только при открытии каталога. Pattern без globstar дополнительно
+ограничивает достижимую глубину; фиксированный prefix отсекает посторонние ветви.
+Общий limit прекращает iterator на N-м результате без N+1; handles закрываются
+при return/abort. RE2/occurrence/Unicode и существующий per-file read budget
+сохраняются. Явный file scope стал literal и не перечисляет соседние файлы.
+
+Public input: limit/pageSize, без maxResults alias, maxDepth default/cap 100.
+`stoppedReason=limit` и `truncated=true` при exact N консервативны. `_meta` и
+JSON resource содержат effective limit и одни counters/stop state. Find resource
+теперь object с results и metadata вместо bare array. Warning перед rows сохраняется
+на всех частичных страницах; context не искажает позицию match-page trailer.
+Next page содержит весь повторяемый query, включая effective path, и новый cursor.
+pageSize исключён из identity; limit и остальные параметры включены.
+
+| Проверяемая область                                           | Постоянная regression                                                                                                                                        |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| depth 0/1/2 × hidden × ignored × matched/unmatched, оба tools | opendir/read/close и ignore-read counters; ниже cutoff opens/ignore reads отсутствуют                                                                        |
+| finite glob, exact path, fixed prefix                         | root-only `*.txt`, wanted-only patterns, unmatched suffix; без лишних opens                                                                                  |
+| 0/1/N−1/N/N+1, pageSize < = > limit                           | N+1 read отсутствует; text следующий файл не открывает; conservative exact N                                                                                 |
+| все страницы + resource                                       | totals/limit/truncated/reason одинаковы; warnings на последней странице; без дубликатов/потерь                                                               |
+| literal continuation                                          | JSON извлекается из настоящего MCP text и вызывается целиком; single/multiple roots, nondefault options, explicit file, изменённый pageSize                  |
+| cursor validation                                             | изменение каждого query option отклоняется; expiry проверяется контролируемым store clock; без cursor новый scan                                             |
+| text semantics                                                | Unicode literal/RE2, две occurrences = одна строка, context, hidden explicit file с `[literal]` именем; binary/UTF-16/too-large skips из существующих suites |
+| abort filtering/ignore/native open                            | event/counter gates для hidden/ignored/unmatched/no-match; закрыты directory/rule handles и поздние native file/directory handles                            |
+| abort line loops / zero-match deadline                        | partial counters сохраняются; timeout виден даже при нуле; допускается explicit TIMEOUT/CANCELLED                                                            |
+| без resourceStore                                             | та же limit/warning/metadata семантика, literal pagination и expiry                                                                                          |
+| policy / Windows                                              | nested negation, default exclusions, sensitive paths, no-follow in/out-root junctions; canonical aliases, настоящий 8.3 root и отдельный 8.3 TEMP process    |
+| принятый list / replace_text                                  | прежняя глубина list; optional query pruning не меняет list; replace оставлен на прежнем glob/контракте                                                      |
+
+## Воспроизводимые команды
+
+Из своего clean worktree выполнить `npm ci`, затем:
+
+```powershell
+node --test --import tsx __tests__/search-bounded.test.ts __tests__/core-fs.test.ts __tests__/list-bounded.test.ts __tests__/tool-selection.test.ts __tests__/tools.test.ts
+node scripts/search-check/windows-short-temp.mjs
+npm run check
+```
+
+8.3 launcher создаёт собственный parent под `.tmp/`, получает настоящий ShortPath,
+сверяет basename `~N` и realpath и задаёт TEMP/TMP только дочернему process.
+Запускает обе bounded suites; после завершения проверяет resolved target и удаляет
+свой synthetic parent. Long spelling или junction вместо 8.3 не считаются evidence.
+На другом volume возможен явный skip 8.3-root test; launcher тогда сообщает error,
+а не PASS. File symlinks требуют соответствующих Windows permissions.
+
+Sandbox `tsx` до загрузки tests сообщил `uv_os_get_passwd ENOMEM`; проверки
+выполнялись разрешённым обычным пользовательским процессом, без изменения tests.
+
+| Проверка                      | Итог                                                |
+| ----------------------------- | --------------------------------------------------- |
+| baseline synthetic MCP        | PASS: оба depth/continuation дефекта воспроизведены |
+| targeted suites               | PASS: 162 tests, 156 pass, 0 fail, 6 skips          |
+| actual 8.3 TEMP search + list | PASS: 30 tests, 30 pass, 0 fail, 0 skips            |
+| npm run check                 | PASS: static + 473 tests, 465 pass, 0 fail, 8 skips |
+
+Предварительные targeted runs выявляли устаревшие assertions старого API и
+ошибки нового test oracle (unsupported pipe в pattern, text rules без token).
+Они исправлены; green повтор подтверждает исправленный тест, не скрывает runtime
+flake. Статический check сначала обнаружил ESLint type/interface ошибку; исправлена.
+Известный job terminal/cleanup follow-up не изменялся.
+Он не воспроизвёлся в первом полном test run (465/0/8); повтор полного check
+потребовался после самопроверки prefix pruning для directory extglob, а не для
+маскировки failure. Последний runtime diff проверен targeted 156/0/6.
+В full skips: POSIX FIFO, inode/mode и 0222 target (3), Windows file symlinks без
+нужного permission (5). Junction и actual 8.3 tests прошли без skips.
+Wire surface: full/read-only 26932/16852 chars, 19/13 tools. Budget увеличен
+явно до 27200/17100 за два отдельных collect/page параметра и accurate depth /
+continuation descriptions; assertions не отключались.
+
+## Повторное review: R1/R2
+
+Замечания прочитаны из `14fa2e75:docs/testing/011-review-2026-10-11.md`;
+проверенный planning head — `7cbd14420e93b2e91e6da336a7f63c58ae7b32ab`.
+Planning commit не переносился в ветку реализации. Приведённые выше 473 tests
+относятся к первоначальному handoff; актуальные результаты после R1/R2 — ниже.
+
+На synthetic `Wanted/a.txt` и `Wanted/nested/b.txt` настоящий MCP подтвердил:
+`Wanted/**/*.txt` возвращал оба файла, а `./Wanted/**/*.txt` и Windows
+`wanted/**/*.txt` давали полный пустой результат. Native glob возвращал оба.
+Дополнительно проверены repeated separators, literal filenames и wildcard controls.
+
+R1: для matching и pruning теперь используется одна нормализация literal `.`
+и пустых path segments. Тесты сравнивают `Wanted/**/*.txt`, `./Wanted/**/*.txt`,
+`././Wanted//**/*.txt` и `Wanted/./**/*.txt` при depth 0/1/2 и limit 1/100.
+Они считают реальные directory opens, ignore reads, closes и content reads;
+после N-го совпадения нет следующего directory read. Проверка не зависит от
+порядка Dirents: на Linux первым может встретиться вложенный файл.
+
+R2: fixed literal prefix, включая полностью literal filename, разрешается через
+PathGuard с проверкой no-follow перед realpath. Matching/pruning используют
+canonical spelling; доступ определяется реальной filesystem, без общего case-fold.
+Для finite patterns literal segments после wildcard directories также проверяются
+guarded lookup, например `Wanted/*/B.TXT` и `wante?/NESTED/b.TXT`.
+Wildcard segments остаются у Node matcher; globstar matching не заменяется
+регистронезависимым сравнением. Полное дерево не собирается и повторно не сканируется.
+Недоступный literal `.env` сохраняет walker `skippedInaccessible=1`.
+
+MCP matrix обоих tools сверяет canonical results с настоящим `fs.promises.glob`:
+разный/совпадающий регистр prefix и filename, finite literal lookup после wildcard,
+`Wanted/**/*.TXT`, `wante?/**/*.txt`, `**/Wanted/*.txt`, `**/wanted/*.txt` и
+`wanted/**/B.TXT`. Последние два literal-after-globstar controls остаются пустыми
+на проверенной Windows, тогда как wildcard `.TXT` возвращает обычные `.txt`.
+На Linux filesystem literal lookup и wildcard extension остаются case-sensitive.
+Отдельная Windows fixture проверяет настоящие 8.3 directory/file names **внутри
+pattern**, включая `*/SHORTNAME.TXT`, source ignore rules и no-follow junction.
+Depth/limit controls распространяются и на другой регистр spelling.
+
+Windows команды те же, что в разделе выше. Окончательный runtime:
+
+| Проверка                        | Итог                                                  |
+| ------------------------------- | ----------------------------------------------------- |
+| R1/R2 MCP cases                 | PASS: 3 tests, 3 pass, 0 fail, 0 skips                |
+| Windows targeted suites         | PASS: 165 tests, 159 pass, 0 fail, 6 skips            |
+| Actual 8.3 TEMP search + list   | PASS: 33 tests, 33 pass, 0 fail, 0 skips              |
+| Windows npm run check           | PASS: static + 476 tests, 468 pass, 0 fail, 8 skips   |
+| Linux search + list, WSL Ubuntu | PASS: 33 tests, 31 pass, 0 fail, 2 Windows-only skips |
+
+Linux проверен настоящим Node v24.15.0 `linux-x64`, а не Windows executable через
+WSL. Одноразовый wrapper проверил официальный SHA256, извлёк runtime в собственный
+`/tmp` и удалил его после проверки; зависимости/глобальная конфигурация не менялись.
+Fixtures создавались в Linux `/tmp`; test oracle явно подтвердил case sensitivity.
+Чтобы использовать существующие JS dependencies без Windows-only esbuild binary,
+tests предварительно скомпилированы тем же TypeScript. Эквивалентные команды после
+подготовки Linux Node (фактический локальный запуск wrapper —
+`wsl -d Ubuntu -- bash .tmp/011-linux-check.sh`):
+
+```text
+node node_modules/typescript/bin/tsc -p tsconfig.test.json --noEmit false --outDir .tmp/011-linux-tests --declaration false --declarationMap false
+node --test .tmp/011-linux-tests/__tests__/search-bounded.test.js .tmp/011-linux-tests/__tests__/list-bounded.test.js
+```
+
+Промежуточные результаты сохранены явно: первый Windows full check прошёл static,
+но дал **467 pass / 1 fail / 8 skips** (476 tests). Известный cleanup flake в
+`snapshot.test.ts`, `keeps startup available when expired artifact deletion is
+temporarily blocked`: `directoryBytes` получил ENOENT для исчезнувшего
+`job.<id>.metadata-tmp`. Snapshot/jobs не менялись; failure не отменён последующими
+PASS и follow-up не объявлен исправленным. Повторные full checks потребовались
+после сохранения literal skip accounting и добавления finite literal lookup,
+а не для маскировки flake. Первые regressions также обнаружили ошибочные assertions
+об обходе unrelated branches при wildcard prefix и о порядке Linux Dirents;
+исправлены test oracles, исходный runtime R1/R2 подтверждён отдельным MCP baseline.
+Windows skips прежние: 3 POSIX-only и 5 file-symlink permissions. Linux skips —
+два Windows-only search alias cases; настоящий configured root junction list case
+выполнен. Linux CI и целевой клиент этой локальной проверкой не заменяются.
+
+## R3: brace alternatives после второго review
+
+Прочитан `2591748e:docs/testing/011-review-r2-2026-10-11.md`; immutable reviewed
+head — `f5315d0ba09b3961c80dfccfc4087f3b93a9323a`. Настоящий MCP comparison с
+сохранённым compiled runtime этого head, synthetic Wanted/a.txt и
+Wanted/nested/b.txt (token), Else отсутствует. Explicit root, includeHidden=false,
+includeIgnored=true, остальные default; у text searchPattern=token:
+
+| Pattern                   | Reviewed head, оба tools | R3, оба tools |
+| ------------------------- | ------------------------ | ------------- |
+| `{Wanted,Else}/*.txt`     | Wanted/a.txt             | Wanted/a.txt  |
+| `{wanted,Else}/*.txt`     | Пусто, truncated=false   | Wanted/a.txt  |
+| `{./Wanted,./Else}/*.txt` | Пусто, truncated=false   | Wanted/a.txt  |
+
+Сверка native glob canonical paths также подтвердила slash/dot alternatives
+`Wanted/{./a,./nested/b}.txt`: новая выдача — a.txt и nested/b.txt.
+Новая постоянная MCP matrix покрывает nested braces, overlapping alternatives,
+Cartesian filename choices, slash-containing branches, non-choice literal braces,
+extglob и literal-after-globstar controls. Canonical results сравниваются с native
+`fs.promises.glob`; file identity не дублируется при overlapping alternatives.
+В Linux те же tests используют настоящую case-sensitive `/tmp`, включая разные
+spelling parent/filename и uppercase длинный product filename.
+
+`src/core/brace-pattern.ts` хранит input slices и sequence/choice nodes; явный DFS
+выдаёт один вариант за раз. Cartesian list не создаётся; поддержка не обрезается
+числом cached plans. Parser/DFS проверяют signal и отдают event loop каждые 256
+work units, в том числе без filesystem matches. Существующие публичные 1000 chars
+и запрет ranges с `..` сохраняются. Внутренний guard на 65536 UTF-16 units повторяет
+прежний предел Node matcher. Parser сохраняет Node comma/nested/non-choice brace
+semantics; ranges не стали новым capability. Runtime не зависит от Node internals:
+508 коротких expressions сверены с bundled Node braceExpand только в scratch oracle.
+
+Hidden patterns создаются по прежней политике **перед** brace expansion. Каждый
+expanded relative pattern нормализуется, проходит PathGuard no-follow/literal
+resolution и отдельный depth cutoff. Unsafe absolute/traversal expansions не
+переинтерпретируются как relative source paths. Common canonical literal prefix
+позволяет сразу отсеять unrelated directories. Cache ограничен 128 entries и
+32768 суммой lengths key+prefix+remainder (UTF-16 units); его заполнение не
+останавливает дальнейший lazy search. Async callbacks walker не меняют list depth,
+source policy или ownership directory handles.
+
+Для long literal ASCII basename alternatives с минимальной длиной больше 12
+characters применяется только prefix candidate pruning: такой basename не может
+быть DOS 8.3 alias. Case-neutral comparison здесь сохраняет возможные candidates;
+окончательно spelling/case/alias принимает filesystem через guarded lookup.
+Short names, Unicode и wildcard expressions используют общий lazy путь.
+Это устраняет перебор `2^25` неподходящих filenames перед нужным файлом при другом
+порядке Dirents. Uppercase product на Windows совпадает с filesystem lookup,
+на case-sensitive Linux остаётся полным пустым результатом, без ложного nocase match.
+
+Фактические открывания/чтения проверены на depth 0/1/2, limit 1/100, смешанных
+shallow/deep branches и overlapping patterns. После N нет directory read/content
+read следующего файла, все directory/rule handles закрыты. Дословный Next page
+содержит оригинальное brace expression, выдаёт cached rows без обхода, сохраняет
+partial warning; перестановка alternatives меняет query identity и отклоняет cursor.
+Ignore/hidden/sensitive branches и skip accounting проверены явно. Windows fixture
+включает brace patterns с настоящими 8.3 directory/file aliases и junction branch;
+no-follow и игнорируемый literal logfile сохранены.
+
+Отдельный stress case: первое совпадение среди `2^25` filename combinations при
+постороннем файле и unrelated subtree; отдельная 193-я alternative доступна после
+заполнения кэша. Cancellation event gates проверяют parsing, CPU-only unmatched
+enumeration и guarded prefix resolution у обоих core consumers. Ноль matches,
+timeout/truncated=true, ноль content reads, все открытые handles закрыты.
+
+Те же Windows targeted/full/8.3 и compiled Linux команды из предыдущих разделов:
+
+| Проверка                        | Итог                                                  |
+| ------------------------------- | ----------------------------------------------------- |
+| R3 MCP/cancellation cases       | PASS: 4 tests, 4 pass, 0 fail, 0 skips                |
+| Windows targeted suites         | PASS: 169 tests, 163 pass, 0 fail, 6 skips            |
+| Actual 8.3 TEMP search + list   | PASS: 37 tests, 37 pass, 0 fail, 0 skips              |
+| Windows npm run check           | PASS: static + 480 tests, 472 pass, 0 fail, 8 skips   |
+| Linux search + list, WSL Ubuntu | PASS: 37 tests, 35 pass, 0 fail, 2 Windows-only skips |
+
+Промежуточные failures не скрыты: test inputs с pipe и длинным списком имён
+превышали существующую validation; исправлены fixtures, policy не ослаблена.
+Расширенная matrix выявила non-choice brace behavior, исправлен parser.
+Первый Linux run дал **34 pass / 1 fail / 2 skips**: порядок файлов заставлял
+product query исчерпать deadline на неподходящем файле. Добавлены guarded common
+prefix и безопасное long-name candidate pruning; повтор проверяет изменённый код.
+Первый и финальный R3 Windows full check PASS, известный cleanup flake не проявился;
+исторический R1/R2 failure остаётся в протоколе и follow-up не объявлен исправленным.
+Skips, Node v24.15.0 / npm 11.12.1 и локальный Linux runtime профили прежние.
+Версии/dependencies/wire schemas и budgets прежние; 012/board/service/portable не
+менялись. Live matrix ниже остаётся NOT RUN; Linux CI не заявлен.
+
+Ограничение сохраняется: match limit не ограничивает число branch checks/OS calls.
+Сложный отрицательный, Unicode или wildcard expression может уйти в deadline;
+в таком случае выдача явная partial timeout/error. В памяти нет полного Cartesian
+списка, и cancellation продолжает наблюдаться во всех ветвях планирования/обхода.
+
+## R4: globstar, полученный конкатенацией brace alternatives
+
+Прочитан `65fbcb48:docs/testing/011-review-r3-2026-10-11.md`; immutable reviewed
+head — `b27a7a149c511efe9972b0f817ab1d0cdfbe6409`. Reviewer закрыл R3 и показал
+у обоих MCP tools потерю вложенного файла для `{*,x}*/file.txt` и
+`{*,x}{*,y}/file.txt`. До brace expansion raw pattern не содержит `**`;
+его slash count=1 ошибочно уменьшал общий maxDepth. Даже раскрытая ветвь
+`**/file.txt` затем получала min(100,1), walker не открывал второй уровень.
+
+Собственная постоянная regression на прежнем коде воспроизвела ошибку через
+настоящий find_files: при maxDepth=2 и includeIgnored=true один match вместо
+трёх native matches (a/file.txt, a/a/file.txt, Ignored/deep/file.txt). Оба tools
+после исправления сравниваются с canonical `fs.promises.glob`, отфильтрованным
+по явному пользовательскому depth и root ignore rule. Synthetic matrix содержит
+ещё a/a/a/file.txt, Wanted/nested/b.txt и Wanted/nested/deeper/b.txt, посторонний
+subtree и hidden source; содержимое файлов — token.
+
+Patterns: `**/file.txt`, `{*,x}*/file.txt`, `{*,x}{*,y}/file.txt`,
+`Wanted/**/b.txt`, `Wanted/{*,x}*/b.txt`. Для каждого у обоих tools проверены
+maxDepth 0/1/2 и omitted default, limit 1/100, includeHidden=false,
+includeIgnored=true/false. Native depth-filtered result set совпадает полностью
+при limit=100, при limit=1 возвращается только допустимый match с partial limit
+warning. Directory read заканчивается на N-м match, content reads не превышают N.
+Все открытые каталоги и discovery ignore reads остаются внутри depth/prefix/source
+scope; handles закрыты, hidden/ignored branches не обходятся при их исключении.
+
+Исправление в `src/core/glob.ts` использует консервативный общий depth bound для
+comma brace expressions: пользовательский maxDepth либо default 100. Это только
+верхняя граница общего walker. Lazy queryPatterns продолжает нормализовать каждый
+вариант, вычислять его finite slash depth или globstar depth, ограничивать реальным
+user cutoff и разрешать literal prefix через PathGuard. Cartesian expansion ради
+вычисления глубины не выполняется; parser, cache, event-loop checkpoints и signal
+semantics прежние. Non-brace patterns сохраняют прежнюю оптимизацию общего bound.
+
+Отдельная finite matrix: `{a,Else}/file.txt`, `{a,Else}/{file,missing}.txt`,
+`{a,Else}/{a,Else}/file.txt`, те же оба tools и depths. Сверяются точные actual
+opened directories: root и только разрешённые literal ancestors, a/a лишь для
+двухуровневой ветви. a/a/deeper, Else/deep и Unrelated не открываются, их ignore
+rules не читаются. Fully literal branches глубже user cutoff не открывают даже
+родительский каталог. Консервативный общий bound не ослабляет branch pruning.
+
+Отмена проверена отдельно на глубине 2: core searchFiles/searchContent с pattern
+`{*,x}{*,y}/missing.txt`, explicit skipIgnored=true; event gate прерывает при чтении
+a/a/file.txt. Результат — ноль matches, явный timeout/truncated=true, только root,
+a и a/a открыты, все три directory handles закрыты, discovery ignore reads только
+в этих каталогах, ноль content opens.
+a/a/deeper не открывается. Прежние lazy product/parser/enumeration/resolution,
+R1–R3 spelling, cursor, ignore/no-follow и Windows 8.3 tests сохранены.
+
+Промежуточные failures: до runtime fix воспроизведён R4; finite-control fixture
+первоначально ожидал открытые родители слишком глубокой fully literal ветви,
+ожидание приведено к существующему более строгому pruning. После runtime fix
+новый cancellation fixture не передавал core skipIgnored=true, хотя assertion
+ожидал ignore reads. Первый full check: static PASS, **474 pass / 1 fail / 8 skips**;
+targeted **165/1/6**, actual 8.3 **39/1/0**, Linux **37/1/2** — единственный failure
+в каждом связан с этой опцией fixture. Опция исправлена, policy/runtime не ослаблены;
+повтор выполнен с изменённым тестом. Known snapshot cleanup flake не проявился
+и исправленным не считается. Окончательные результаты записаны ниже.
+
+Те же команды targeted/full/actual 8.3 и compiled Linux из предыдущих разделов;
+focused R4 command:
+
+```powershell
+node --test --import tsx --test-name-pattern="brace-produced globstar|finite brace branches" __tests__/search-bounded.test.ts
+```
+
+| Проверка                        | Итог                                                  |
+| ------------------------------- | ----------------------------------------------------- |
+| R4 MCP/pruning/cancellation     | PASS: 3 tests, 3 pass, 0 fail, 0 skips                |
+| Windows targeted suites         | PASS: 172 tests, 166 pass, 0 fail, 6 skips            |
+| Actual 8.3 TEMP search + list   | PASS: 40 tests, 40 pass, 0 fail, 0 skips              |
+| Windows npm run check           | PASS: static + 483 tests, 475 pass, 0 fail, 8 skips   |
+| Linux search + list, WSL Ubuntu | PASS: 40 tests, 38 pass, 0 fail, 2 Windows-only skips |
+
+Среда прежняя: Windows Node v24.15.0 / npm 11.12.1; WSL Ubuntu, временный Linux
+Node v24.15.0 с проверенным checksum, synthetic case-sensitive `/tmp`.
+Полный check включает всех общих потребителей glob/walker, в частности list и
+legacy replace_text; public wire/schema assertions и R1–R3 регрессии прошли.
+Нормализация только четырёх файлов revision; `git diff --check` PASS.
+
+Scope — glob planning, search regressions, protocol и Work record 011. Public
+schema/defaults/limits, dependencies, versions, store/TTL и wire budget прежние.
+Board/012/portable/установленный сервис не менялись, push/merge не выполнялись.
+Целевая live matrix остаётся NOT RUN; Linux CI не заявлен.
+
+## Короткая целевая live-матрица
+
+Это следующий опыт планирования после review; локальный SDK не доказывает
+поведение ChatGPT. Live в этой задаче не выполнялся.
+
+| Сценарий в целевом клиенте                                              | Ожидаемое                                                                    | Статус  |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------- |
+| root-only find_files и search_text, depth 0, limit 3/pageSize 1         | максимум 3 результата, warning limit, три страницы собранного набора         | NOT RUN |
+| literal Next page при multiple roots                                    | копирование JSON без восстановления аргументов успешно, scope сохраняется    | NOT RUN |
+| nondefault regex/case/context/hidden/ignored/depth, изменённый pageSize | те же matches, context не меняет page-position и limit                       | NOT RUN |
+| explicit hidden file, filename с glob symbols                           | ровно названный файл; pattern/filter не исключают его                        | NOT RUN |
+| limit достигнут / последняя страница / resource                         | warning остаётся, counters и limit совпадают, continuation обхода не обещана | NOT RUN |
+| cursor mismatch/expiry и устаревший maxResults                          | понятная ошибка; новый scan без cursor; hint limit/pageSize                  | NOT RUN |
+| sparse pattern / deadline / cancellation                                | explicit error либо видимый timeout partial, включая ноль                    | NOT RUN |
+
+## Существенные границы
+
+Limit считает найденные файлы/строки, не OS calls или scanned files. Редкий
+pattern может долго искать в выбранном scope. Неотменяемый OS I/O завершается
+естественно; cooperative checks не обещают жёсткий wall-clock deadline.
+Сортируется собранный subset; дерево и результаты не являются atomic snapshot.
+Best-effort ignore reads сохраняют log warning при не-abort ошибке; traversal
+errors не превращаются в молчаливый полный success. Hidden pattern expansion
+и glob syntax сохранены; полноценный dot-aware glob redesign не выполнялся.
+TTL/byte budgets, jobs, snapshot/bundle, установленная поставка и live относятся
+к отдельным задачам/планированию. Production/CI Linux результаты здесь не заявлены.

@@ -13,6 +13,7 @@ import {
   NextCursorSchema,
   NonNegInt,
   OptionalPath,
+  PositiveInt,
   SafeGlobPattern,
 } from '../core/schema.js';
 import { searchFiles } from '../core/search.js';
@@ -32,13 +33,16 @@ const SearchFilesInputSchema = z.strictObject({
     'Base directory to search under; omit only when allowed root entries resolve to exactly one filesystem location. With roots at multiple locations, provide an explicit path.',
   ),
   pattern: SafeGlobPattern.describe('Glob pattern to match file paths (e.g. **/*.ts, src/**/*.js)'),
-  maxResults: z
-    .uint32()
-    .min(1)
-    .max(MAX_SEARCH_RESULTS)
-    .optional()
+  limit: PositiveInt.max(MAX_SEARCH_RESULTS)
+    .default(MAX_SEARCH_RESULTS)
+    .describe(
+      'Collect at most this many matching files across all pages; stops traversal (default/cap 10000).',
+    ),
+  pageSize: PositiveInt.max(MAX_SEARCH_RESULTS)
     .default(DEFAULT_SEARCH_RESULTS)
-    .describe('Maximum number of matching files to return per page'),
+    .describe(
+      'Matching files per page; can change between pages (default 100). Does not limit traversal.',
+    ),
   includeIgnored: includeIgnoredField(),
   includeHidden: includeHiddenField(),
   sortBy: z
@@ -59,13 +63,17 @@ const SearchFilesOutputSchema = z.strictObject({
       }),
     )
     .describe('Matched files ordered by sortBy'),
-  totalMatches: NonNegInt.optional().describe('Total number of matching files found'),
+  totalMatches: NonNegInt.optional().describe(
+    'Collected matching files; a lower bound when truncated',
+  ),
+  limit: PositiveInt.describe('Effective collect cap'),
+  truncated: z.boolean().describe('Scan stopped before establishing completion'),
   filesScanned: NonNegInt.optional().describe('Total number of files examined during the search'),
   skippedInaccessible: NonNegInt.optional().describe(
     'Files skipped due to permission or access errors',
   ),
   stoppedReason: SearchStoppedReasonSchema.describe(
-    'Why the search ended early: maxResults = result cap reached, timeout = time limit hit or the request was cancelled. Absent when the scan ran to completion.',
+    'Why collection stopped: limit = collect cap reached (completeness unconfirmed), timeout = time limit hit or cancelled. Absent after completion.',
   ),
   resourceUri: z
     .string()
@@ -92,6 +100,8 @@ function buildRelativeResults(
 type SearchFileResult = NonNullable<z.infer<typeof SearchFilesOutputSchema>['results']>[number];
 
 interface SearchFilesPageMetadata {
+  readonly limit: number;
+  readonly truncated: boolean;
   readonly root: string;
   readonly totalMatches: number;
   readonly filesScanned: number;
@@ -107,6 +117,8 @@ function searchFilesOutput(
 ): z.infer<typeof SearchFilesOutputSchema> {
   return {
     root: metadata.root,
+    limit: metadata.limit,
+    truncated: metadata.truncated,
     results: [...results],
     totalMatches: metadata.totalMatches,
     filesScanned: metadata.filesScanned,
@@ -124,6 +136,7 @@ async function handleSearchFiles(
   structured: z.infer<typeof SearchFilesOutputSchema>;
   offset: number;
   total: number;
+  nextArgs: z.infer<typeof SearchFilesInputSchema>;
   link?: ReturnType<typeof putJsonResource>['link'];
 }> {
   const requestedBasePath = await ctx.fs.pathGuard.resolvePathOrRoot(args.path, ctx.signal);
@@ -135,6 +148,7 @@ async function handleSearchFiles(
     includeHidden: args.includeHidden,
     sortBy: args.sortBy,
     maxDepth: args.maxDepth,
+    limit: args.limit,
   });
   const { resourceStore } = ctx;
 
@@ -142,15 +156,15 @@ async function handleSearchFiles(
     store: ctx.pageStore,
     queryKey,
     cursor: args.cursor,
-    pageSize: args.maxResults,
+    pageSize: args.pageSize,
     produce: async () => {
       const basePath = await ctx.fs.pathGuard.validateExistingDirectory(requestedBasePath);
       const searchOptions: Parameters<typeof searchFiles>[2] = {
-        maxResults: MAX_SEARCH_RESULTS,
+        maxResults: args.limit,
         includeHidden: args.includeHidden,
         sortBy: args.sortBy,
         skipIgnored: !args.includeIgnored,
-        ...(args.maxDepth !== undefined ? { maxDepth: args.maxDepth } : {}),
+        maxDepth: args.maxDepth,
         signal: ctx.signal,
       };
       const result = await searchFiles(basePath, args.pattern, searchOptions, ctx.fs.pathGuard);
@@ -158,6 +172,8 @@ async function handleSearchFiles(
         items: buildRelativeResults(result.basePath, result.results),
         metadata: {
           root: result.basePath,
+          limit: args.limit,
+          truncated: result.summary.truncated,
           totalMatches: result.summary.matched,
           filesScanned: result.summary.filesScanned,
           ...(result.summary.skippedInaccessible
@@ -171,7 +187,12 @@ async function handleSearchFiles(
       };
     },
     externalize: resourceStore
-      ? (results) => putJsonResource(resourceStore, `${args.pattern} files`, results)
+      ? (results, metadata) =>
+          putJsonResource(
+            resourceStore,
+            `${args.pattern} files`,
+            searchFilesOutput(results, metadata, undefined, undefined),
+          )
       : undefined,
   });
 
@@ -184,6 +205,7 @@ async function handleSearchFiles(
     ),
     offset: paged.offset,
     total: paged.metadata.totalMatches,
+    nextArgs: { ...args, path: requestedBasePath },
     ...(paged.resource ? { link: paged.resource.link } : {}),
   };
 }
@@ -193,7 +215,8 @@ export const FIND_FILES = defineTool({
   title: 'Find Files',
   description:
     'Find specific file names or glob matches. ' +
-    `Collects at most ${MAX_SEARCH_RESULTS} matches per scan; maxResults is page size. ` +
+    `limit caps collected files across all pages (default/cap ${MAX_SEARCH_RESULTS}); pageSize sets response size (default 100). ` +
+    'maxDepth prunes traversal: 0 = base only, default/cap 100. Sorts the collected subset, not globally first N. maxResults is removed; use limit/pageSize. ' +
     'Cursors page only collected results, expire after 60 seconds, and never resume beyond cap/timeout. ' +
     'For a recursive inventory/index or file total use snapshot; for content use search_text.',
   input: SearchFilesInputSchema,
@@ -215,13 +238,13 @@ export const FIND_FILES = defineTool({
   }),
   accessPaths: (args) => (args.path ? [args.path] : []),
   run: async (args, ctx) => {
-    const { structured, offset, total, link } = await handleSearchFiles(args, ctx);
+    const { structured, offset, total, nextArgs, link } = await handleSearchFiles(args, ctx);
     const body =
       structured.results.length > 0
         ? structured.results.map((r) => r.path).join('\n')
         : `No files matching '${args.pattern}'`;
     const text =
-      scanWarning(structured.stoppedReason) +
+      scanWarning(structured.stoppedReason, structured.limit) +
       body +
       pageTrailer({
         offset,
@@ -230,6 +253,7 @@ export const FIND_FILES = defineTool({
         noun: 'files',
         tool: 'find_files',
         nextCursor: structured.nextCursor,
+        nextArgs,
       });
     if (link) {
       return { structured, text, resources: [link] };

@@ -192,13 +192,15 @@ export const includeHiddenField = (): z.ZodDefault<z.ZodBoolean> =>
   defaultFalseBoolean('Include hidden items (starting with .)');
 export const includeIgnoredField = (): z.ZodDefault<z.ZodBoolean> =>
   defaultFalseBoolean('Include ignored items (node_modules, .git, etc).');
-export const maxDepthField = (): z.ZodOptional<z.ZodNumber> =>
+export const maxDepthField = (): z.ZodDefault<z.ZodNumber> =>
   z
     .uint32()
     .min(0)
     .max(MAX_SEARCH_DEPTH)
-    .optional()
-    .describe('Max directory depth to scan; 0 = base directory only, omit for unlimited');
+    .default(MAX_SEARCH_DEPTH)
+    .describe(
+      'Max directory depth to scan; 0 = base directory only, 1 = one subdirectory level; default/cap 100',
+    );
 
 const DEFAULT_MAX_BATCH = 1000;
 

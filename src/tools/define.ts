@@ -424,7 +424,7 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
  * the same schema — so the argument is redundant here and deliberately ignored.
  * Reusing one instance across schemas would silently validate against `schema`.
  */
-function zodJsonSchemaValidator(schema: z.ZodType): jsonSchemaValidator {
+function zodJsonSchemaValidator(schema: z.ZodType, toolName: string): jsonSchemaValidator {
   return {
     getValidator<U>(): JsonSchemaValidator<U> {
       return (input: unknown) => {
@@ -439,7 +439,14 @@ function zodJsonSchemaValidator(schema: z.ZodType): jsonSchemaValidator {
         return {
           valid: false as const,
           data: undefined,
-          errorMessage: z.prettifyError(result.error),
+          errorMessage:
+            z.prettifyError(result.error) +
+            ((toolName === 'find_files' || toolName === 'search_text') &&
+            result.error.issues.some(
+              (issue) => issue.code === 'unrecognized_keys' && issue.keys.includes('maxResults'),
+            )
+              ? '\nmaxResults is no longer accepted; use limit for the total collect cap and pageSize for results per page.'
+              : ''),
         };
       };
     },
@@ -504,7 +511,10 @@ export function defineTool<I extends z.ZodType, O extends z.ZodType>(
   const toolDefShape = {
     title: def.title,
     description: def.description,
-    inputSchema: fromJsonSchema<z.infer<I>>(inputJsonSchema, zodJsonSchemaValidator(def.input)),
+    inputSchema: fromJsonSchema<z.infer<I>>(
+      inputJsonSchema,
+      zodJsonSchemaValidator(def.input, def.name),
+    ),
     // No `outputSchema`, ever. Publishing one obliges the result to carry
     // `structuredContent` (clients enforce it), and every tool that authors its
     // own text ships its metadata under `_meta` instead — see

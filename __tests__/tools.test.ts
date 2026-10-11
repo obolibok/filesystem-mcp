@@ -1847,7 +1847,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     await writeFile(join(dir, 'charlie.txt'), 'x');
     const first = await harness.client.callTool({
       name: 'find_files',
-      arguments: { path: dir, pattern: '*.txt', maxResults: 1 },
+      arguments: { path: dir, pattern: '*.txt', pageSize: 1 },
     });
     const firstStructured = first._meta as {
       results?: { path: string }[];
@@ -1863,7 +1863,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     await rm(dir, { recursive: true, force: true });
     const second = await harness.client.callTool({
       name: 'find_files',
-      arguments: { path: dir, pattern: '*.txt', maxResults: 10, cursor },
+      arguments: { path: dir, pattern: '*.txt', pageSize: 10, cursor },
     });
     assert.notStrictEqual(second.isError, true);
     const secondStructured = second._meta as {
@@ -1884,7 +1884,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
 
     const replay = await harness.client.callTool({
       name: 'find_files',
-      arguments: { path: dir, pattern: '*.md', maxResults: 10, cursor },
+      arguments: { path: dir, pattern: '*.md', pageSize: 10, cursor },
     });
     assert.strictEqual(replay.isError, true);
     assert.match(firstTextBlock(replay).text ?? '', /INVALID_INPUT/);
@@ -2015,7 +2015,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
 
     const first = await harness.client.callTool({
       name: 'search_text',
-      arguments: { path: dir, searchPattern: 'VISIBLE_MARKER', maxResults: 1 },
+      arguments: { path: dir, searchPattern: 'VISIBLE_MARKER', pageSize: 1 },
     });
     const firstMetadata = first._meta as {
       totalMatches?: number;
@@ -2039,7 +2039,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       arguments: {
         path: dir,
         searchPattern: 'VISIBLE_MARKER',
-        maxResults: 1,
+        pageSize: 1,
         cursor: firstMetadata.nextCursor,
       },
     });
@@ -2067,7 +2067,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const file = await writeTestFile(tmpDir, 'search_pages.txt', 'NEEDLE bravo\nNEEDLE charlie\n');
     const first = await harness.client.callTool({
       name: 'search_text',
-      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 1 },
+      arguments: { path: file, searchPattern: 'NEEDLE', pageSize: 1 },
     });
     const firstStructured = first._meta as {
       matches?: { content: string }[];
@@ -2079,7 +2079,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     await rm(file, { force: true });
     const second = await harness.client.callTool({
       name: 'search_text',
-      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 10, cursor },
+      arguments: { path: file, searchPattern: 'NEEDLE', pageSize: 10, cursor },
     });
     assert.notStrictEqual(second.isError, true);
     const secondStructured = second._meta as { matches?: { content: string }[] };
@@ -2092,7 +2092,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
 
     const replay = await harness.client.callTool({
       name: 'search_text',
-      arguments: { path: file, searchPattern: 'different query', maxResults: 10, cursor },
+      arguments: { path: file, searchPattern: 'different query', pageSize: 10, cursor },
     });
     assert.strictEqual(replay.isError, true);
     assert.match(firstTextBlock(replay).text ?? '', /INVALID_INPUT/);
@@ -2175,14 +2175,14 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const file = await writeTestFile(tmpDir, 'search_ctx_cursor.txt', 'NEEDLE a\nNEEDLE b\n');
     const first = await harness.client.callTool({
       name: 'search_text',
-      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 1 },
+      arguments: { path: file, searchPattern: 'NEEDLE', pageSize: 1 },
     });
     const cursor = (first._meta as { nextCursor?: string }).nextCursor;
     assert.ok(cursor);
 
     const replay = await harness.client.callTool({
       name: 'search_text',
-      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 1, context: 1, cursor },
+      arguments: { path: file, searchPattern: 'NEEDLE', pageSize: 1, context: 1, cursor },
     });
     assert.strictEqual(replay.isError, true);
     assert.match(firstTextBlock(replay).text ?? '', /INVALID_INPUT/);
@@ -2193,7 +2193,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const file = await writeTestFile(tmpDir, 'search_first_page.txt', `${lines.join('\n')}\n`);
     const first = await harness.client.callTool({
       name: 'search_text',
-      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 60 },
+      arguments: { path: file, searchPattern: 'NEEDLE', pageSize: 60 },
     });
     const firstStructured = first._meta as {
       matches?: unknown[];
@@ -2201,12 +2201,12 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       resourceUri?: string;
       truncated?: boolean;
     };
-    assert.strictEqual(firstStructured.matches?.length, 60, 'maxResults is the page size');
+    assert.strictEqual(firstStructured.matches?.length, 60, 'pageSize is the page size');
     assert.ok(firstStructured.nextCursor, 'more matches remain');
     assert.ok(firstStructured.resourceUri, 'an incomplete first page carries the full-list URI');
     assert.strictEqual(
       firstStructured.truncated,
-      undefined,
+      false,
       'paging is not truncation: the engine hit no cap',
     );
 
@@ -2215,7 +2215,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       arguments: {
         path: file,
         searchPattern: 'NEEDLE',
-        maxResults: 60,
+        pageSize: 60,
         cursor: firstStructured.nextCursor,
       },
     });
@@ -2236,18 +2236,18 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const file = await writeTestFile(tmpDir, 'trailer/hits.txt', `${lines.join('\n')}\n`);
     const first = await harness.client.callTool({
       name: 'search_text',
-      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 4 },
+      arguments: { path: file, searchPattern: 'NEEDLE', pageSize: 4 },
     });
     assert.match(
       firstTextBlock(first).text ?? '',
-      /^\/\/ showing 1-4 of 9 matches\. Next page: search_text \{"cursor":"/m,
+      /^\/\/ showing 1-4 of 9 matches\. Next page: search_text \{.*"cursor":"/m,
     );
 
     const cursor = (first._meta as { nextCursor?: string }).nextCursor;
     assert.ok(cursor);
     const second = await harness.client.callTool({
       name: 'search_text',
-      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 4, cursor },
+      arguments: { path: file, searchPattern: 'NEEDLE', pageSize: 4, cursor },
     });
     // The whole point: page 2 must not repeat page 1's counter.
     assert.match(firstTextBlock(second).text ?? '', /^\/\/ showing 5-8 of 9 matches\./m);
@@ -2258,7 +2258,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     assert.ok(lastCursor);
     const last = await harness.client.callTool({
       name: 'search_text',
-      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 4, cursor: lastCursor },
+      arguments: { path: file, searchPattern: 'NEEDLE', pageSize: 4, cursor: lastCursor },
     });
     const lastText = firstTextBlock(last).text ?? '';
     assert.match(lastText, /^\/\/ showing 9-9 of 9 matches\.$/m);
@@ -2266,7 +2266,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
 
     const complete = await harness.client.callTool({
       name: 'search_text',
-      arguments: { path: file, searchPattern: 'NEEDLE', maxResults: 50 },
+      arguments: { path: file, searchPattern: 'NEEDLE', pageSize: 50 },
     });
     assert.doesNotMatch(
       firstTextBlock(complete).text ?? '',
@@ -2281,11 +2281,11 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     await writeTestFile(tmpDir, 'trailer_files/b.txt', 'b');
     const files = await harness.client.callTool({
       name: 'find_files',
-      arguments: { path: join(tmpDir, 'trailer_files'), pattern: '**/*', maxResults: 1 },
+      arguments: { path: join(tmpDir, 'trailer_files'), pattern: '**/*', pageSize: 1 },
     });
     assert.match(
       firstTextBlock(files).text ?? '',
-      /^\/\/ showing 1-1 of 2 files\. Next page: find_files \{"cursor":"/m,
+      /^\/\/ showing 1-1 of 2 files\. Next page: find_files \{.*"cursor":"/m,
     );
   });
 
@@ -2296,13 +2296,13 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const file = await writeTestFile(tmpDir, 'capped/hits.txt', `${lines.join('\n')}\n`);
     const result = await harness.client.callTool({
       name: 'search_text',
-      arguments: { path: file, searchPattern: 'CAPPED', maxResults: 5 },
+      arguments: { path: file, searchPattern: 'CAPPED', pageSize: 5 },
     });
     const text = firstTextBlock(result).text ?? '';
     assert.ok(text.includes(`// showing 1-5 of ${String(MAX_SEARCH_RESULTS)} matches.`), text);
     assert.ok(
       text.includes(
-        `// scan stopped early: hit the server's ${String(MAX_SEARCH_RESULTS)}-result scan cap, not your maxResults.`,
+        `// scan stopped early: reached limit=${String(MAX_SEARCH_RESULTS)}; completeness is unconfirmed.`,
       ),
       text,
     );
@@ -2329,7 +2329,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       arguments: {
         path: file,
         searchPattern: 'CAPPED',
-        maxResults: MAX_SEARCH_RESULTS,
+        pageSize: MAX_SEARCH_RESULTS,
         cursor: metadata.nextCursor,
       },
     });
@@ -2535,8 +2535,10 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
   // Task 010 publishes separate limit/pageSize after compacting repeated
   // descriptions: 25888/15808 chars, still within both existing ceilings.
   it('TOOL-SURFACE-002: tools/list stays within the session-start budget', async () => {
-    const BUDGET_CHARS = 26_900;
-    const BUDGET_CHARS_READ_ONLY = 15_900;
+    // Task 011 separates collect/page limits and documents actual traversal
+    // depth plus executable continuation. This adds ~1 KiB to both profiles.
+    const BUDGET_CHARS = 27_200;
+    const BUDGET_CHARS_READ_ONLY = 17_100;
 
     const full = await createTestClientPair([tmpDir]);
     try {
