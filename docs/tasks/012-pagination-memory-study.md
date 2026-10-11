@@ -115,7 +115,9 @@ push/PR/merge и настройки установленного сервиса 
 
 ## Work record
 
-11.10.2026: **ready for review**. Исследование завершено, runtime не изменён.
+Первичный handoff 11.10.2026: `b2b83fa746cf5295834e6da09ac8df483089957f`.
+После changes requested R1/R2 текущий повторный handoff записан ниже.
+Runtime не изменён.
 
 - Base и branch: созданный приложением managed worktree был чистым, detached HEAD
   точно `7d58beac5a95cd2014d2e37f966c4074d6e5d5ec`; карточка присутствовала.
@@ -180,3 +182,50 @@ worker,run}.mjs` и README. Детерминированные fake-clock assert
   представления strings повторить полный study. Локальный commit будет передан
   с фактическим SHA в handoff. Push/PR/merge и установленный сервис не затронуты;
   центральный статус принимает только planning/integration owner.
+
+### Повторный handoff после R1/R2
+
+11.10.2026: **ready for repeat review**. Review прочитан через
+`git show 14fa2e75:docs/testing/012-review-2026-10-11.md`, без переноса planning
+commit. Fix base `b2b83fa746cf5295834e6da09ac8df483089957f`, исходная база задачи
+`7d58beac5a95cd2014d2e37f966c4074d6e5d5ec`, ветка та же.
+
+- R1 исправлен: published default search_text=500, 100 относится к find_files.
+  Старые 88 MiB page retention явно отнесены к p1/p100, при которых 128 matches
+  требуют pagination. Retention independence ограничена paged workloads.
+  Настоящие handlers вызываются с omitted maxResults/pageSize; modern default
+  cases также omit limit. Контракт извлекается из tools/list. Default-pages
+  теперь 6 workers: list short/3 long с default1000 и search128/search600 с
+  default500, все по 33 fresh requests. Search128: 0 snapshots/resources;
+  search600 width128/C10: 32/14, Δ heap/external 44,06/49,73 MiB. Разные fixtures
+  не объявлены одинаковой нагрузкой; fit-case не обязан иметь cursor/resource.
+- R2 исправлен: shared validateFresh для handler и HTTP; запись effectiveContract,
+  expectedScan и всех freshQueries с collected/shown, truncated/reason, filesScanned,
+  list counters, четырьмя skips и pagination handles; raw optional absence=null.
+  Complete требует точного fixture count, отсутствия stop/skips. Intentional partial
+  требует явного expectedPartial и точной причины. Process memory stop отдельно.
+- Negative controls: настоящий 10001→10000/C0/width32 cap отклонён с worker exit=1;
+  повтор принят только как intentional-partial/maxResults. Unit synthetic timeout
+  и skippedBinary не могут пройти как complete. 5 dedicated tests PASS; synthetic
+  timeout не объявлен настоящим OS/deadline опытом. Validation mode: 4 PASS workers
+  (partial labelled, p1/p100 long128/C10, shared HTTP) + один ожидаемый rejection.
+  У трёх full search repeats по 33 records: count128, no stop/skips. Smoke 3 PASS,
+  real TTL 1 PASS повторены с validator. Неизменённые исторические 34 cases не
+  перепрогонялись; старые outputs не имеют новых completeness flags, это явно
+  отмечено в report, поля задним числом не добавлялись.
+- Команды: `node --test scripts/pagination-check/validation.test.mjs`,
+  `node scripts/pagination-check/run.mjs default-pages`, затем `validation`,
+  `smoke`, `ttl`; точные raw output filenames/команды в report. Новый hash
+  common/validate/worker/run:
+  `488e0dd6d97ae96cebc5e93d17a30870c78c9aab0bd755012b0df593a8c00b92`.
+- Full `npm run check` финального follow-up вне sandbox PASS: **463 tests / 455
+  pass / 0 fail / 8 skips**, 69 suites, 39,32 s test stage; все static stages PASS.
+  Skips прежние: 3 POSIX-only / 5 Windows symlink permission. Новый real TTL:
+  read=55041 ms, idle=61008 ms, subsequent prune/recovery PASS. Отдельные targeted
+  ESLint/Prettier и git diff --check PASS.
+- Post-011 mode включает оба omitted default search workloads и прежние explicit
+  p1/p100/HTTP cases, валидирует каждый full result. 011 runtime здесь не переносился.
+- Предложения 64 MiB/15 s остались design/validation кандидатами. Src, existing
+  tests, dependencies/versions, reference и central board не менялись. Локальный
+  follow-up commit/head передаётся в финальном handoff; push/merge/installed service
+  не затронуты. Baseline acceptance пересмотрен с R1/R2 evidence, принятие — у planning.

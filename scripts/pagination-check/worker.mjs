@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 
 import { fixtures, gc, LIMITS, memory, metadata, MIB, query } from './common.mjs';
+import { expectedScan, validateFresh } from './validate.mjs';
 
 const config = JSON.parse(process.argv[2]);
 const cold = memory();
@@ -20,6 +21,7 @@ const report = {
   cold,
   checkpoints: [],
   assertions: [],
+  freshQueries: [],
   sampledPeak: memory(),
 };
 const peak = () => {
@@ -114,11 +116,12 @@ async function pair(pages, resources, jobManager, source) {
   };
 }
 
-async function fresh(client, name, args) {
+async function fresh(client, name, args, contract, expected) {
   const result = await client.callTool({ name, arguments: args });
   assert(!result.isError, JSON.stringify(result.content));
   const meta = metadata(result);
-  assert(meta?.nextCursor, 'fixture must span multiple pages');
+  const outcome = validateFresh(result, contract, expected);
+  report.freshQueries.push({ queryNumber: report.freshQueries.length + 1, ...outcome });
   return {
     cursor: meta.nextCursor,
     uri: meta.resourceUri,
@@ -140,15 +143,24 @@ async function handlerStudy() {
     for (let i = 0; i < 3; i++) peers.push(await pair(pages, resources, jobs, source));
     const listed = await peers[0].client.listTools();
     const schema = listed.tools.find((t) => t.name === config.workload.tool).inputSchema;
-    const { args, variant } = query(schema, config.workload, source, config.pageSize);
+    const { args, variant, contract } = query(schema, config.workload, source, config.pageSize);
+    const expected = expectedScan(config.workload, description, contract);
     report.schema = variant;
+    report.effectiveContract = contract;
+    report.expectedScan = expected;
     report.fixture = description;
     await checkpoint('ready', pages, resources);
     let first;
     let second;
     const started = performance.now();
     for (let i = 1; i <= (config.sets ?? 33); i++) {
-      const handle = await fresh(peers[(i - 1) % peers.length].client, config.workload.tool, args);
+      const handle = await fresh(
+        peers[(i - 1) % peers.length].client,
+        config.workload.tool,
+        args,
+        contract,
+        expected,
+      );
       if (i === 1) first = handle;
       if (i === 2) second = handle;
       peak();
@@ -156,7 +168,7 @@ async function handlerStudy() {
         const safe = await checkpoint(`sets-${i}`, pages, resources, {
           queries: i,
           collectedPerQuery: handle.count,
-          pageSize: config.pageSize,
+          pageSize: contract.effectivePageSize,
           firstResponseBytes: first.wireBytes,
           queryMs: Math.round(performance.now() - started),
         });
@@ -165,7 +177,7 @@ async function handlerStudy() {
           break;
         }
       }
-      if (i === 32 && config.isolation !== 'resource') {
+      if (i === 32 && first.cursor && config.isolation !== 'resource') {
         const before = pages.byId.size;
         const replay = await peers[1].client.callTool({
           name: config.workload.tool,
@@ -181,6 +193,7 @@ async function handlerStudy() {
     await checkpoint('after-byte-estimate', pages, resources);
     if (
       (config.sets ?? 33) === 33 &&
+      first.cursor &&
       !report.stoppedAtSafeBudget &&
       config.isolation !== 'resource'
     ) {
@@ -218,7 +231,7 @@ async function handlerStudy() {
       })();
       await checkpoint('client-copy-released', pages, resources);
     }
-    if (config.isolation !== 'resource' && !report.stoppedAtSafeBudget) {
+    if (first.cursor && config.isolation !== 'resource' && !report.stoppedAtSafeBudget) {
       // After memory samples, replace the synthetic source with an empty
       // directory at the SAME path. A rescan cannot produce the cached rows.
       const parked = join(config.scratch, 'parked-source');
@@ -239,6 +252,13 @@ async function handlerStudy() {
         await rmdir(source);
         await rename(parked, source);
       }
+    }
+    if (!first.cursor && !expected.truncated) {
+      assert.equal(pages.byId.size, 0);
+      assert.equal(resources.byUri.size, 0);
+      note(
+        'real handler complete default-page result: no cursor/resource and no cache entries across fresh queries',
+      );
     }
     pages.clear();
     await checkpoint('page-clear', pages, resources);
@@ -438,7 +458,7 @@ async function httpStudy() {
     { httpHost: '127.0.0.1' },
   );
   await checkpoint('ready', pages, resources);
-  process.send({ type: 'ready', port: server.address().port, source });
+  process.send({ type: 'ready', port: server.address().port, source, fixture: description });
   await new Promise((resolve, reject) => {
     let queue = Promise.resolve();
     process.on('message', (message) => {
@@ -450,6 +470,9 @@ async function httpStudy() {
           } else if (message.type === 'finish') {
             report.assertions.push(...message.assertions);
             report.schema = message.schema;
+            report.effectiveContract = message.effectiveContract;
+            report.expectedScan = message.expectedScan;
+            report.freshQueries = message.freshQueries;
             report.pageCompactJsonBytes = payloadBytes(pages);
             await new Promise((done, fail) =>
               server.close((error) => (error ? fail(error) : done())),
@@ -485,7 +508,13 @@ try {
   process.disconnect();
 } catch (error) {
   clearInterval(timer);
-  process.send?.({ type: 'failure', error: error.stack });
+  process.send?.({
+    type: 'failure',
+    error: error.stack,
+    scanOutcome: error.scanOutcome,
+    effectiveContract: error.effectiveContract,
+    expectedScan: error.expectedScan,
+  });
   process.exitCode = 1;
   process.disconnect?.();
 }

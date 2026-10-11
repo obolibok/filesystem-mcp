@@ -10,9 +10,11 @@ Runtime/defaults, установленный сервис и центральн�
 
 **Не увеличивать 32 snapshots / TTL 60 s. Предложить отдельный follow-up на
 byte budget и периодическую очистку PageSnapshotStore.** Небольшая матрица работает
-в текущих defaults, но это не доказывает достаточность для всего пилота. Уже 32
-реальных запроса к synthetic файлу 2,63 MiB удерживают около 88 MiB страниц
-отдельно от примерно 24 MiB serialized resources. У direct store нет byte bound:
+с explicit pageSize 1/100, но это не доказывает достаточность для всего пилота.
+При этих уменьшенных страницах 32 реальных запроса к synthetic файлу 2,63 MiB/128
+matches удерживают около 88 MiB страниц отдельно от примерно 24 MiB resources.
+**Обычный search_text без page аргумента имеет default=500: те же 128 matches
+помещаются на одной странице, snapshots/resources не создаются.** У direct store нет byte bound:
 3 допустимых по числу строк набора context=10 дают 174 MiB дополнительного heap.
 Full OOM не проверялся.
 
@@ -30,7 +32,8 @@ Full OOM не проверялся.
 
 64 MiB должен ограничивать **оценку удерживаемого представления**, включая arrays,
 objects, строки и retained backing source, а не только JSON matches. В baseline
-context=0 JSON страниц всего 4,28 MiB, но они удерживают около 85 MiB source backing.
+context=0 при explicit p1/p100 JSON страниц всего 4,28 MiB, но они удерживают около
+85 MiB source backing; это не стоимость default вызова к 128 matches.
 Конкретный meter требует design/validation: либо producer передаёт консервативную
 стоимость backing source плюс overhead, либо stored strings отделяются от исходного
 буфера и учитываются вместе с объектами. UTF-8 JSON bytes сами по себе недостаточны.
@@ -66,6 +69,7 @@ npm run build
 node scripts/pagination-check/run.mjs smoke
 node scripts/pagination-check/run.mjs study --output .tmp/pagination-012-study-final.json
 node scripts/pagination-check/run.mjs default-pages --output .tmp/pagination-012-default-pages-final.json
+node scripts/pagination-check/run.mjs validation --output .tmp/pagination-012-validation.json
 node scripts/pagination-check/run.mjs ttl --output .tmp/pagination-012-ttl-final.json
 npm run check
 ```
@@ -124,8 +128,10 @@ collect cap=10000. Harness выбирает схему из tools/list и фик
 с общими stores; на 32-м читает первый cursor, затем проверяет eviction второго
 и сохранность первого. Для list-long и search-long/context=10 — три отдельных
 child repeats каждого pageSize; остальные cases по одному.
-Дополнительный `default-pages`: один short и три long repeats с pageSize=1000.
-Search pageSize=100 уже совпадает с его baseline default.
+Первоначальный `default-pages` проверял только explicit list pageSize=1000.
+Search_text baseline default — **500**, а 100 — default find_files, которого
+в этой memory matrix нет. После R1 настоящий default-pages пропускает page аргумент
+и проверяет также search_text по обе стороны 500; подробности исправлений ниже.
 
 | Fixture              | Параметры собранного набора                                           |
 | -------------------- | --------------------------------------------------------------------- |
@@ -136,14 +142,19 @@ Search pageSize=100 уже совпадает с его baseline default.
 | Context              | 0 или 10 строк до/после; matches разнесены, контексты не пересекаются |
 | Regex representative | 128 short matches, context=10, RE2 `study-[a-z]+`, 8 queries          |
 
-Литералы и RE2 дают ожидаемые totals без truncation; это не повтор полного
+Первоначальные raw counts соответствуют fixtures, но исходный harness не записывал
+и не отвергал truncated/reason/skips: blanket утверждение «без truncation» ими не
+доказано. Исправленный validator и затронутые полные повторы описаны ниже.
+Это не повтор полного
 функционального поиска. Real handler replay дополнительно возвращает прежние rows
 после замены synthetic source пустым directory по тому же path. Fresh query заново
 выполняет produce; cursor не добавляет snapshot/resource. Complete single-page
 результат вообще не создаёт snapshot — отдельная deterministic проверка paginate.
 
 Округление MiB, delta от пустого `ready`, checkpoint после 33 fresh queries
-(32 page sets); оба stores включены:
+(32 page sets); оба stores включены. Исторические результаты относятся к **явно
+заданным страницам**, всем sets нужна пагинация. Они не описывают default search
+к 128 matches и сохранены с исходными hashes/ограничением полноты:
 
 | Case                             | Page JSON | Resources count / MiB |  Δ heapUsed | Δ external | retained RSS |
 | -------------------------------- | --------: | --------------------: | ----------: | ---------: | -----------: |
@@ -160,9 +171,12 @@ Search pageSize=100 уже совпадает с его baseline default.
 long три repeats Δ heapUsed=39,90–40,13 MiB/RSS=223,01–224,15. Page JSON/resource
 bytes и count остаются теми же, Δ external≈0. Первая response JSON оценена в
 99160 bytes short / 372879 bytes long (SDK tool result без JSON-RPC envelope).
-Default page также не уменьшает retention собранного набора.
+В этих list fixtures даже default pageSize=1000 меньше 1200/1202 entries:
+пагинация остаётся нужна, поэтому retention сохраняется.
 
-Маленькая страница не уменьшает собранный набор/retained external. Изменяются
+Пока collected set больше каждой сравниваемой страницы, её уменьшение не снижает
+собранный набор/retained external. Если полный набор помещается на странице,
+paginate не создаёт snapshot и resource — retention меняется принципиально. Изменяются
 response copies/текст/сериализация страницы, поэтому p100 немного дороже по heap.
 Разброс RSS шире разброса live heap; это ожидаемо для allocator/GC, но не следует
 объявлять его нормой всех Node/Windows версий.
@@ -176,7 +190,7 @@ External delta близка к 32 × source file size, а arrayBuffers посл�
 
 ## Раздельные stores, peak и освобождение
 
-Search long C10 / pageSize 1 / 33 queries, три repeats:
+Search long C10 / **explicit pageSize 1** / 33 queries, три repeats:
 
 | Режим                              | Страницы / resources |    Δ heapUsed | Δ external | Logical resource bytes |
 | ---------------------------------- | -------------------: | ------------: | ---------: | ---------------------: |
@@ -261,7 +275,8 @@ Page count 32/33/LRU проверен и direct C0, и настоящими hand
 
 ## Настоящий local HTTP и независимые lifecycle
 
-Использован неизменённый `startHttpServer` на loopback/port 0, три SDK clients в
+Использован неизменённый `startHttpServer` на loopback/port 0, **explicit pageSize=100**,
+три SDK clients в
 другом процессе. Endpoint создаёт stores сам; diagnostic prototype wrappers лишь
 наблюдают фактические instances. Это end-to-end HTTP, без туннеля/ChatGPT.
 
@@ -285,7 +300,7 @@ ResourceStore напрямую различает `Resource expired` и `Resourc
 
 ## Реальный fixed TTL / idle
 
-Один завершённый настоящий HTTP цикл, два long C10 queries, чтение первого cursor
+Один завершённый настоящий HTTP цикл, два long C10 queries с **explicit pageSize=1**, чтение первого cursor
 и resource около 55 s; затем никаких MCP операций до checkpoint после 61 s.
 Diagnostic GC memory samples не вызывают stores и не изменяют их clock/TTL.
 
@@ -306,6 +321,92 @@ Diagnostic GC memory samples не вызывают stores и не изменяю
 не renewal: в 61 s оба reads отвергаются. Exact-boundary 59999/60000, subsequent
 create, resource get/put/keys и отсутствие snapshot для полной одной страницы
 проверены отдельными fake-clock cases. Они не заменяют это idle измерение.
+
+## Исправления review R1/R2 и затронутые повторы
+
+Повтор выполнен на source head `b2b83fa746cf5295834e6da09ac8df483089957f`;
+его runtime совпадает с исходным baseline, 011 не переносилась. Полный исторический
+study из 34 cases повторно не запускался: representation/GC/fixtures для explicit
+p1/p100 не изменены. Старые hashes и измерения выше сохранены как исторические;
+отсутствующие в их JSON признаки полноты задним числом не добавляются.
+
+Новый hash исполняемого harness (common/validate/worker/run, именно этот порядок):
+`488e0dd6d97ae96cebc5e93d17a30870c78c9aab0bd755012b0df593a8c00b92`.
+
+### R1: настоящие default calls
+
+`default-pages` теперь **не передаёт maxResults/pageSize**, для modern схемы также
+не передаёт limit. Effective default читается из tools/list. Baseline search_text
+равен 500, list — 1000. Каждый case делает 33 fresh queries, всем 33 результатам
+проверены collected/shown/truncated/reason/skips. List short + три long repeats
+с omitted page также прошли (1200/1202 entries, 32 snapshots/33 resources).
+
+| Search fixture, context=10                | Requested / effective page | Collected / shown | Cursor / resource | Sets / resources после 33 queries | Δ heapUsed / external | Resource quota bytes |
+| ----------------------------------------- | -------------------------- | ----------------- | ----------------- | --------------------------------- | --------------------- | -------------------- |
+| 128 matches × width 1024; source 2,63 MiB | omitted / 500              | 128 / 128         | absent / absent   | 0 / 0                             | 0,03 / 0,12 MiB       | 0                    |
+| 600 matches × width 128; source 1,55 MiB  | omitted / 500              | 600 / 500         | present / present | 32 / 14                           | 44,06 / 49,73 MiB     | 24,85 MiB            |
+
+Оба скана полные: truncated=false (optional field absent), reason=null, normalized
+skip counters=0, filesScanned=1. Fit-case не удерживает page/resource payload;
+его RSS 108,35 MiB — процесс с transient scan/response/JIT, не cache bytes.
+Paged-case RSS=262,82 MiB. Width 128 у 600 matches выбран для безопасного file и
+resource budget; это **другая fixture**, её нельзя сравнивать как ту же long/128
+нагрузку из первоначальной таблицы. Это подтверждение реального default paging,
+а не универсальная оценка стандартных запросов.
+
+### R2: полнота каждого fresh query и negative controls
+
+Общий `validateFresh` используется реальными handlers и HTTP clients. JSON
+сохраняет effectiveContract (schema, requested/default/effective page, collection
+limit и его источник), expectedScan и scalar freshQueries **для каждого** свежего
+запроса. Записываются collected/shown, truncated/stoppedReason, filesScanned,
+filesMatched, list counters, reportedLimit, четыре skipped counters, наличие
+cursor/resource; отсутствующие optional flags отдельно сохраняются как null и
+нормализуются false/zero. Полный case требует точного fixture count и page rows,
+отсутствия stop/skips. Intentional partial требует отдельного expectedPartial и
+точных collected/truncated/reason. Category отражает ожидаемый исход; отклонённые
+контроли находятся в negativeControls, не в таблице успешных измерений.
+`stoppedAtSafeBudget` ограничивает число fresh sets процесса и никак не заменяет
+truncated отдельного скана.
+
+- **Настоящий cap negative control:** fixture 10001 matches, width=32/C0,
+  explicit p1, один query. Baseline собрал 10000, truncated=true,
+  stoppedReason=maxResults, skips=0. Обычное ожидание complete отвергнуто,
+  worker **exit=1**; launcher подтверждает ожидаемый отказ.
+- **Intentional partial:** тот же скан принят только с expectedPartial
+  `{reason:'cap', collected:10000}`; JSON category=intentional-partial и фактическая
+  причина maxResults. Эта память не включена в сравнение полных workloads.
+- **Timeout/skips controls:** пять dedicated unit tests; synthetic successful
+  timeout result с тем же count отвергается по truncated/reason, skippedBinary=1
+  также отвергается. Это смоделированные ответы, не реальные deadline/OS I/O опыты.
+- **Затронутые полные повторы:** long128/C10 explicit p1/p100 по 33 запросам,
+  shared real HTTP long128/C10/p100 — по 33 fresh records каждый; все count=128,
+  truncated=false, reason=null, skips=0. Они сохраняют независимые 32/33 store
+  lifecycle проверки. Smoke (3 workers) и реальный HTTP TTL (61 s) также повторены
+  с validator. Default cases — 6 workers; validation mode — 4 successful workers
+  плюс один ожидаемо rejected control; unit tests — 5/0/0.
+
+Точные команды follow-up (raw JSON только ignored scratch):
+
+```powershell
+node --test scripts/pagination-check/validation.test.mjs
+node scripts/pagination-check/run.mjs default-pages --output .tmp/pagination-012-r1-defaults.json
+node scripts/pagination-check/run.mjs validation --output .tmp/pagination-012-r2-validation.json
+node scripts/pagination-check/run.mjs smoke --output .tmp/pagination-012-r2-smoke.json
+node scripts/pagination-check/run.mjs ttl --output .tmp/pagination-012-r2-ttl.json
+npm run check
+```
+
+64 MiB и cleanup 15 s остаются кандидатами отдельного design/validation. R1 меняет
+область применимости вывода о default call; R2 устраняет возможность молча сравнить
+partial с complete. Новые runtime возможности этим follow-up не назначаются.
+
+Итоговый full `npm run check` follow-up вне sandbox: **463 tests / 455 pass /
+0 fail / 8 skips**, 69 suites, test stage 39,32 s; build/types/ESLint/Prettier/Knip
+PASS. Skips прежние: 3 POSIX-only и 5 file-symlink без Windows permission.
+Новый real TTL подтвердил reads в 55041 ms, idle 61008 ms, затем page/resource
+prune и fresh recovery; clock не подменялся. Unit timeout остаётся отдельной
+смоделированной проверкой validator.
 
 ## Проверки и границы
 
@@ -335,6 +436,11 @@ node scripts/pagination-check/run.mjs post-011 --output .tmp/pagination-012-post
 node scripts/pagination-check/run.mjs ttl --output .tmp/pagination-012-post-011-ttl.json
 ```
 
+Post-011 mode включает omitted default search с 128 и 600 matches, затем explicit
+p1/p100 long C10 и оба HTTP сценария. Сверить effectiveContract/requested=null,
+actual published default, соответствие fixture/full outcome, отсутствие cache у
+fit-case и наличие paging у above-default case. Validator отклонит неожиданное
+усечение/skips, новые полные raw records доступны для каждого запроса.
 Сверить schema variant, collected count/truncation, p1/p100 retention long C10,
 32/33 LRU, оба HTTP lifecycle направления и wall-clock expiry. Если source/read
 representation или бюджет меняются, повторить `study` с тремя repeats. 011 не

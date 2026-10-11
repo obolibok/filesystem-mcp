@@ -9,6 +9,7 @@ npm run build
 node scripts/pagination-check/run.mjs smoke
 node scripts/pagination-check/run.mjs study
 node scripts/pagination-check/run.mjs default-pages
+node scripts/pagination-check/run.mjs validation
 node scripts/pagination-check/run.mjs ttl
 ```
 
@@ -17,8 +18,18 @@ node scripts/pagination-check/run.mjs ttl
 матрицу list/search, повторы, раздельные stores, bounded нагрузку и HTTP. `ttl`
 занимает примерно 70 секунд: читает в 55 s, наблюдает idle retention после 61 s,
 затем проверяет expiry/cleanup/recovery. Это настоящий wall clock.
-`default-pages` отдельно повторяет list с его стандартным pageSize=1000:
-один short и три long repeats, те же 1200 files/33 fresh queries.
+`default-pages` вызывает настоящие handlers с **пропущенным** параметром страницы:
+list (short + три long repeats) и search_text (128 и 600 matches/context=10), по
+33 fresh queries. Default берётся из tools/list: baseline list=1000, search_text=500.
+128 matches помещаются на одну страницу без cursor/resource/cache; 600 требуют
+пагинации. Сравнение retention разных страниц применимо, пока набор остаётся paged.
+
+`validation` проверяет отказ настоящего worker на неожиданном 10001→10000 cap
+(ожидаемый exit=1), отдельно разрешённый labelled partial с `maxResults` reason,
+explicit p1/p100 long search и shared HTTP search. Смоделированные successful
+timeout/skips и обе schema variants проверяет
+`node --test scripts/pagination-check/validation.test.mjs`; это unit controls,
+не реальный timeout/disk benchmark.
 
 После принятия 011:
 
@@ -28,11 +39,23 @@ node scripts/pagination-check/run.mjs post-011
 node scripts/pagination-check/run.mjs ttl
 ```
 
-Этот короткий набор повторяет search с context=10, pageSize 1/100 и два HTTP
+Этот короткий набор повторяет два omitted-page search cases, explicit search
+с context=10/pageSize 1/100 и два HTTP
 сценария. Для сравнения разброса целиком повторить `study`. Harness читает
 опубликованный inputSchema и сохраняет вариант `maxResults` или `limit+pageSize`.
-Новый `limit` явно равен прежнему cap: 10000 search / 20000 list. Разные схемы не
-сравниваются как одинаковые по умолчанию; проверить total/truncated в итогах.
+Для explicit страниц новый `limit` явно равен прежнему cap: 10000 search / 20000
+list; omitted-page cases пропускают также limit и читают его published default.
+Разные schemas/defaults фиксируются в effectiveContract, не сравниваются молча.
+
+Каждый fresh handler/HTTP запрос проходит общий `validateFresh`: collected count
+и shown rows сверяются с fixture/page contract; проверяются truncated/stoppedReason,
+filesScanned и четыре skip counters, cursor/resource presence. Полная fixture
+отвергает неожиданный cap/timeout/skips. Сохраняются effectiveContract, expectedScan
+и отдельная scalar запись freshQueries для **каждого** запроса, включая raw absent
+fields=null и normalized false/zero. Category описывает ожидаемый complete либо
+явно разрешённый intentional-partial исход; failed controls записаны отдельно в
+negativeControls, не как успешные измерения. Process stoppedAtSafeBudget/count sets
+не заменяет scan truncated/reason. Старые raw outputs этого validator не имели.
 
 Каждый worker запускается последовательно в отдельном процессе с `--expose-gc`
 и `--max-old-space-size=384`, timeout 180 s, аварийной RSS-границей 512 MiB.
@@ -68,7 +91,8 @@ memory после трёх GC с event-loop turn, sampled peak с шагом 20 
 Результаты по умолчанию: `.tmp/pagination-012-<mode>.json`. Можно задать
 `--output .tmp/name.json`; существующий файл результата будет перезаписан.
 В JSON фиксируются source commit, чистота runtime source, среда, ограничения и
-SHA-256 конкатенации `common.mjs`, `worker.mjs`, `run.mjs`. Пересобрать dist перед
+SHA-256 конкатенации `common.mjs`, `validate.mjs`, `worker.mjs`, `run.mjs` в этом порядке
+(исторические hashes до R1/R2 включали только common/worker/run). Пересобрать dist перед
 запуском: hash build output отдельно не проверяется. Файл сохраняется после каждого
 worker; `complete:false` означает неполный прогон.
 

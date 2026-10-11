@@ -147,11 +147,33 @@ export function query(schema, workload, source, pageSize) {
       caseSensitive: true,
       context: workload.context ?? 0,
     });
-  Object.assign(
-    args,
-    modern
-      ? { limit: workload.tool === 'list' ? 20000 : 10000, pageSize }
-      : { maxResults: pageSize },
+  const pageParameter = modern ? 'pageSize' : 'maxResults';
+  const defaultPageSize = properties[pageParameter].default;
+  assert(
+    Number.isInteger(defaultPageSize) && defaultPageSize > 0,
+    'published page default required',
   );
-  return { args, variant: modern ? 'limit+pageSize' : 'maxResults' };
+  if (pageSize !== undefined) {
+    args[pageParameter] = pageSize;
+    if (modern) args.limit = workload.tool === 'list' ? 20000 : 10000;
+  }
+  const variant = modern ? 'limit+pageSize' : 'maxResults';
+  return {
+    args,
+    variant,
+    contract: {
+      tool: workload.tool,
+      variant,
+      pageParameter,
+      requestedPageSize: pageSize ?? null,
+      defaultPageSize,
+      effectivePageSize: pageSize ?? defaultPageSize,
+      requestedLimit: args.limit ?? null,
+      collectionLimit: modern ? (args.limit ?? properties.limit.default) : 10000,
+      collectionLimitSource: modern
+        ? 'published limit schema/argument'
+        : 'accepted baseline MAX_SEARCH_RESULTS=10000',
+      capReason: modern ? 'limit' : 'maxResults',
+    },
+  };
 }

@@ -16,12 +16,13 @@ import {
   query,
   scratchRoot,
 } from './common.mjs';
+import { expectedScan, validateFresh } from './validate.mjs';
 
 const repo = await realpath(resolve(import.meta.dirname, '../..'));
 const mode = process.argv[2] ?? 'smoke';
 assert(
-  ['smoke', 'study', 'default-pages', 'ttl', 'post-011'].includes(mode),
-  'usage: node scripts/pagination-check/run.mjs smoke|study|default-pages|ttl|post-011 [--output .tmp/name.json]',
+  ['smoke', 'study', 'default-pages', 'validation', 'ttl', 'post-011'].includes(mode),
+  'usage: node scripts/pagination-check/run.mjs smoke|study|default-pages|validation|ttl|post-011 [--output .tmp/name.json]',
 );
 const flag = process.argv.indexOf('--output');
 const requested = flag === -1 ? `.tmp/pagination-012-${mode}.json` : process.argv[flag + 1];
@@ -43,9 +44,10 @@ const result = {
   osRelease: release(),
   limits: LIMITS,
   workers: [],
+  negativeControls: [],
 };
 const harnessHash = createHash('sha256');
-for (const name of ['common.mjs', 'worker.mjs', 'run.mjs'])
+for (const name of ['common.mjs', 'validate.mjs', 'worker.mjs', 'run.mjs'])
   harnessHash.update(await readFile(join(import.meta.dirname, name)));
 result.harnessSha256 = harnessHash.digest('hex');
 const save = () => writeFile(output, `${JSON.stringify(result, null, 2)}\n`);
@@ -68,7 +70,14 @@ async function httpController(child, ready, config, command) {
     }
     const tools = await clients[0].listTools();
     const schema = tools.tools.find((t) => t.name === config.workload.tool).inputSchema;
-    const { args, variant } = query(schema, config.workload, ready.source, config.pageSize);
+    const { args, variant, contract } = query(
+      schema,
+      config.workload,
+      ready.source,
+      config.pageSize,
+    );
+    const expected = expectedScan(config.workload, ready.fixture, contract);
+    const freshQueries = [];
     const fresh = async (i) => {
       const response = await clients[i % 3].callTool({
         name: config.workload.tool,
@@ -76,7 +85,8 @@ async function httpController(child, ready, config, command) {
       });
       assert(!response.isError, JSON.stringify(response.content));
       const meta = metadata(response);
-      assert(meta?.nextCursor && meta.resourceUri);
+      const outcome = validateFresh(response, contract, expected);
+      freshQueries.push({ queryNumber: freshQueries.length + 1, ...outcome });
       return {
         cursor: meta.nextCursor,
         uri: meta.resourceUri,
@@ -166,7 +176,14 @@ async function httpController(child, ready, config, command) {
       }
     }
     await command('checkpoint', { label: 'http-before-close' });
-    child.send({ type: 'finish', assertions, schema: variant });
+    child.send({
+      type: 'finish',
+      assertions,
+      schema: variant,
+      effectiveContract: contract,
+      expectedScan: expected,
+      freshQueries,
+    });
     return {
       baseline: clientBaseline,
       afterRequests: memory(),
@@ -177,8 +194,11 @@ async function httpController(child, ready, config, command) {
   }
 }
 
-async function run(config) {
-  const childScratch = join(scratch.root, `worker-${result.workers.length}`);
+async function run(config, expectedFailure) {
+  const childScratch = join(
+    scratch.root,
+    `worker-${result.workers.length + result.negativeControls.length}`,
+  );
   await mkdir(childScratch);
   config = { ...config, scratch: childScratch };
   return new Promise((resolveWorker, rejectWorker) => {
@@ -191,6 +211,7 @@ async function run(config) {
     let stderr = '';
     let report;
     let controller;
+    let observedFailure;
     let settled = false;
     let id = 0;
     const pending = new Map();
@@ -218,7 +239,10 @@ async function run(config) {
     });
     child.on('error', fail);
     child.on('message', (message) => {
-      if (message.type === 'failure') fail(new Error(message.error));
+      if (message.type === 'failure') {
+        if (expectedFailure?.test(message.error)) observedFailure = message;
+        else fail(new Error(message.error));
+      }
       if (message.type === 'memory' && message.value.rss > LIMITS.rssMiB * MIB)
         fail(new Error(`RSS safety ceiling reached: ${config.name}; no OOM claim`));
       if (message.type === 'ack') {
@@ -234,6 +258,25 @@ async function run(config) {
     child.on('exit', async (code, signal) => {
       if (settled) return;
       clearTimeout(timeout);
+      if (expectedFailure && code === 1 && observedFailure) {
+        result.negativeControls.push({
+          name: config.name,
+          passed: true,
+          expectedRejection: expectedFailure.source,
+          scanOutcome: observedFailure.scanOutcome,
+          effectiveContract: observedFailure.effectiveContract,
+          expectedScan: observedFailure.expectedScan,
+        });
+        await save();
+        settled = true;
+        console.log(`${config.name}: PASS (incomplete workload rejected; worker exit=1)`);
+        resolveWorker();
+        return;
+      }
+      if (expectedFailure) {
+        fail(new Error(`negative control did not reject: ${config.name}`));
+        return;
+      }
       if (code !== 0 || !report) {
         fail(new Error(`worker ${config.name} exited ${code}/${signal}: ${stderr}`));
         return;
@@ -248,6 +291,17 @@ async function run(config) {
       resolveWorker();
     });
   });
+}
+
+async function defaultSearchCases() {
+  for (const matches of [128, 600])
+    await run({
+      kind: 'handler',
+      name: `search-default-omitted-${matches}`,
+      workload: { tool: 'search_text', matches, width: matches === 128 ? 1024 : 128, context: 10 },
+      sets: 33,
+      isolation: 'both',
+    });
 }
 
 try {
@@ -274,11 +328,52 @@ try {
           kind: 'handler',
           name: `list-${long ? 'long' : 'short'}-default-p1000-r${repeat}`,
           workload: { tool: 'list', long },
-          pageSize: 1000,
           sets: 33,
           isolation: 'both',
         });
     }
+    await defaultSearchCases();
+  } else if (mode === 'validation') {
+    await run(
+      {
+        kind: 'handler',
+        name: 'reject-unexpected-cap',
+        workload: { tool: 'search_text', matches: 10001, width: 32, context: 0 },
+        pageSize: 1,
+        sets: 1,
+        isolation: 'both',
+      },
+      /collected count must match expected fixture/,
+    );
+    await run({
+      kind: 'handler',
+      name: 'intentional-cap-labelled',
+      workload: {
+        tool: 'search_text',
+        matches: 10001,
+        width: 32,
+        context: 0,
+        expectedPartial: { reason: 'cap', collected: 10000 },
+      },
+      pageSize: 1,
+      sets: 1,
+      isolation: 'both',
+    });
+    for (const pageSize of [1, 100])
+      await run({
+        kind: 'handler',
+        name: `validated-long-c10-p${pageSize}`,
+        workload: { tool: 'search_text', long: true, context: 10 },
+        pageSize,
+        sets: 33,
+        isolation: 'both',
+      });
+    await run({
+      kind: 'http',
+      name: 'validated-http-search',
+      workload: { tool: 'search_text', long: true, context: 10 },
+      pageSize: 100,
+    });
   } else if (mode === 'ttl') {
     await run({
       kind: 'http',
@@ -288,6 +383,7 @@ try {
       realTtl: true,
     });
   } else if (mode === 'post-011') {
+    await defaultSearchCases();
     for (const pageSize of [1, 100])
       await run({
         kind: 'handler',
