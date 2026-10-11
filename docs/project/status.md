@@ -20,8 +20,8 @@
 | 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)      | done     | 007 runtime        | Принята через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, portable, live/restart и CI PASS                |
 | 009          | [Выбор инструментов и понятные результаты](../tasks/009-tool-selection.md)          | done     | 007, 008           | Принята через [PR #8](https://github.com/obolibok/filesystem-mcp/pull/8); review и CI PASS; пользователь принял live              |
 | 010          | [Ограниченный list и ясные лимиты](../tasks/010-bounded-list.md)                    | done     | 009                | Принята пользователем; R1–R3, local/CI/portable PASS; интегрирована через PR #9                                                   |
-| 011          | [Ограниченный поиск и пагинация](../tasks/011-bounded-search.md)                    | ready    | 010, triage        | Запуск GPT-6.1-Sol / Extra High; `codex/011-bounded-search`                                                                       |
-| 012          | [Память и TTL пагинации](../tasks/012-pagination-memory-study.md)                   | ready    | 010, triage        | Параллельный baseline на GPT-6.1-Sol / Extra High; `codex/012-pagination-memory-study`                                            |
+| 011          | [Ограниченный поиск и пагинация](../tasks/011-bounded-search.md)                    | active   | 010, triage        | `011 — Ограниченный поиск и пагинация`; `codex/011-bounded-search`; GPT-6.1-Sol / Extra High                                      |
+| 012          | [Память и TTL пагинации](../tasks/012-pagination-memory-study.md)                   | active   | 010, triage        | `012 — Память и TTL пагинации`; `codex/012-pagination-memory-study`; GPT-6.1-Sol / Extra High                                     |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -37,7 +37,15 @@
 [011](../tasks/011-bounded-search.md) исправляет фактические границы/отмену поиска,
 вводит limit/pageSize и полную команду Next page. [012](../tasks/012-pagination-memory-study.md)
 снимает baseline памяти и TTL отдельным synthetic harness без изменения runtime.
-Карточки готовы; отдельные managed worktrees, GPT-6.1-Sol / Extra High.
+Оба исполнителя запущены 11.10 в отдельных managed worktrees на
+GPT-6.1-Sol / Extra High; получены первые ответы. Git подтвердил одинаковый base
+`7d58beac5a95cd2014d2e37f966c4074d6e5d5ec` с обеими карточками и triage.
+
+- 011: `011 — Ограниченный поиск и пагинация`, thread
+  `01a12b6f-5eaf-7783-9c3a-bc7081421fab`, managed checkout `aa37/filesystem-mcp`.
+- 012: `012 — Память и TTL пагинации`, thread
+  `01a12b6f-c4b1-7bf3-98cf-4d2de757edfe`, managed checkout `a7b9/filesystem-mcp`.
+
 012 может идти параллельно, так как владеет только своими scripts/docs; после
 интеграции 011 планирование повторит ключевые измерения. Изменение ignore defaults,
 повышение cache limits, новый runtime из 012 и выпуск сборки пока не назначены.
