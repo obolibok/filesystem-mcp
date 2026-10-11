@@ -8,12 +8,10 @@ export type StoppedReason = 'maxResults' | 'maxFiles' | 'timeout';
 export const StoppedReasonSchema = z.enum(['maxResults', 'maxFiles', 'timeout']).optional();
 
 /**
- * The subset `search_text` and `find_files` can actually emit. Their scans call
- * only `hitMaxResults` and `hitAbort` (search.ts), never `hitMaxFiles`, so the
- * three-value enum published a value no response can carry and disagreed with
- * both tools' own descriptions.
+ * Read-only searches have a caller-selected collect limit; replace_text keeps
+ * its separate maxResults/maxFiles contract.
  */
-export const SearchStoppedReasonSchema = z.enum(['maxResults', 'timeout']).optional();
+export const SearchStoppedReasonSchema = z.enum(['limit', 'timeout']).optional();
 
 /**
  * Accumulates why an enumeration stopped early. maxResults wins over maxFiles

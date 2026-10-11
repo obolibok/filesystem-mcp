@@ -35,6 +35,7 @@ it('cached find_files pages expose scan incompleteness before paths without resu
       includeIgnored: true,
       maxDepth: 5,
       sortBy: 'path',
+      limit: MAX_SEARCH_RESULTS,
     };
     const queryKey = pageQueryKey({
       method: 'find_files',
@@ -44,17 +45,20 @@ it('cached find_files pages expose scan incompleteness before paths without resu
       includeHidden: args.includeHidden,
       sortBy: args.sortBy,
       maxDepth: args.maxDepth,
+      limit: args.limit,
     });
-    for (const stoppedReason of ['maxResults', 'timeout', undefined] as const) {
+    for (const stoppedReason of ['limit', 'timeout', undefined] as const) {
       // Replay the existing page-store seam: no 10,000-file disk fixture or timing race.
       // offset=0 exercises the first-row renderer; these are cached scan results,
       // so resourceUri is intentionally absent, just as on every continuation.
-      const count = stoppedReason === 'maxResults' ? MAX_SEARCH_RESULTS : 2;
+      const count = stoppedReason === 'limit' ? MAX_SEARCH_RESULTS : 2;
       const items = Array.from({ length: count }, (_, i) => ({
         path: `nested/file-${String(i)}.txt`,
       }));
       const metadata = {
         root: path,
+        limit: MAX_SEARCH_RESULTS,
+        truncated: stoppedReason !== undefined,
         totalMatches: count,
         filesScanned: count + 1,
         skippedInaccessible: 1,
@@ -64,7 +68,7 @@ it('cached find_files pages expose scan incompleteness before paths without resu
       const cursor = Buffer.from(JSON.stringify({ snapshotId, offset: 0 })).toString('base64url');
       const first = await client.callTool({
         name: 'find_files',
-        arguments: { ...args, cursor, maxResults: 1 },
+        arguments: { ...args, cursor, pageSize: 1 },
       });
       assert.notEqual(first.isError, true, firstTextBlock(first).text);
       const firstMeta = first._meta as typeof metadata & {
@@ -85,7 +89,7 @@ it('cached find_files pages expose scan incompleteness before paths without resu
         assert(text.startsWith('// scan stopped early:'), text);
         assert(text.indexOf('\n\nnested/file-0.txt') > 0, text);
         assert(
-          text.includes(stoppedReason === 'maxResults' ? String(MAX_SEARCH_RESULTS) : 'time limit'),
+          text.includes(stoppedReason === 'limit' ? String(MAX_SEARCH_RESULTS) : 'time limit'),
           text,
         );
       } else {
@@ -95,7 +99,7 @@ it('cached find_files pages expose scan incompleteness before paths without resu
       assert(text.includes(firstMeta.nextCursor), 'text must expose the actual next cursor');
       const last = await client.callTool({
         name: 'find_files',
-        arguments: { ...args, cursor: firstMeta.nextCursor, maxResults: MAX_SEARCH_RESULTS },
+        arguments: { ...args, cursor: firstMeta.nextCursor, pageSize: MAX_SEARCH_RESULTS },
       });
       const lastMeta = last._meta as typeof firstMeta;
       assert.notEqual(last.isError, true);

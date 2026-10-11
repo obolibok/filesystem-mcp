@@ -127,7 +127,7 @@ const ENV_HELP: HelpRow[] = [
   },
   {
     flags: 'FS_MAX_INLINE_MATCHES',
-    desc: 'Deprecated and ignored; maxResults sets the search_text page size. Removed in the next major',
+    desc: 'Deprecated and ignored; pageSize sets the search_text page size; limit caps collected matching lines. Removed in the next major',
   },
   {
     flags: 'FS_MAX_READ_MANY_BYTES',
