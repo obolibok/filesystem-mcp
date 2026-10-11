@@ -160,7 +160,7 @@ base/head/branch, проверками и ready for review; review не подм
 
 ## Work record
 
-Реализация завершена 11.10.2026; после исправления R1/R2/R3 состояние:
+Реализация завершена 11.10.2026; после исправления R1/R2/R3/R4 состояние:
 **ready for repeat review**.
 Проверки и короткая live-матрица: [протокол 011](../testing/011-bounded-search.md).
 
@@ -299,3 +299,45 @@ immutable reviewed head `7cbd14420e93b2e91e6da336a7f63c58ae7b32ab`. Исправ
   и два собственных документа. Board/012/service/portable/push/merge не менялись.
   Состояние **ready for repeat review**; актуальный local commit SHA передаётся
   в handoff, без self-SHA в этом record.
+
+### R4 после третьего review
+
+Прочитан `65fbcb48:docs/testing/011-review-r3-2026-10-11.md`; reviewed head —
+`b27a7a149c511efe9972b0f817ab1d0cdfbe6409`. R3 принят reviewer; R4 исправлен
+в прежней ветке/worktree, без переноса planning commit.
+
+- Собственная новая MCP regression на прежнем коде воспроизвела потерю globstar,
+  полученного конкатенацией brace alternatives: `{*,x}*/file.txt` при maxDepth=2
+  возвращал один файл вместо трёх native matches в расширенной synthetic fixture.
+  Исходный raw slash count ограничивал общий walker до раскрытия ветвей.
+- Для comma brace patterns общий bound теперь консервативно равен пользовательскому
+  maxDepth (default/cap 100). Lazy expanded branches сохраняют отдельный finite или
+  globstar depth, literal-prefix pruning и PathGuard resolution. Анализ не раскрывает
+  Cartesian product; parser/cache/cancellation не менялись. Ветка без braces сохраняет
+  прежнюю оптимизацию raw depth. Новые поля, dependencies или wire budget не вводились.
+- Оба MCP tools сравниваются с native canonical glob на single-/adjacent-choice
+  globstar, прямых `**` controls и Wanted/nested/b.txt. Matrix: maxDepth 0/1/2/omitted,
+  limit 1/100, includeHidden=false и оба includeIgnored. Проверены actual directory
+  opens/ignore reads, root/prefix/hidden/ignored cutoff, отсутствие N+1 read/content
+  open и закрытие всех handles. Finite alternatives сохраняют точный depth/prefix
+  pruning, включая полное отсечение слишком глубоких literal branches.
+- Дополнительный cancellation event gate на глубине 2 у обоих core consumers:
+  brace-produced globstar с нулём matches, явный partial timeout, три закрытых
+  directory handles, discovery ignore reads только в этих каталогах, ноль content
+  opens; каталог глубже пользовательского
+  cutoff не открывается. R1–R3/cursors/source policy и настоящие aliases проверяются
+  прежними suites. Команды и окончательные counts — в протоколе R4.
+- При подготовке исправлены два ожидания fixtures: слишком глубокая literal ветвь
+  вообще не открывает родителей; core search требует explicit skipIgnored=true
+  для проверки ignore reads. Первый full check прошёл static, но дал 474/1/8 именно
+  на втором ошибочном fixture; это не runtime failure или snapshot cleanup flake.
+  Исправление fixture проверяется повторными runs, прежний flake остаётся follow-up.
+- Окончательные проверки: R4 cases **3/0/0**; targeted **172 tests, 166 pass /
+  0 fail / 6 skips**; `npm run check` — static PASS, **483 tests / 69 suites,
+  475 pass / 0 fail / 8 skips**; actual 8.3 search + list **40/0/0**; Linux Node
+  v24.15.0, WSL case-sensitive `/tmp` **38/0/2**, 40 tests. Форматированы только
+  четыре файла revision; `git diff --check` PASS. Skips/ограничения/live NOT RUN
+  прежние, известный cleanup flake в R4 full checks не проявился.
+- Scope revision: `src/core/glob.ts`, search regressions и два собственных документа.
+  Board/012/service/portable/push/merge не затрагивались; состояние
+  **ready for repeat review**, локальный HEAD передаётся в handoff.

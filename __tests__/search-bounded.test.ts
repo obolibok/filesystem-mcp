@@ -594,6 +594,213 @@ it('brace branch depth/collect pruning bounds real reads and literal continuatio
   }
 });
 
+it('brace-produced globstar preserves native results and user depth/collect bounds through both MCP searches', async (t) => {
+  const root = await fixture(t);
+  for (const file of [
+    'a/file.txt',
+    'a/a/file.txt',
+    'a/a/a/file.txt',
+    'Wanted/nested/b.txt',
+    'Wanted/nested/deeper/b.txt',
+    'Unrelated/deep/other.txt',
+    'Ignored/deep/file.txt',
+    'a/.hidden/file.txt',
+  ])
+    await writeTestFile(root, file, 'token');
+  await writeTestFile(root, '.gitignore', 'Ignored/\n');
+  const expectedByPattern = new Map<string, string[]>();
+  for (const pattern of [
+    '**/file.txt',
+    '{*,x}*/file.txt',
+    '{*,x}{*,y}/file.txt',
+    'Wanted/**/b.txt',
+    'Wanted/{*,x}*/b.txt',
+  ]) {
+    const expected = new Set<string>();
+    for await (const file of fsPromises.glob(pattern, { cwd: root }))
+      expected.add(
+        relative(root, await fsPromises.realpath(join(root, file))).replaceAll('\\', '/'),
+      );
+    expectedByPattern.set(pattern, [...expected].sort());
+  }
+  const pair = await createTestClientPair([root]);
+  t.after(() => pair.close());
+  const readNames: (string | null)[] = [];
+  const observed = observe(t, root, (entry) => {
+    readNames.push(entry?.name ?? null);
+  });
+  for (const name of tools)
+    for (const [pattern, native] of expectedByPattern)
+      for (const maxDepth of [0, 1, 2, undefined])
+        for (const includeIgnored of [true, false])
+          for (const limit of [1, 100]) {
+            observed.opened.length =
+              observed.ignoreReads.length =
+              observed.textReads.length =
+              readNames.length =
+                0;
+            const before = observed.counts();
+            const response = await pair.client.callTool({
+              name,
+              arguments: {
+                ...query(name, root),
+                pattern,
+                ...(maxDepth === undefined ? {} : { maxDepth }),
+                includeHidden: false,
+                includeIgnored,
+                limit,
+              },
+            });
+            const label = `${name}: ${pattern}, depth=${String(maxDepth)}, ignored=${String(includeIgnored)}, limit=${String(limit)}`;
+            assert.notEqual(response.isError, true, firstTextBlock(response).text);
+            const meta = response._meta as unknown as SearchMeta;
+            const depth = maxDepth ?? 100;
+            const expected = native.filter(
+              (path) =>
+                path.split('/').length - 1 <= depth &&
+                (includeIgnored || !path.startsWith('Ignored/')),
+            );
+            assert.equal(meta.totalMatches, Math.min(limit, expected.length), label);
+            if (limit === 100) assert.deepEqual(paths(meta).sort(), expected, label);
+            else
+              assert(
+                paths(meta).every((path) => expected.includes(path)),
+                label,
+              );
+            assert.equal(meta.truncated, limit === 1 && expected.length > 0, label);
+            assert.equal(meta.stoppedReason, meta.truncated ? 'limit' : undefined, label);
+            assert(
+              observed.opened.every((path) => path === '' || path.split('/').length <= depth),
+              label,
+            );
+            assert(
+              observed.opened.every((path) => !path.includes('.hidden')),
+              label,
+            );
+            if (!includeIgnored)
+              assert(
+                observed.opened.every((path) => !path.startsWith('Ignored')),
+                label,
+              );
+            if (pattern.startsWith('Wanted/'))
+              assert(
+                observed.opened.every((path) => path === '' || path.startsWith('Wanted')),
+                label,
+              );
+            assert.equal(
+              observed.ignoreReads.length,
+              includeIgnored ? 0 : observed.opened.length,
+              label,
+            );
+            assert.equal(observed.counts().closes - before.closes, observed.opened.length, label);
+            assert.equal(
+              observed.textReads.length,
+              name === 'search_text' ? meta.totalMatches : 0,
+              label,
+            );
+            if (limit === 1 && expected.length > 0)
+              assert.equal(
+                readNames.at(-1),
+                pattern.endsWith('file.txt') ? 'file.txt' : 'b.txt',
+                label,
+              );
+          }
+});
+
+it('finite brace branches keep exact depth and literal-prefix pruning with a conservative shared bound', async (t) => {
+  const root = await fixture(t);
+  for (const file of [
+    'a/file.txt',
+    'a/a/file.txt',
+    'a/a/deeper/file.txt',
+    'Else/deep/file.txt',
+    'Unrelated/deep/file.txt',
+  ])
+    await writeTestFile(root, file, 'token');
+  const pair = await createTestClientPair([root]);
+  t.after(() => pair.close());
+  const observed = observe(t, root);
+  for (const name of tools)
+    for (const pattern of [
+      '{a,Else}/file.txt',
+      '{a,Else}/{file,missing}.txt',
+      '{a,Else}/{a,Else}/file.txt',
+    ])
+      for (const maxDepth of [0, 1, 2, undefined]) {
+        observed.opened.length = observed.ignoreReads.length = observed.textReads.length = 0;
+        const before = observed.counts();
+        const response = await pair.client.callTool({
+          name,
+          arguments: {
+            ...query(name, root),
+            pattern,
+            ...(maxDepth === undefined ? {} : { maxDepth }),
+          },
+        });
+        const label = `${name}: ${pattern}, depth=${String(maxDepth)}`;
+        assert.notEqual(response.isError, true, firstTextBlock(response).text);
+        const meta = response._meta as unknown as SearchMeta;
+        const branchDepth = pattern.includes('/{a,Else}') ? 2 : 1;
+        const expected =
+          (maxDepth ?? 100) >= branchDepth
+            ? [branchDepth === 2 ? 'a/a/file.txt' : 'a/file.txt']
+            : [];
+        assert.deepEqual(paths(meta), expected, label);
+        assert.equal(meta.truncated, false, label);
+        assert.deepEqual(
+          observed.opened.slice().sort(),
+          [
+            '',
+            ...((maxDepth ?? 100) >= branchDepth ? ['Else', 'a'] : []),
+            ...((maxDepth ?? 100) >= 2 && branchDepth === 2 ? ['a/a'] : []),
+          ].sort(),
+          label,
+        );
+        assert.equal(observed.ignoreReads.length, observed.opened.length, label);
+        assert.equal(observed.counts().closes - before.closes, observed.opened.length, label);
+        assert.equal(
+          observed.textReads.length,
+          name === 'search_text' ? expected.length : 0,
+          label,
+        );
+      }
+});
+
+it('brace-produced globstar observes cancellation in nested no-match traversal and closes every handle', async (t) => {
+  for (const name of tools) {
+    const root = await fixture(t);
+    await writeTestFile(root, 'a/a/file.txt', 'token');
+    await writeTestFile(root, 'a/a/deeper/file.txt', 'token');
+    const controller = new AbortController();
+    const observed = observe(t, root, (entry) => {
+      if (entry?.name === 'file.txt')
+        controller.abort(new DOMException('brace globstar cancel', 'AbortError'));
+    });
+    const guard = await makeGuard([root]);
+    const pattern = '{*,x}{*,y}/missing.txt';
+    const options = {
+      signal: controller.signal,
+      skipIgnored: true,
+      maxDepth: 2,
+      maxResults: 1,
+      filePattern: pattern,
+    };
+    const result =
+      name === 'find_files'
+        ? await searchFiles(root, pattern, options, guard)
+        : await searchContent(root, 'token', options, guard);
+    assert.equal(result.summary.stoppedReason, 'timeout', name);
+    assert.equal(result.summary.truncated, true, name);
+    assert.equal(result.summary.filesScanned, 0, name);
+    assert.deepEqual(observed.opened, ['', 'a', 'a/a'], name);
+    assert.equal(observed.ignoreReads.length, observed.opened.length, name);
+    assert.equal(observed.textReads.length, 0, name);
+    assert.equal(observed.counts().closes, observed.opened.length, name);
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  }
+});
+
 it('brace Cartesian queries stay lazy and alternatives beyond the bounded cache remain searchable', async (t) => {
   const root = await fixture(t);
   await writeTestFile(root, `Wanted/${'a'.repeat(25)}.txt`, 'token');

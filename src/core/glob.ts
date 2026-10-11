@@ -473,14 +473,16 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
   if (options.fs) {
     const plan = normalizeGlobOptions(options);
     const signal = options.signal ?? new AbortController().signal;
-    // Without globstar no path can match beyond its slash count. Braces that
-    // contain slashes can overestimate this bound, never underestimate it.
-    const patterns = plan.patterns.map(normalizeWalkPattern);
-    const patternDepth = patterns.some((pattern) => pattern.includes('**'))
-      ? 100
-      : Math.max(...patterns.map((pattern) => pattern.split(SEP).length - 1));
-    const maxDepth = Math.min(options.maxDepth ?? 100, patternDepth);
     const braces = plan.patterns.some((pattern) => pattern.includes('{') && pattern.includes(','));
+    // Brace alternatives can concatenate into globstar. Keep their shared
+    // bound conservative; lazy resolved branches enforce their exact depths.
+    // Without braces or globstar no path can match beyond its slash count.
+    const patterns = plan.patterns.map(normalizeWalkPattern);
+    const patternDepth =
+      braces || patterns.some((pattern) => pattern.includes('**'))
+        ? 100
+        : Math.max(...patterns.map((pattern) => pattern.split(SEP).length - 1));
+    const maxDepth = Math.min(options.maxDepth ?? 100, patternDepth);
     // Preserve the existing hidden-pattern policy before expanding alternatives.
     const variants: Awaited<ReturnType<typeof prepareBracePatterns>>[] | undefined = braces
       ? []

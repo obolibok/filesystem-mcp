@@ -267,6 +267,91 @@ Skips, Node v24.15.0 / npm 11.12.1 и локальный Linux runtime проф�
 в таком случае выдача явная partial timeout/error. В памяти нет полного Cartesian
 списка, и cancellation продолжает наблюдаться во всех ветвях планирования/обхода.
 
+## R4: globstar, полученный конкатенацией brace alternatives
+
+Прочитан `65fbcb48:docs/testing/011-review-r3-2026-10-11.md`; immutable reviewed
+head — `b27a7a149c511efe9972b0f817ab1d0cdfbe6409`. Reviewer закрыл R3 и показал
+у обоих MCP tools потерю вложенного файла для `{*,x}*/file.txt` и
+`{*,x}{*,y}/file.txt`. До brace expansion raw pattern не содержит `**`;
+его slash count=1 ошибочно уменьшал общий maxDepth. Даже раскрытая ветвь
+`**/file.txt` затем получала min(100,1), walker не открывал второй уровень.
+
+Собственная постоянная regression на прежнем коде воспроизвела ошибку через
+настоящий find_files: при maxDepth=2 и includeIgnored=true один match вместо
+трёх native matches (a/file.txt, a/a/file.txt, Ignored/deep/file.txt). Оба tools
+после исправления сравниваются с canonical `fs.promises.glob`, отфильтрованным
+по явному пользовательскому depth и root ignore rule. Synthetic matrix содержит
+ещё a/a/a/file.txt, Wanted/nested/b.txt и Wanted/nested/deeper/b.txt, посторонний
+subtree и hidden source; содержимое файлов — token.
+
+Patterns: `**/file.txt`, `{*,x}*/file.txt`, `{*,x}{*,y}/file.txt`,
+`Wanted/**/b.txt`, `Wanted/{*,x}*/b.txt`. Для каждого у обоих tools проверены
+maxDepth 0/1/2 и omitted default, limit 1/100, includeHidden=false,
+includeIgnored=true/false. Native depth-filtered result set совпадает полностью
+при limit=100, при limit=1 возвращается только допустимый match с partial limit
+warning. Directory read заканчивается на N-м match, content reads не превышают N.
+Все открытые каталоги и discovery ignore reads остаются внутри depth/prefix/source
+scope; handles закрыты, hidden/ignored branches не обходятся при их исключении.
+
+Исправление в `src/core/glob.ts` использует консервативный общий depth bound для
+comma brace expressions: пользовательский maxDepth либо default 100. Это только
+верхняя граница общего walker. Lazy queryPatterns продолжает нормализовать каждый
+вариант, вычислять его finite slash depth или globstar depth, ограничивать реальным
+user cutoff и разрешать literal prefix через PathGuard. Cartesian expansion ради
+вычисления глубины не выполняется; parser, cache, event-loop checkpoints и signal
+semantics прежние. Non-brace patterns сохраняют прежнюю оптимизацию общего bound.
+
+Отдельная finite matrix: `{a,Else}/file.txt`, `{a,Else}/{file,missing}.txt`,
+`{a,Else}/{a,Else}/file.txt`, те же оба tools и depths. Сверяются точные actual
+opened directories: root и только разрешённые literal ancestors, a/a лишь для
+двухуровневой ветви. a/a/deeper, Else/deep и Unrelated не открываются, их ignore
+rules не читаются. Fully literal branches глубже user cutoff не открывают даже
+родительский каталог. Консервативный общий bound не ослабляет branch pruning.
+
+Отмена проверена отдельно на глубине 2: core searchFiles/searchContent с pattern
+`{*,x}{*,y}/missing.txt`, explicit skipIgnored=true; event gate прерывает при чтении
+a/a/file.txt. Результат — ноль matches, явный timeout/truncated=true, только root,
+a и a/a открыты, все три directory handles закрыты, discovery ignore reads только
+в этих каталогах, ноль content opens.
+a/a/deeper не открывается. Прежние lazy product/parser/enumeration/resolution,
+R1–R3 spelling, cursor, ignore/no-follow и Windows 8.3 tests сохранены.
+
+Промежуточные failures: до runtime fix воспроизведён R4; finite-control fixture
+первоначально ожидал открытые родители слишком глубокой fully literal ветви,
+ожидание приведено к существующему более строгому pruning. После runtime fix
+новый cancellation fixture не передавал core skipIgnored=true, хотя assertion
+ожидал ignore reads. Первый full check: static PASS, **474 pass / 1 fail / 8 skips**;
+targeted **165/1/6**, actual 8.3 **39/1/0**, Linux **37/1/2** — единственный failure
+в каждом связан с этой опцией fixture. Опция исправлена, policy/runtime не ослаблены;
+повтор выполнен с изменённым тестом. Known snapshot cleanup flake не проявился
+и исправленным не считается. Окончательные результаты записаны ниже.
+
+Те же команды targeted/full/actual 8.3 и compiled Linux из предыдущих разделов;
+focused R4 command:
+
+```powershell
+node --test --import tsx --test-name-pattern="brace-produced globstar|finite brace branches" __tests__/search-bounded.test.ts
+```
+
+| Проверка                        | Итог                                                  |
+| ------------------------------- | ----------------------------------------------------- |
+| R4 MCP/pruning/cancellation     | PASS: 3 tests, 3 pass, 0 fail, 0 skips                |
+| Windows targeted suites         | PASS: 172 tests, 166 pass, 0 fail, 6 skips            |
+| Actual 8.3 TEMP search + list   | PASS: 40 tests, 40 pass, 0 fail, 0 skips              |
+| Windows npm run check           | PASS: static + 483 tests, 475 pass, 0 fail, 8 skips   |
+| Linux search + list, WSL Ubuntu | PASS: 40 tests, 38 pass, 0 fail, 2 Windows-only skips |
+
+Среда прежняя: Windows Node v24.15.0 / npm 11.12.1; WSL Ubuntu, временный Linux
+Node v24.15.0 с проверенным checksum, synthetic case-sensitive `/tmp`.
+Полный check включает всех общих потребителей glob/walker, в частности list и
+legacy replace_text; public wire/schema assertions и R1–R3 регрессии прошли.
+Нормализация только четырёх файлов revision; `git diff --check` PASS.
+
+Scope — glob planning, search regressions, protocol и Work record 011. Public
+schema/defaults/limits, dependencies, versions, store/TTL и wire budget прежние.
+Board/012/portable/установленный сервис не менялись, push/merge не выполнялись.
+Целевая live matrix остаётся NOT RUN; Linux CI не заявлен.
+
 ## Короткая целевая live-матрица
 
 Это следующий опыт планирования после review; локальный SDK не доказывает
