@@ -120,27 +120,27 @@ pattern **/*.txt, maxDepth 0, maxResults 1, includeIgnored true; для search_t
 
 ## Acceptance
 
-- [ ] Воспроизведены оба дефекта на исходной базе, сохранены обезличенные выводы.
-- [ ] Реальный depth cutoff доказан для 0/1/2, hidden и обоих includeIgnored;
+- [x] Воспроизведены оба дефекта на исходной базе, сохранены обезличенные выводы.
+- [x] Реальный depth cutoff доказан для 0/1/2, hidden и обоих includeIgnored;
       глубокие .gitignore и unmatched glob не вызывают лишнюю рекурсию.
-- [ ] Общий limit прекращает сбор; 0/1/N-1/N/N+1 фактических результатов,
+- [x] Общий limit прекращает сбор; 0/1/N-1/N/N+1 фактических результатов,
       limit меньше/равно/больше pageSize, validation bounds и exact N проверены.
-- [ ] Text limit считает строки; несколько occurrences/контекст/explicit-file,
+- [x] Text limit считает строки; несколько occurrences/контекст/explicit-file,
       regex/Unicode и skipped binary/too-large/encoding semantics сохранены.
-- [ ] Отмена на filtered/no-match/ignore traversal и позднем open закрывает handles;
+- [x] Отмена на filtered/no-match/ignore traversal и позднем open закрывает handles;
       tests используют события/счётчики, а не только хрупкий wall-clock threshold.
-- [ ] Literal Next page из реального MCP ответа исполняется без восстановления
+- [x] Literal Next page из реального MCP ответа исполняется без восстановления
       параметров, в том числе multiple roots и изменённый pageSize; mismatch и
       expiry cursor по-прежнему отклоняются. Дубликатов/потерь страниц нет.
-- [ ] Видимые warnings, counters, limit, stoppedReason и resource согласованы
+- [x] Видимые warnings, counters, limit, stoppedReason и resource согласованы
       на всех страницах, с/без resourceStore; полнота не завышена.
-- [ ] Wire schemas публикуют limit/pageSize и точный default depth; старый maxResults
+- [x] Wire schemas публикуют limit/pageSize и точный default depth; старый maxResults
       получает понятную ошибку. Defaults/ignore/glob/path security сохранены.
-- [ ] Принятый list и остальные потребители изменённых helpers не регрессировали.
+- [x] Принятый list и остальные потребители изменённых helpers не регрессировали.
       Windows canonical/8.3/junction случаи проверены, реальные skips объяснены.
-- [ ] Targeted tests и npm run check PASS; среда, числа и skips записаны. Известный
+- [x] Targeted tests и npm run check PASS; среда, числа и skips записаны. Известный
       terminal/cleanup flake не маскировать повтором и не чинить вне scope.
-- [ ] Обновлены актуальные описания/reference, protocol/live matrix и Work record;
+- [x] Обновлены актуальные описания/reference, protocol/live matrix и Work record;
       изменения закоммичены локально, итог ready for review передан планированию.
 
 ## Launch prompt
@@ -160,11 +160,60 @@ base/head/branch, проверками и ready for review; review не подм
 
 ## Work record
 
-Заполняет исполнитель. До начала реализации: не начато.
+Реализация завершена 11.10.2026; состояние: **ready for review**.
+Проверки и короткая live-матрица: [протокол 011](../testing/011-bounded-search.md).
 
-- Base и branch:
-- Что изменилось и почему:
-- Решения/отклонения от исходного плана:
-- Команды и результаты проверок, среда, skips:
-- Выполненные/оставшиеся acceptance:
-- Риски, follow-up и состояние handoff:
+- Base: `7d58beac5a95cd2014d2e37f966c4074d6e5d5ec`; приложение создало чистый
+  detached worktree непосредственно на checkpoint. Карточка/triage присутствовали.
+  Создана только ветка `codex/011-bounded-search` в этом worktree; чужие checkouts
+  и ветки не переключались. Git shared metadata потребовала разрешённого локального
+  доступа; использован точечный safe.directory, без глобальных изменений.
+- Baseline: самостоятельно воспроизведены оба поиска через настоящий in-memory MCP
+  на 33 synthetic файлах. Raw glob 33, ниже maxDepth=0 — 30, собранный набор 3,
+  страница 1; literal Next page отклонён по pattern/searchPattern, repeat с полным
+  query проходит. Обезличенные выводы закреплены в протоколе.
+- Изменения: guarded bounded ветка globEntries использует walker 010. Реальные
+  depth/ignore cutoff, finite-pattern depth и fixed-prefix pruning, отмена на
+  filtering/ignore/line loops, закрытие поздних handles. Limit останавливает на N,
+  без N+1; text считает строки, сохраняет occurrences/context/RE2/skip semantics.
+  pageSize независим от limit. Старый maxResults исключён без alias; validation
+  объясняет оба новых поля. Next page повторяет полный запрос и effective path.
+- Metadata: limit/truncated/stoppedReason=limit|timeout и counters согласованы
+  между страницами и resources; warning перед rows сохраняется до последней
+  страницы. Search context больше не искажает страницу через число rendered rows.
+  Find JSON resource теперь объект с results и metadata, чтобы не терять limit и
+  stop state. Сохраняется политика text + _meta, без structuredContent duplication.
+- Внутренние решения в acceptance: original fs.glob ветка остаётся у replace_text;
+  его optional maxDepth и maxResults/maxFiles контракт сохранены. List depth с 1
+  не менялся; общий walker получил только optional callbacks. Explicit-file text
+  scope стал literal (включая `[literal]` в имени) и не открывает parent/siblings.
+  Это устранение glob reinterpretation в пределах принятого «ровно один файл».
+  Runtime dependencies/версии/stores/TTL/ignore defaults не менялись.
+- Актуализированы README, architecture, server instructions, tool/input/output
+  descriptions, FS_MAX_INLINE_MATCHES CLI/runtime warning, protocol/live matrix.
+  Wire payload 26932/16852 chars (full/read-only); два separate collect/page fields
+  и точный depth требуют +1044 chars к 010. Budget явно обновлён до 27200/17100;
+  schema/surface assertions сохранены.
+- Проверки: Windows, Node v24.15.0 / npm 11.12.1, `npm ci` PASS. Sandbox tsx
+  остановился до tests на uv_os_get_passwd ENOMEM; разрешённый обычный процесс
+  устранил ограничение среды. Targeted пять suites: 162 tests, **156 pass / 0 fail /
+  6 skips**. Настоящий 8.3 TEMP launcher: search + list, **30 / 0 / 0**, включая
+  canonical roots, junctions и настоящий 8.3 configured root. `npm run check`:
+  все static стадии PASS; **465 pass / 0 fail / 8 skips**, 473 tests / 69 suites.
+  Skips — 3 POSIX-only и 5 file-symlink permissions; полный список в протоколе.
+  Первый полный test run также PASS; финальный повтор обусловлен дополнительной
+  самопроверкой directory extglob pruning, известный cleanup flake не маскировался.
+- Acceptance: воспроизведение, реальная глубина/лимит, literal pagination,
+  warnings/resource/counters, cancellation/late handles, wire validation и policy,
+  зависимые list/replace helpers и локальные проверки выполнены. Synthetic
+  fixtures, event/counter gates и настоящие Windows aliases подтверждают поведение;
+  production inventory/абсолютные personal paths/archives в Git не включались.
+  Целевая live-матрица сохранена **NOT RUN** для планирования; CI Linux не заявлен.
+- Ограничения: limit — matches, не просмотренные файлы/OS calls; редкий pattern
+  может быть дорогим. Exact N консервативно partial; sort только собранного subset.
+  Native I/O не прерывается принудительно. Прежнее hidden pattern expansion и
+  best-effort ignore-read/log policy сохранены; новый glob redesign вне scope.
+  Job terminal/cleanup follow-up остаётся прежним. Центральная доска, файлы 012,
+  установленный сервис, credentials, production roots, portable сборка, push/PR/
+  merge/release не затрагивались. Изменения сохранены локальными commits; фактический
+  HEAD передаётся в handoff, без self-SHA внутри этого record.
