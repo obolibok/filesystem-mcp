@@ -1,6 +1,7 @@
 import { glob as fsGlob, readFile as fsReadFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, posix, relative, resolve } from 'node:path';
 
+import { prepareBracePatterns } from './brace-pattern.js';
 import { processInParallel } from './concurrency.js';
 import {
   ErrorCode,
@@ -139,8 +140,9 @@ interface NormalizedGlob {
 }
 
 const GLOB_MAGIC_RE = /[*?[\]{}!]/u;
-// Prefix pruning must also recognize extglobs used in directory segments.
-const PREFIX_MAGIC_RE = /[*?[\]{}!@+()]/u;
+// Comma braces are expanded first; remaining braces are literal names. Prefix
+// pruning must still recognize extglobs used in directory segments.
+const PREFIX_MAGIC_RE = /[*?[\]!@+()]/u;
 const GLOB_BATCH_CONCURRENCY = 64;
 const SEP = '/';
 const DOT_CHAR_CODE = 46;
@@ -248,6 +250,7 @@ interface WalkPattern {
   readonly prefix: string;
   readonly remainder: string;
   readonly directoryOnly: boolean;
+  readonly maxDepth: number;
 }
 
 function normalizeWalkPattern(pattern: string): string {
@@ -279,7 +282,8 @@ async function resolveWalkPattern(
   const segments = (directoryOnly ? pattern.slice(0, -1) : pattern).split(SEP);
   const magic = segments.findIndex((segment) => PREFIX_MAGIC_RE.test(segment));
   const literalCount = magic < 0 ? segments.length : magic;
-  if (literalCount === 0) return { prefix: '', remainder: segments.join(SEP), directoryOnly };
+  if (literalCount === 0)
+    return { prefix: '', remainder: segments.join(SEP), directoryOnly, maxDepth };
   if (literalCount > maxDepth + 1) return null;
 
   const literalPath = join(root, ...segments.slice(0, literalCount));
@@ -295,6 +299,7 @@ async function resolveWalkPattern(
       prefix: toPosixPath(relative(root, resolvedPath)),
       remainder: segments.slice(literalCount).join(SEP),
       directoryOnly,
+      maxDepth,
     };
   } catch (error) {
     signal.throwIfAborted();
@@ -306,6 +311,7 @@ async function resolveWalkPattern(
         prefix: segments.slice(0, literalCount).join(SEP),
         remainder: segments.slice(literalCount).join(SEP),
         directoryOnly,
+        maxDepth,
       };
     }
     throw error;
@@ -474,20 +480,94 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
       ? 100
       : Math.max(...patterns.map((pattern) => pattern.split(SEP).length - 1));
     const maxDepth = Math.min(options.maxDepth ?? 100, patternDepth);
-    const walkPatterns: WalkPattern[] = [];
-    for (const pattern of patterns) {
-      signal.throwIfAborted();
-      const resolved = await resolveWalkPattern(pattern, plan.cwd, options.fs, signal, maxDepth);
-      if (resolved) walkPatterns.push(resolved);
+    const braces = plan.patterns.some((pattern) => pattern.includes('{') && pattern.includes(','));
+    // Preserve the existing hidden-pattern policy before expanding alternatives.
+    const variants: Awaited<ReturnType<typeof prepareBracePatterns>>[] | undefined = braces
+      ? []
+      : undefined;
+    if (variants)
+      for (const pattern of plan.patterns)
+        variants.push(await prepareBracePatterns(pattern, signal));
+    const fs = options.fs;
+    const literalPrefixes = variants
+      ? plan.patterns.map((pattern) => {
+          const segments = pattern.split(SEP);
+          const firstChoice = segments.findIndex((segment) => /[*?[\]{}!@+()]/u.test(segment));
+          return firstChoice > 0
+            ? normalizeWalkPattern(segments.slice(0, firstChoice).join(SEP)).split(SEP)
+            : [];
+        })
+      : [];
+    const commonSegments: string[] = [];
+    for (const [index, segment] of (literalPrefixes[0] ?? []).entries()) {
+      if (!literalPrefixes.every((prefix) => prefix[index] === segment)) break;
+      commonSegments.push(segment);
     }
+    const commonLiteral = commonSegments.join(SEP);
+    const common = commonLiteral
+      ? await resolveWalkPattern(`${commonLiteral}/*`, plan.cwd, fs, signal, maxDepth)
+      : undefined;
+    const walkPatterns: WalkPattern[] = [];
+    if (!variants)
+      for (const pattern of patterns) {
+        signal.throwIfAborted();
+        const resolved = await resolveWalkPattern(pattern, plan.cwd, fs, signal, maxDepth);
+        if (resolved) walkPatterns.push(resolved);
+      }
     signal.throwIfAborted();
-    const matches = (entry: GlobEntry): boolean =>
-      (!(options.onlyFiles ?? true) || entry.dirent.isFile()) &&
-      walkPatterns.some(
-        (pattern) =>
-          (!pattern.directoryOnly || entry.dirent.isDirectory()) &&
-          matchesWalkPattern(toPosixPath(relative(plan.cwd, entry.path)), pattern),
-      );
+    // Cache only a small bounded set; variants beyond it remain lazy and are
+    // governed by cancellation, not a silently truncated alternative list.
+    const cache = new Map<string, WalkPattern | null>();
+    let cacheChars = 0;
+    async function* queryPatterns(name?: string): AsyncGenerator<WalkPattern> {
+      if (!variants) {
+        yield* walkPatterns;
+        return;
+      }
+      for (const source of variants)
+        for await (const expanded of source(name)) {
+          signal.throwIfAborted();
+          // Alternatives must not reinterpret an absolute/traversal path as a
+          // relative one when normalizing dots or separators.
+          if (!isSafeGlobSyntax(expanded)) continue;
+          const pattern = normalizeWalkPattern(expanded);
+          signal.throwIfAborted();
+          let resolved = cache.get(pattern);
+          if (!cache.has(pattern)) {
+            const depth = pattern.includes('**') ? 100 : pattern.split(SEP).length - 1;
+            resolved = await resolveWalkPattern(
+              pattern,
+              plan.cwd,
+              fs,
+              signal,
+              Math.min(maxDepth, depth),
+            );
+            const chars =
+              pattern.length + (resolved ? resolved.prefix.length + resolved.remainder.length : 0);
+            if (cache.size < 128 && cacheChars + chars <= 32768) {
+              cache.set(pattern, resolved);
+              cacheChars += chars;
+            }
+          }
+          if (resolved) yield resolved;
+        }
+      signal.throwIfAborted();
+    }
+    const matchesPattern = (entry: GlobEntry, pattern: WalkPattern): boolean =>
+      (!pattern.directoryOnly || entry.dirent.isDirectory()) &&
+      matchesWalkPattern(toPosixPath(relative(plan.cwd, entry.path)), pattern);
+    const matches = async (entry: GlobEntry): Promise<boolean> => {
+      if ((options.onlyFiles ?? true) && !entry.dirent.isFile()) return false;
+      if (!variants && walkPatterns.some((pattern) => matchesPattern(entry, pattern))) return true;
+      for await (const pattern of queryPatterns(basename(entry.path))) {
+        if (
+          matchesPattern(entry, pattern) ||
+          (await matchesFiniteLiteralPath(entry, pattern, plan.cwd, fs, signal))
+        )
+          return true;
+      }
+      return false;
+    };
     const entries = walkListEntries({
       fs: options.fs,
       root: plan.cwd,
@@ -497,34 +577,36 @@ export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<
       signal,
       ...(options.onInaccessible
         ? {
-            onInaccessible: (entry: GlobEntry) => {
-              if (matches(entry)) options.onInaccessible?.();
+            onInaccessible: async (entry: GlobEntry) => {
+              if (await matches(entry)) options.onInaccessible?.();
             },
           }
         : {}),
-      shouldDescend: (path) => {
+      shouldDescend: async (path) => {
         const rel = toPosixPath(relative(plan.cwd, path));
-        return walkPatterns.some(
-          ({ prefix }) =>
-            !prefix ||
-            prefix === rel ||
-            prefix.startsWith(`${rel}/`) ||
-            rel.startsWith(`${prefix}/`),
-        );
+        const depth = rel.split(SEP).length;
+        if (
+          common?.prefix &&
+          common.prefix !== rel &&
+          !common.prefix.startsWith(`${rel}/`) &&
+          !rel.startsWith(`${common.prefix}/`)
+        )
+          return false;
+        for await (const { prefix, maxDepth: branchDepth } of queryPatterns())
+          if (
+            depth <= branchDepth &&
+            (!prefix ||
+              prefix === rel ||
+              prefix.startsWith(`${rel}/`) ||
+              rel.startsWith(`${prefix}/`))
+          )
+            return true;
+        return false;
       },
     });
     for await (const entry of entries) {
       signal.throwIfAborted();
-      if (matches(entry)) {
-        yield entry;
-      } else if (!(options.onlyFiles ?? true) || entry.dirent.isFile()) {
-        for (const pattern of walkPatterns) {
-          if (await matchesFiniteLiteralPath(entry, pattern, plan.cwd, options.fs, signal)) {
-            yield entry;
-            break;
-          }
-        }
-      }
+      if (await matches(entry)) yield entry;
     }
     signal.throwIfAborted();
     return;

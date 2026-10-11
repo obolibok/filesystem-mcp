@@ -16,9 +16,9 @@ interface WalkOptions {
   readonly includeIgnored: boolean;
   readonly signal: AbortSignal;
   /** Search counters; list retains its existing best-effort accessibility policy. */
-  readonly onInaccessible?: (entry: GlobEntry) => void;
+  readonly onInaccessible?: (entry: GlobEntry) => void | Promise<void>;
   /** Optional query pruning; source policy has already accepted this directory. */
-  readonly shouldDescend?: (path: string) => boolean;
+  readonly shouldDescend?: (path: string) => boolean | Promise<boolean>;
 }
 
 async function loadIgnoreRules(
@@ -89,7 +89,7 @@ export async function* walkListEntries(options: WalkOptions): AsyncGenerator<Glo
         const accessible = await fs.pathGuard.isEntryAccessible(entryPath, signal);
         signal.throwIfAborted();
         if (!accessible) {
-          if (dirent.isFile()) options.onInaccessible?.({ path: entryPath, dirent });
+          if (dirent.isFile()) await options.onInaccessible?.({ path: entryPath, dirent });
           continue;
         }
         yield { path: entryPath, dirent };
@@ -98,7 +98,7 @@ export async function* walkListEntries(options: WalkOptions): AsyncGenerator<Glo
           dirent.isDirectory() &&
           !dirent.isSymbolicLink() &&
           depth < options.maxDepth &&
-          (options.shouldDescend?.(entryPath) ?? true)
+          ((await options.shouldDescend?.(entryPath)) ?? true)
         ) {
           yield* visit(entryPath, depth + 1);
         }

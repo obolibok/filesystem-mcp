@@ -175,6 +175,98 @@ Windows skips прежние: 3 POSIX-only и 5 file-symlink permissions. Linux 
 два Windows-only search alias cases; настоящий configured root junction list case
 выполнен. Linux CI и целевой клиент этой локальной проверкой не заменяются.
 
+## R3: brace alternatives после второго review
+
+Прочитан `2591748e:docs/testing/011-review-r2-2026-10-11.md`; immutable reviewed
+head — `f5315d0ba09b3961c80dfccfc4087f3b93a9323a`. Настоящий MCP comparison с
+сохранённым compiled runtime этого head, synthetic Wanted/a.txt и
+Wanted/nested/b.txt (token), Else отсутствует. Explicit root, includeHidden=false,
+includeIgnored=true, остальные default; у text searchPattern=token:
+
+| Pattern                   | Reviewed head, оба tools | R3, оба tools |
+| ------------------------- | ------------------------ | ------------- |
+| `{Wanted,Else}/*.txt`     | Wanted/a.txt             | Wanted/a.txt  |
+| `{wanted,Else}/*.txt`     | Пусто, truncated=false   | Wanted/a.txt  |
+| `{./Wanted,./Else}/*.txt` | Пусто, truncated=false   | Wanted/a.txt  |
+
+Сверка native glob canonical paths также подтвердила slash/dot alternatives
+`Wanted/{./a,./nested/b}.txt`: новая выдача — a.txt и nested/b.txt.
+Новая постоянная MCP matrix покрывает nested braces, overlapping alternatives,
+Cartesian filename choices, slash-containing branches, non-choice literal braces,
+extglob и literal-after-globstar controls. Canonical results сравниваются с native
+`fs.promises.glob`; file identity не дублируется при overlapping alternatives.
+В Linux те же tests используют настоящую case-sensitive `/tmp`, включая разные
+spelling parent/filename и uppercase длинный product filename.
+
+`src/core/brace-pattern.ts` хранит input slices и sequence/choice nodes; явный DFS
+выдаёт один вариант за раз. Cartesian list не создаётся; поддержка не обрезается
+числом cached plans. Parser/DFS проверяют signal и отдают event loop каждые 256
+work units, в том числе без filesystem matches. Существующие публичные 1000 chars
+и запрет ranges с `..` сохраняются. Внутренний guard на 65536 UTF-16 units повторяет
+прежний предел Node matcher. Parser сохраняет Node comma/nested/non-choice brace
+semantics; ranges не стали новым capability. Runtime не зависит от Node internals:
+508 коротких expressions сверены с bundled Node braceExpand только в scratch oracle.
+
+Hidden patterns создаются по прежней политике **перед** brace expansion. Каждый
+expanded relative pattern нормализуется, проходит PathGuard no-follow/literal
+resolution и отдельный depth cutoff. Unsafe absolute/traversal expansions не
+переинтерпретируются как relative source paths. Common canonical literal prefix
+позволяет сразу отсеять unrelated directories. Cache ограничен 128 entries и
+32768 суммой lengths key+prefix+remainder (UTF-16 units); его заполнение не
+останавливает дальнейший lazy search. Async callbacks walker не меняют list depth,
+source policy или ownership directory handles.
+
+Для long literal ASCII basename alternatives с минимальной длиной больше 12
+characters применяется только prefix candidate pruning: такой basename не может
+быть DOS 8.3 alias. Case-neutral comparison здесь сохраняет возможные candidates;
+окончательно spelling/case/alias принимает filesystem через guarded lookup.
+Short names, Unicode и wildcard expressions используют общий lazy путь.
+Это устраняет перебор `2^25` неподходящих filenames перед нужным файлом при другом
+порядке Dirents. Uppercase product на Windows совпадает с filesystem lookup,
+на case-sensitive Linux остаётся полным пустым результатом, без ложного nocase match.
+
+Фактические открывания/чтения проверены на depth 0/1/2, limit 1/100, смешанных
+shallow/deep branches и overlapping patterns. После N нет directory read/content
+read следующего файла, все directory/rule handles закрыты. Дословный Next page
+содержит оригинальное brace expression, выдаёт cached rows без обхода, сохраняет
+partial warning; перестановка alternatives меняет query identity и отклоняет cursor.
+Ignore/hidden/sensitive branches и skip accounting проверены явно. Windows fixture
+включает brace patterns с настоящими 8.3 directory/file aliases и junction branch;
+no-follow и игнорируемый literal logfile сохранены.
+
+Отдельный stress case: первое совпадение среди `2^25` filename combinations при
+постороннем файле и unrelated subtree; отдельная 193-я alternative доступна после
+заполнения кэша. Cancellation event gates проверяют parsing, CPU-only unmatched
+enumeration и guarded prefix resolution у обоих core consumers. Ноль matches,
+timeout/truncated=true, ноль content reads, все открытые handles закрыты.
+
+Те же Windows targeted/full/8.3 и compiled Linux команды из предыдущих разделов:
+
+| Проверка                        | Итог                                                  |
+| ------------------------------- | ----------------------------------------------------- |
+| R3 MCP/cancellation cases       | PASS: 4 tests, 4 pass, 0 fail, 0 skips                |
+| Windows targeted suites         | PASS: 169 tests, 163 pass, 0 fail, 6 skips            |
+| Actual 8.3 TEMP search + list   | PASS: 37 tests, 37 pass, 0 fail, 0 skips              |
+| Windows npm run check           | PASS: static + 480 tests, 472 pass, 0 fail, 8 skips   |
+| Linux search + list, WSL Ubuntu | PASS: 37 tests, 35 pass, 0 fail, 2 Windows-only skips |
+
+Промежуточные failures не скрыты: test inputs с pipe и длинным списком имён
+превышали существующую validation; исправлены fixtures, policy не ослаблена.
+Расширенная matrix выявила non-choice brace behavior, исправлен parser.
+Первый Linux run дал **34 pass / 1 fail / 2 skips**: порядок файлов заставлял
+product query исчерпать deadline на неподходящем файле. Добавлены guarded common
+prefix и безопасное long-name candidate pruning; повтор проверяет изменённый код.
+Первый и финальный R3 Windows full check PASS, известный cleanup flake не проявился;
+исторический R1/R2 failure остаётся в протоколе и follow-up не объявлен исправленным.
+Skips, Node v24.15.0 / npm 11.12.1 и локальный Linux runtime профили прежние.
+Версии/dependencies/wire schemas и budgets прежние; 012/board/service/portable не
+менялись. Live matrix ниже остаётся NOT RUN; Linux CI не заявлен.
+
+Ограничение сохраняется: match limit не ограничивает число branch checks/OS calls.
+Сложный отрицательный, Unicode или wildcard expression может уйти в deadline;
+в таком случае выдача явная partial timeout/error. В памяти нет полного Cartesian
+списка, и cancellation продолжает наблюдаться во всех ветвях планирования/обхода.
+
 ## Короткая целевая live-матрица
 
 Это следующий опыт планирования после review; локальный SDK не доказывает

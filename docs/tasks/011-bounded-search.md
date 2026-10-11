@@ -160,7 +160,7 @@ base/head/branch, проверками и ready for review; review не подм
 
 ## Work record
 
-Реализация завершена 11.10.2026; после исправления R1/R2 состояние:
+Реализация завершена 11.10.2026; после исправления R1/R2/R3 состояние:
 **ready for repeat review**.
 Проверки и короткая live-матрица: [протокол 011](../testing/011-bounded-search.md).
 
@@ -253,3 +253,49 @@ immutable reviewed head `7cbd14420e93b2e91e6da336a7f63c58ae7b32ab`. Исправ
   accounting и finite matching. Остальные ограничения/live NOT RUN сохранены.
   Scope локального revision: `src/core/glob.ts`, search regressions, этот record
   и protocol. Файлы 012, portable/установленный сервис, push/PR/merge не затрагивались.
+
+### R3 после второго review
+
+Прочитан `2591748e:docs/testing/011-review-r2-2026-10-11.md`; reviewed head —
+`f5315d0ba09b3961c80dfccfc4087f3b93a9323a`. Собственное сравнение настоящего MCP
+с сохранённым compiled runtime этого head воспроизвело обе потери результатов:
+`{wanted,Else}/*.txt` и `{./Wanted,./Else}/*.txt`, exact-case control работал.
+Ветка/worktree прежние; planning commit не переносился.
+
+- R3: comma brace alternatives представлены компактным деревом исходных slices;
+  iterator лениво выдаёт варианты без Cartesian array. Hidden expansion сохраняет
+  прежний порядок до brace expansion. Каждая безопасная relative ветвь проходит
+  dot normalization, guarded literal resolution, Node matching и свой depth cutoff.
+  Общий canonical literal prefix отсекает посторонние каталоги; одно дерево обходится
+  один раз, overlapping alternatives не дублируют file/match rows. Optional callbacks
+  общего walker поддерживают async pruning/accessibility accounting; list семантика
+  сохранена. Новые dependencies, поля/лимиты публичного API не вводились.
+- Память планирования ограничена входным выражением (wire max 1000 chars) и кэшем
+  не более 128 plans / 32768 суммарных key+prefix+remainder UTF-16 chars. Кэш не
+  обрезает поддержку alternatives. Parsing/DFS регулярно возвращают event loop
+  и проверяют abort; нет предварительного раскрытия списка перед collect limit.
+  Для длинных literal ASCII basenames, которые не могут быть 8.3 names, отсеиваются
+  заведомо невозможные prefix branches. Это только candidate pruning; case и alias
+  acceptance по-прежнему выполняет filesystem/PathGuard. Short, Unicode и wildcard
+  cases не получают этой оптимизации. Общий nocase matcher не вводился.
+- Постоянные regressions обоих MCP tools: две failing patterns, exact/case controls,
+  nested/overlapping/product braces, slash/dot внутри alternatives, literal filenames,
+  native globstar/extglob semantics, no-follow/8.3/source ignore/hidden/sensitive,
+  depth/limit/real reads/closes, literal continuation и cursor mismatch. Product
+  `2^25` возвращает первое совпадение с посторонними файлами/каталогами, поздняя
+  193-я alternative работает после заполнения кэша. Uppercase product сохраняет
+  case-sensitive filesystem semantics. Отмена parsing, unmatched enumeration и
+  guarded prefix resolution оставляет ноль matches и закрывает все handles.
+- Окончательные проверки: targeted command из протокола — **169 tests,
+  163 pass / 0 fail / 6 skips**; `npm run check` — static PASS, **480 tests /
+  69 suites, 472 pass / 0 fail / 8 skips**; настоящий 8.3 TEMP launcher —
+  **37 / 0 / 0**; Linux Node v24.15.0, WSL `/tmp` — **35 / 0 / 2**, 37 tests.
+  Дополнительная scratch-only сверка 508 коротких expressions с Node brace grammar
+  PASS; internals используются только в oracle, не в runtime/dependencies/tests.
+  Промежуточный Linux run выявил timeout product query при другом порядке файлов
+  (**34 / 1 / 2**); проблема исправлена pruning, не повтором неизменённого кода.
+- Known snapshot cleanup flake остаётся follow-up, при R3 full checks не проявился.
+  Обновлён protocol; scope revision — brace helper, glob/walker, search regressions
+  и два собственных документа. Board/012/service/portable/push/merge не менялись.
+  Состояние **ready for repeat review**; актуальный local commit SHA передаётся
+  в handoff, без self-SHA в этом record.

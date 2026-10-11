@@ -433,6 +433,259 @@ it('initial literal prefix and filename lookup follows filesystem case while wil
   }
 });
 
+it('brace alternatives preserve native dot/case/literal semantics through both MCP searches', async (t) => {
+  const root = await fixture(t);
+  for (const file of [
+    'Wanted/a.txt',
+    'Wanted/nested/b.txt',
+    '{Wanted}/literal.txt',
+    'Foo{bar}{a,b}/literal.txt',
+  ])
+    await writeTestFile(root, file, 'token');
+  const pair = await createTestClientPair([root]);
+  t.after(() => pair.close());
+  for (const pattern of [
+    '{Wanted,Else}/*.txt',
+    '{wanted,Else}/*.txt',
+    '{./Wanted,./Else}/*.txt',
+    '{Wanted/nested,Else/deep}/*.txt',
+    '{wanted/NESTED,Else/deep}/b.TXT',
+    '{Else,{wanted,Wanted}}/*.txt',
+    '{Wanted,Wanted}/*.txt',
+    'Wanted/{./a,./nested/b}.txt',
+    '{Wanted,Else}/{A,b}.txt',
+    'Wanted/{,a}.txt',
+    '{Wanted,Else}/@(a).txt',
+    '**/{Wanted,Else}/*.txt',
+    '**/{wanted,Else}/*.txt',
+    '{{Wanted,Else}}/*.txt',
+    '{{wanted,Else}}/literal.TXT',
+    'foo{bar}{a,b}/literal.TXT',
+  ]) {
+    const expected = new Set<string>();
+    for await (const file of fsPromises.glob(pattern, { cwd: root }))
+      expected.add(
+        relative(root, await fsPromises.realpath(join(root, file))).replaceAll('\\', '/'),
+      );
+    for (const name of tools) {
+      const response = await pair.client.callTool({
+        name,
+        arguments: { ...query(name, root), pattern, includeIgnored: true },
+      });
+      assert.notEqual(response.isError, true, firstTextBlock(response).text);
+      const meta = response._meta as unknown as SearchMeta;
+      assert.deepEqual(paths(meta).sort(), [...expected].sort(), `${name}: ${pattern}`);
+      assert.equal(meta.truncated, false);
+    }
+  }
+});
+
+it('brace branch depth/collect pruning bounds real reads and literal continuation keeps the original query', async (t) => {
+  const root = await fixture(t);
+  for (const file of [
+    'Wanted/a.txt',
+    'Wanted/c.txt',
+    'Wanted/nested/b.txt',
+    'Unrelated/deep/x.txt',
+  ])
+    await writeTestFile(root, file, 'token');
+  await writeTestFile(root, 'Wanted/.gitignore', '*.log\n');
+  await writeTestFile(root, 'Wanted/ignored.log', 'token');
+  await writeTestFile(root, 'Wanted/.hidden.txt', 'token');
+  await writeTestFile(root, 'Wanted/.env', 'token');
+  await writeTestFile(root, 'Wanted/nested/deeper/no.txt', 'token');
+  const pair = await createTestClientPair([root]);
+  t.after(() => pair.close());
+  const readNames: (string | null)[] = [];
+  const observed = observe(t, root, (entry) => {
+    readNames.push(entry?.name ?? null);
+  });
+  for (const name of tools)
+    for (const pattern of [
+      '{Wanted,Else/deep}/*.txt',
+      '{./Wanted,./Else}/*.txt',
+      '{Wanted,./Wanted}/**/*.txt',
+    ])
+      for (const maxDepth of [0, 1, 2])
+        for (const limit of [1, 100]) {
+          observed.opened.length =
+            observed.ignoreReads.length =
+            observed.textReads.length =
+            readNames.length =
+              0;
+          const before = observed.counts();
+          const response = await pair.client.callTool({
+            name,
+            arguments: { ...query(name, root), pattern, maxDepth, limit },
+          });
+          assert.notEqual(response.isError, true, firstTextBlock(response).text);
+          const meta = response._meta as unknown as SearchMeta;
+          const count = maxDepth === 0 ? 0 : 2 + (maxDepth === 2 && pattern.includes('**') ? 1 : 0);
+          assert.equal(meta.totalMatches, Math.min(count, limit));
+          assert.equal(meta.truncated, count > 0 && limit === 1);
+          assert(observed.opened.every((p) => !p.startsWith('Unrelated') && !p.includes('deeper')));
+          assert(observed.opened.every((p) => p === '' || p.split('/').length <= maxDepth));
+          if (!pattern.includes('**')) assert(observed.opened.every((p) => p !== 'Wanted/nested'));
+          assert.equal(observed.ignoreReads.length, observed.opened.length);
+          assert.equal(observed.counts().closes - before.closes, observed.opened.length);
+          assert.equal(observed.textReads.length, name === 'search_text' ? meta.totalMatches : 0);
+          if (limit === 1 && count > 0)
+            assert(readNames.at(-1)?.endsWith('.txt'), 'no read after N');
+        }
+  for (const name of tools) {
+    for (const includeIgnored of [false, true]) {
+      const response = await pair.client.callTool({
+        name,
+        arguments: { ...query(name, root), pattern: '{Wanted,Else}/*', includeIgnored },
+      });
+      assert.notEqual(response.isError, true, firstTextBlock(response).text);
+      assert.deepEqual(paths(response._meta as unknown as SearchMeta), [
+        'Wanted/a.txt',
+        'Wanted/c.txt',
+        ...(includeIgnored ? ['Wanted/ignored.log'] : []),
+      ]);
+    }
+    const sensitive = await pair.client.callTool({
+      name,
+      arguments: {
+        ...query(name, root),
+        pattern: '{Wanted,Else}/{a.txt,.env}',
+        includeHidden: true,
+      },
+    });
+    assert.notEqual(sensitive.isError, true, firstTextBlock(sensitive).text);
+    const sensitiveMeta = sensitive._meta as unknown as SearchMeta;
+    assert.deepEqual(paths(sensitiveMeta), ['Wanted/a.txt']);
+    assert.equal(sensitiveMeta.skippedInaccessible, 1);
+    for (const includeHidden of [false, true]) {
+      const hidden = await pair.client.callTool({
+        name,
+        arguments: { ...query(name, root), pattern: '{Wanted,Else}/.*.txt', includeHidden },
+      });
+      assert.notEqual(hidden.isError, true, firstTextBlock(hidden).text);
+      assert.deepEqual(
+        paths(hidden._meta as unknown as SearchMeta),
+        includeHidden ? ['Wanted/.hidden.txt'] : [],
+      );
+    }
+    const pattern = '{./Wanted,./Else}/**/*.txt';
+    const first = await pair.client.callTool({
+      name,
+      arguments: { ...query(name, root), pattern, limit: 2, pageSize: 1 },
+    });
+    const before = observed.counts();
+    const next = continuation(firstTextBlock(first).text, name);
+    assert.equal(next['pattern'], pattern);
+    const last = await pair.client.callTool({ name, arguments: next });
+    assert.notEqual(last.isError, true, firstTextBlock(last).text);
+    const firstMeta = first._meta as unknown as SearchMeta;
+    const lastMeta = last._meta as unknown as SearchMeta;
+    assert.equal(new Set([...paths(firstMeta), ...paths(lastMeta)]).size, 2);
+    assert.equal(lastMeta.truncated, true);
+    assert.equal(lastMeta.stoppedReason, 'limit');
+    assert.equal(lastMeta.nextCursor, undefined);
+    assert.deepEqual(observed.counts(), before);
+    const mismatch = await pair.client.callTool({
+      name,
+      arguments: { ...next, pattern: '{./Else,./Wanted}/**/*.txt' },
+    });
+    assert.equal(mismatch.isError, true);
+    assert.match(firstTextBlock(mismatch).text ?? '', /Invalid cursor/u);
+  }
+});
+
+it('brace Cartesian queries stay lazy and alternatives beyond the bounded cache remain searchable', async (t) => {
+  const root = await fixture(t);
+  await writeTestFile(root, `Wanted/${'a'.repeat(25)}.txt`, 'token');
+  await writeTestFile(root, 'Wanted/last.txt', 'token');
+  await writeTestFile(root, 'Unrelated/no.txt', 'token');
+  const pair = await createTestClientPair([root]);
+  t.after(() => pair.close());
+  const observed = observe(t, root);
+  const late = [...Array.from({ length: 192 }, (_, i) => `m${i.toString(36)}`), 'last'].join(',');
+  const uppercase = await fsPromises.realpath(join(root, 'Wanted', `${'A'.repeat(25)}.txt`)).then(
+    () => [`Wanted/${'a'.repeat(25)}.txt`],
+    () => [],
+  );
+  for (const [pattern, expected] of [
+    [`Wanted/${'{a,b}'.repeat(25)}.txt`, [`Wanted/${'a'.repeat(25)}.txt`]],
+    [`Wanted/${'{A,B}'.repeat(25)}.txt`, uppercase],
+    [`Wanted/{${late}}.txt`, ['Wanted/last.txt']],
+  ] as const)
+    for (const name of tools) {
+      observed.opened.length = observed.textReads.length = 0;
+      const response = await pair.client.callTool({
+        name,
+        arguments: { ...query(name, root), pattern, limit: 1, includeIgnored: true },
+      });
+      assert.notEqual(response.isError, true, firstTextBlock(response).text);
+      const meta = response._meta as unknown as SearchMeta;
+      assert.deepEqual(paths(meta), expected);
+      assert.equal(meta.truncated, expected.length > 0);
+      assert.equal(meta.stoppedReason, expected.length > 0 ? 'limit' : undefined);
+      assert.deepEqual(observed.opened, ['', 'Wanted']);
+      assert.equal(observed.textReads.length, name === 'search_text' ? expected.length : 0);
+    }
+});
+
+it('brace parsing, unmatched enumeration and guarded prefix resolution observe cancellation and close handles', async (t) => {
+  for (const phase of ['parse', 'enumerate', 'resolve'])
+    for (const name of tools) {
+      const root = await fixture(t);
+      await writeTestFile(root, 'Wanted/a.txt', 'token');
+      const controller = new AbortController();
+      const observed = observe(t, root, (entry) => {
+        if (phase === 'enumerate' && entry?.name === 'a.txt')
+          setImmediate(() =>
+            controller.abort(new DOMException('brace enumeration cancel', 'AbortError')),
+          );
+      });
+      const guard = await makeGuard([root]);
+      let resolutions = 0;
+      if (phase === 'resolve') {
+        const resolve = guard.validateExistingPathDetailed.bind(guard);
+        t.mock.method(
+          guard,
+          'validateExistingPathDetailed',
+          async (...args: Parameters<typeof resolve>) => {
+            const result = await resolve(...args);
+            if (relative(root, args[0]) === 'Wanted' && ++resolutions === 2)
+              controller.abort(new DOMException('brace prefix cancel', 'AbortError'));
+            return result;
+          },
+        );
+      }
+      if (phase === 'parse')
+        setImmediate(() => controller.abort(new DOMException('brace parse cancel', 'AbortError')));
+      const pattern =
+        phase === 'resolve'
+          ? '{./Wanted,./Else}/*.txt'
+          : `*/${'{a,b}'.repeat(phase === 'parse' ? 175 : 25)}*.missing`;
+      const options = {
+        signal: controller.signal,
+        maxDepth: 5,
+        maxResults: 1,
+        filePattern: pattern,
+      };
+      const result =
+        name === 'find_files'
+          ? await searchFiles(root, pattern, options, guard)
+          : await searchContent(root, 'token', options, guard);
+      assert.equal(result.summary.stoppedReason, 'timeout', `${name}: ${phase}`);
+      assert.equal(result.summary.truncated, true);
+      assert.equal(result.summary.filesScanned, 0);
+      assert.equal(observed.textReads.length, 0);
+      assert.equal(observed.counts().closes, observed.opened.length);
+      assert.deepEqual(
+        observed.opened,
+        phase === 'parse' ? [] : phase === 'resolve' ? [''] : ['', 'Wanted'],
+      );
+      if (phase === 'resolve') assert.equal(resolutions, 2);
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+});
+
 it(
   'Windows 8.3 aliases inside glob patterns resolve literal directories and filenames without following junctions',
   { skip: process.platform !== 'win32' },
@@ -494,8 +747,27 @@ it(
         `*/${basename(shortFile)}`,
         ['long synthetic pattern directory/long synthetic filename.txt'],
       ],
+      [
+        `{${shortPrefix},Else}/**/*.txt`,
+        [
+          'long synthetic pattern directory/long synthetic filename.txt',
+          'long synthetic pattern directory/nested/second.txt',
+        ],
+      ],
+      [
+        `{./${shortPrefix},./Else}/${basename(shortFile)}`,
+        ['long synthetic pattern directory/long synthetic filename.txt'],
+      ],
+      [
+        `{junction,${shortPrefix}}/**/*.txt`,
+        [
+          'long synthetic pattern directory/long synthetic filename.txt',
+          'long synthetic pattern directory/nested/second.txt',
+        ],
+      ],
       ['junction/**/*.txt', []],
       [`${shortPrefix}/ignored.log`, []],
+      [`{${shortPrefix},Else}/ignored.LOG`, []],
     ] as const)
       for (const name of tools) {
         observed.opened.length = 0;
