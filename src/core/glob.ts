@@ -3,6 +3,8 @@ import { basename, dirname, isAbsolute, join, posix, relative, resolve } from 'n
 
 import { processInParallel } from './concurrency.js';
 import { formatUnknownErrorMessage } from './errors.js';
+import type { GuardedFileSystem } from './fs.js';
+import { walkListEntries } from './list-walk.js';
 import { Logger } from './observability.js';
 import { isWindowsDriveRelativePath } from './path-utils.js';
 import { type DirentLike, toPosixPath } from './primitives.js';
@@ -105,6 +107,9 @@ export interface GlobEntry {
 }
 
 export interface GlobEntriesOptions {
+  /** Guarded bounded walker for read-only searches; legacy replace sweep uses fs.glob. */
+  fs?: GuardedFileSystem;
+  onInaccessible?: () => void;
   cwd: string;
   pattern: string;
   includeHidden?: boolean;
@@ -127,6 +132,8 @@ interface NormalizedGlob {
 }
 
 const GLOB_MAGIC_RE = /[*?[\]{}!]/u;
+// Prefix pruning must also recognize extglobs used in directory segments.
+const PREFIX_MAGIC_RE = /[*?[\]{}!@+()]/u;
 const GLOB_BATCH_CONCURRENCY = 64;
 const SEP = '/';
 const DOT_CHAR_CODE = 46;
@@ -327,6 +334,56 @@ async function* processGlobPattern(
 }
 
 export async function* globEntries(options: GlobEntriesOptions): AsyncGenerator<GlobEntry> {
+  if (options.fs) {
+    const plan = normalizeGlobOptions(options);
+    const signal = options.signal ?? new AbortController().signal;
+    // Without globstar no path can match beyond its slash count. Braces that
+    // contain slashes can overestimate this bound, never underestimate it.
+    const patternDepth = plan.patterns.some((pattern) => pattern.includes('**'))
+      ? 100
+      : Math.max(...plan.patterns.map((pattern) => pattern.split(SEP).length - 1));
+    const prefixes = plan.patterns.map((pattern) => {
+      const segments = pattern.split(SEP);
+      const magic = segments.findIndex((segment) => PREFIX_MAGIC_RE.test(segment));
+      return segments.slice(0, magic < 0 ? -1 : magic).join(SEP);
+    });
+    const matches = (entry: GlobEntry): boolean =>
+      (!(options.onlyFiles ?? true) || entry.dirent.isFile()) &&
+      plan.patterns.some((pattern) =>
+        posix.matchesGlob(toPosixPath(relative(plan.cwd, entry.path)), pattern),
+      );
+    const entries = walkListEntries({
+      fs: options.fs,
+      root: plan.cwd,
+      maxDepth: Math.min(options.maxDepth ?? 100, patternDepth) + 1,
+      includeHidden: options.includeHidden ?? false,
+      includeIgnored: !options.skipIgnored,
+      signal,
+      ...(options.onInaccessible
+        ? {
+            onInaccessible: (entry: GlobEntry) => {
+              if (matches(entry)) options.onInaccessible?.();
+            },
+          }
+        : {}),
+      shouldDescend: (path) => {
+        const rel = toPosixPath(relative(plan.cwd, path));
+        return prefixes.some(
+          (prefix) =>
+            !prefix ||
+            prefix === rel ||
+            prefix.startsWith(`${rel}/`) ||
+            rel.startsWith(`${prefix}/`),
+        );
+      },
+    });
+    for await (const entry of entries) {
+      signal.throwIfAborted();
+      if (matches(entry)) yield entry;
+    }
+    signal.throwIfAborted();
+    return;
+  }
   let gitignoreMatcher: GitignoreManager | null = null;
   if (options.skipIgnored) {
     gitignoreMatcher = await loadRootGitignore(options.cwd, options.signal);

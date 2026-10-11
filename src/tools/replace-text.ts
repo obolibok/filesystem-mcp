@@ -94,7 +94,10 @@ const SearchAndReplaceInputSchema = z.strictObject({
     .max(MAX_SEARCH_RESULTS)
     .optional()
     .describe('Maximum number of files to process'),
-  maxDepth: maxDepthField(),
+  maxDepth: maxDepthField()
+    .unwrap()
+    .optional()
+    .describe('Max directory depth to scan; 0 = base directory only, omit for unlimited'),
 });
 
 const ReplacePerPathSchema = z.strictObject({

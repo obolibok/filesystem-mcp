@@ -1,8 +1,6 @@
 import { basename } from 'node:path';
 import { stripVTControlCharacters, styleText } from 'node:util';
 
-import { MAX_SEARCH_RESULTS } from './util.js';
-
 export interface ProgressCtx {
   label: string;
   subject?: string;
@@ -83,22 +81,15 @@ export function truncateProgressPattern(pattern: string, maxLength = 40): string
   return pattern.length <= maxLength ? pattern : `${pattern.slice(0, maxLength)}…`;
 }
 
-/**
- * `stoppedReason` names the engine's own cap, and `maxResults` is also the name
- * of the caller's page-size argument — spelling the cap out keeps a caller who
- * passed `maxResults: 5` from reading their own argument back.
- */
-const STOP_REASON_TEXT: Record<string, string> = {
-  maxResults: `hit the server's ${String(MAX_SEARCH_RESULTS)}-result scan cap, not your maxResults`,
-  timeout: 'hit the time limit, or the request was cancelled',
-};
-
 /** Put scan incompleteness before rows, where client output clipping cannot hide it. */
-export function scanWarning(stoppedReason: string | undefined): string {
+export function scanWarning(stoppedReason: string | undefined, limit: number): string {
   if (stoppedReason === undefined) return '';
-  const cause = STOP_REASON_TEXT[stoppedReason] ?? `stopped (${stoppedReason})`;
+  const cause =
+    stoppedReason === 'limit'
+      ? `reached limit=${String(limit)}; completeness is unconfirmed`
+      : `hit the time limit, or the request was cancelled (limit=${String(limit)})`;
   return (
-    `// scan stopped early: ${cause}. The collected total is a lower bound on matches in this scope. ` +
+    `// scan stopped early: ${cause}. Totals count collected matches only, a lower bound in this scope. ` +
     'Cursors page only collected results; they do not resume the scan. Narrow path or pattern for the rest.\n\n'
   );
 }

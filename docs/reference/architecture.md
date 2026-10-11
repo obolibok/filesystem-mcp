@@ -70,12 +70,39 @@ Tool descriptions фиксируют то же правило.
 источники только читаются, служебное состояние/scratch меняются под прежними
 ограничениями policy/quota/deadline. Отдельного counting tool или режима нет.
 
-`find_files.maxResults` задаёт page size; сервер собирает не более 10000 matches
-за один scan. Cursor перелистывает уже собранный набор и не продолжает обход
-после cap/timeout. Предупреждение об остановке теперь стоит перед путями на каждой
-странице, включая последнюю; page trailer отдельно сообщает позицию и cursor.
-Тот же порядок действует для `search_text`, без перенаправления content search
-на metadata snapshot. Results, относительные paths, resource и metadata сохраняются.
+`find_files` и `search_text` принимают `limit` (default/cap 10000) и `pageSize`
+(defaults 100/500, cap 10000), оба в диапазоне 1..10000. `maxResults` удалён
+без alias; validation направляет к новым полям. Limit считает файлы / совпавшие
+строки: occurrences (`matchCount`) и context не расходуют дополнительные единицы.
+На N-м результате сбор останавливается без look-ahead. `stoppedReason=limit`
+консервативно сообщает неподтверждённую полноту даже при exact N; `timeout` означает
+частичный результат после deadline/cancel. Explicit TIMEOUT/CANCELLED также допустим.
+`limit`, `truncated`, counters и stoppedReason одинаковы в `_meta` и JSON resource.
+Оба JSON resources содержат объект результата с полным собранным массивом;
+find_files больше не externalizes только массив без metadata.
+
+Поиск использует bounded guarded ветку `globEntries` и walker 010, с Node
+`path.matchesGlob` и прежним раскрытием hidden patterns. `maxDepth=0/1/2`
+открывает root / также детей / также внуков; default/cap 100. `.gitignore` читается
+только в открытом каталоге; предварительного recursive discovery нет. Hidden,
+default exclusions, nested ignore/negation, PathGuard и no-follow при descent
+сохранены. List по-прежнему считает глубину с 1; replace_text сохраняет свой
+отдельный контракт и прежнюю ветку glob. Отмена проверяется перед/после I/O,
+в filtering и line loops; поздние handles закрываются. Неотменяемый OS I/O
+не прерывается принудительно. Ошибка directory traversal — explicit tool error;
+best-effort чтение ignore rules сохраняет log warning.
+
+Сортируется собранный набор, а не глобально первые N во всём дереве. Limit не
+ограничивает просмотренные файлы/OS calls; редкий pattern может потребовать долгого
+обхода в пределах depth/deadline. Явный file path в search_text читает ровно этот
+файл, включая glob metacharacters в его имени, независимо от directory filters.
+Cursor перелистывает собранный набор и не продолжает обход после limit/timeout.
+Перед rows каждой частичной страницы, включая последнюю, стоит warning с effective
+limit и смыслом totals. Next page — полный исполняемый JSON с path, filters,
+limit, pageSize и cursor. Identity включает effective scope и все query options
+кроме pageSize: его можно менять. Без cursor выполняется новый scan; TTL/stores
+не изменились. [Протокол и live-матрица 011](../testing/011-bounded-search.md)
+различают локальные wire проверки и ещё не выполненный целевой ChatGPT опыт.
 
 `job_status` сохраняет JSON text и `structuredContent`. Во время queued/running
 counters являются progress; даже `complete=true` в это время не доказывает завершение.

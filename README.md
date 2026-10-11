@@ -212,11 +212,11 @@ All tools are scoped to the configured roots. Call `list_roots` first to discove
 
 #### Navigate
 
-| Tool         | Description                                                                            |
-| :----------- | :------------------------------------------------------------------------------------- |
-| `list_roots` | List allowed workspace roots. Call this first — all other tools scope to these.        |
-| `list`       | List directory contents. Returns entries (dirs-first, alphabetical) and an ASCII tree. |
-| `find_files` | Find files by glob pattern (e.g. `**/*.ts`). Returns matching files with metadata.     |
+| Tool         | Description                                                                                 |
+| :----------- | :------------------------------------------------------------------------------------------ |
+| `list_roots` | List allowed workspace roots. Call this first — all other tools scope to these.             |
+| `list`       | List directory contents. Returns entries (dirs-first, alphabetical) and an ASCII tree.      |
+| `find_files` | Find file paths by glob pattern (e.g. `**/*.ts`), with separate collection and page limits. |
 
 `list` uses `maxDepth` to bound actual traversal (default 1: only this folder's
 children). `limit` caps collected entries across every page, including files,
@@ -258,6 +258,40 @@ node --test --import tsx __tests__/list-bounded.test.ts
 | `stat`        | Get file/directory metadata: size, modified time, permissions, MIME type, token estimate.       |
 | `search_text` | Search UTF-8 file contents (grep-like). Binary/unsupported encodings are skipped with counters. |
 | `diff`        | Compare two files and return a unified diff with added/removed line counts.                     |
+
+`find_files` and `search_text` use `limit` for collection across all pages
+(default/cap 10000; range 1–10000) and `pageSize` for one response (defaults
+100/500; range 1–10000). `maxResults` is removed without an alias. Limit counts
+files for find_files and matching lines for search_text; multiple occurrences
+and context do not consume extra units. `maxDepth` bounds actual directory
+enumeration, including ignore rules: 0 = base directory only, 1 = one level of
+subdirectories, default/cap 100. Hidden and ignored items stay excluded by
+default. An explicit search_text file path searches that one file, including
+literal glob characters in its name, regardless of directory pattern/filters.
+
+For example, call find_files with
+`{"path":"/workspace","pattern":"**/*.txt","maxDepth":1,"limit":30,"pageSize":10}`
+or search_text with
+`{"path":"/workspace","pattern":"**/*.txt","searchPattern":"TODO","limit":100,"pageSize":25,"context":1}`.
+Execute the complete JSON after `Next page: <tool>` in the response; it repeats
+the path, query, filters, limit and pageSize with the next cursor. Only pageSize
+may change. Cursors page the collected set, expire after about 60 seconds, and
+never continue a stopped traversal. Calling again without a cursor runs a new scan.
+
+The scan stops on the limit-th match without reading ahead. Even exactly limit
+matches have `truncated=true`, `stoppedReason="limit"`: completeness is unconfirmed.
+Every partial page, including the last, warns before its rows. Totals count
+collected matches only; `_meta` and the first-page JSON resource carry the same
+effective limit, counters and stop state. Results are sorted within the collected
+subset, not globally first N. Sparse/no-match patterns can still require many
+files or OS calls; depth and cooperative cancellation bound that work. A deadline
+or cancellation produces a visible partial `stoppedReason="timeout"` result or an
+explicit error. Native I/O cannot be forcibly interrupted; eventual handles close.
+Use snapshot for a recursive inventory or file total.
+
+```bash
+node --test --import tsx __tests__/search-bounded.test.ts
+```
 
 #### Read
 
@@ -493,7 +527,7 @@ Flags take precedence when both are set.
 | `FS_MAX_REQUEST_BYTES`               | Max HTTP request body bytes (default 4194304, 1024–268435456).                                                                                                                                              |
 | `FS_KEEPALIVE_TIMEOUT_MS`            | HTTP keep-alive timeout in ms; set above any fronting proxy's idle timeout (default 5000, 1000–600000).                                                                                                     |
 | `FS_MAX_WATCHERS`                    | Max concurrent file watchers (default 256, 1–4096).                                                                                                                                                         |
-| `FS_MAX_INLINE_MATCHES`              | Deprecated and ignored; `maxResults` sets the `search_text` page size. Logs a warning when set; removed in the next major.                                                                                  |
+| `FS_MAX_INLINE_MATCHES`              | Deprecated and ignored; `pageSize` sets the `search_text` page size; `limit` caps collected matching lines. Logs a warning when set; removed in the next major.                                             |
 | `FS_MAX_READ_MANY_BYTES`             | Max total bytes across a batched `read` (default 524288, 10240–104857600).                                                                                                                                  |
 | `FS_SEARCH_TIMEOUT_MS`               | Search timeout in ms (default 5000, 100–60000).                                                                                                                                                             |
 | `FS_SNAPSHOT_DIR`                    | Durable job/artifact scratch directory; default is `filesystem-mcp-snapshot-v1` under the system temp directory. Keep separate from source roots and assign only one server process to a scratch directory. |
