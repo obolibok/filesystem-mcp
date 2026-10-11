@@ -20,8 +20,8 @@
 | 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)      | done     | 007 runtime        | Принята через [PR #7](https://github.com/obolibok/filesystem-mcp/pull/7); review, portable, live/restart и CI PASS                |
 | 009          | [Выбор инструментов и понятные результаты](../tasks/009-tool-selection.md)          | done     | 007, 008           | Принята через [PR #8](https://github.com/obolibok/filesystem-mcp/pull/8); review и CI PASS; пользователь принял live              |
 | 010          | [Ограниченный list и ясные лимиты](../tasks/010-bounded-list.md)                    | done     | 009                | Принята пользователем; R1–R3, local/CI/portable PASS; интегрирована через PR #9                                                   |
-| 011          | [Ограниченный поиск и пагинация](../tasks/011-bounded-search.md)                    | active   | 010, triage        | `011 — Ограниченный поиск и пагинация`; `codex/011-bounded-search`; R1/R2 переданы исполнителю; исправления                               |
-| 012          | [Память и TTL пагинации](../tasks/012-pagination-memory-study.md)                   | active   | 010, triage        | `012 — Память и TTL пагинации`; `codex/012-pagination-memory-study`; R1/R2 переданы исполнителю; исправления                              |
+| 011          | [Ограниченный поиск и пагинация](../tasks/011-bounded-search.md)                    | active   | 010, triage        | `011 — Ограниченный поиск и пагинация`; `codex/011-bounded-search`; review f5315d0b: R1/R2 cases PASS; R3 changes requested |
+| 012          | [Память и TTL пагинации](../tasks/012-pagination-memory-study.md)                   | review   | 010, triage        | `012 — Память и TTL пагинации`; `codex/012-pagination-memory-study`; review 160e0c45 PASS; R1/R2 закрыты, ожидает интеграции |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -32,23 +32,25 @@
 
 ## Текущий следующий шаг
 
-Оба результата проверены 11.10.2026, **changes requested**:
+Повторное review 11.10.2026 завершено:
 
-- [011 review](../testing/011-review-2026-10-11.md), head `7cbd1442`: R1 leading
-  `./` glob prefix, R2 Windows case spelling приводят к пустому полному ответу.
-  Независимый полный check 465/0/8; regression probes воспроизводят оба дефекта.
-- [012 review](../testing/012-review-2026-10-11.md), head `b2b83fa7`: R1 неверный
-  default search_text и недостающий default workload, R2 harness не фиксирует
-  scan truncation/stop state. Smoke, real TTL и предварительный post-011 PASS;
-  независимые default/partial probes подтверждают замечания.
+- [011 review R2](../testing/011-review-r2-2026-10-11.md), head `f5315d0b`:
+  исходные R1/R2 cases PASS, но **R3 P2 changes requested**. Brace alternatives
+  `{wanted,Else}/*.txt` и `{./Wanted,./Else}/*.txt` теряют существующий файл у
+  обоих tools. Независимый full check 468/0/8 и actual 8.3 TEMP 33/0/0 PASS;
+  отдельная MCP baseline/head probe подтверждает R3.
+- [012 review R2](../testing/012-review-r2-2026-10-11.md), head `160e0c45`:
+  **review PASS**, R1/R2 закрыты. Независимо: static, validator 5/0/0,
+  default-pages 6 workers, validation 4 workers + ожидаемый rejected control.
+  Совместно с 011: post-011 6 workers и реальный HTTP TTL 61 s PASS.
 
-Следующий шаг — исправления в ветках исполнителей и повторное review. Код задач
-не слит, portable/установленный сервис не менялись. 012 baseline выводы о памяти
-и fixed TTL полезны, но новый cache budget/cleanup пока не принят. Протоколы
-доступны в planning main, commit `14fa2e75`. 11.10.2026 замечания R1/R2
-переданы обоим исполнителям в существующие рабочие чаты с воспроизведением
-и критериями повторного review. Исправления выполняются в прежних ветках;
-ожидаются новые head SHA и результаты проверок.
+Следующий шаг — исправление R3 исполнителем 011 и повторное review; 012 готова
+к интеграции. Результаты initial review и передачи R1/R2 сохранены в Git history
+и исходных review protocols. Новый R3 передаётся в тот же рабочий чат с точным
+воспроизведением и acceptance. Код задач пока не слит; portable и установленный
+сервис не менялись. После финального 011 head повторить затронутые совместные cases.
+012 не вводит runtime изменений: 64 MiB budget / cleanup 15 s остаются предложениями,
+новые count/TTL defaults не приняты.
 
 11.10 пользователь разрешил планирование и запуск одобренных направлений
 из [triage внешнего обзора](../testing/report-triage-2026-10-11.md).
