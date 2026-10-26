@@ -12,6 +12,7 @@ import { emptyBundleCounters } from '../core/job-types.js';
 import { isSamePath } from '../core/path-utils.js';
 import { IsoDateTime, NonNegInt, RequiredPath } from '../core/schema.js';
 import { BUNDLE_SCHEMA_MAX_FILES } from '../core/snapshot-config.js';
+import { sourceProvenance } from '../core/source-provenance.js';
 import { defineTool, type ToolCtx } from './define.js';
 import { JobStatusOutputSchema, jobStatusValue } from './job-shared.js';
 
@@ -199,7 +200,11 @@ export const BUNDLE = defineTool({
       input: { files: selections },
       authorizationPaths,
       counters: emptyBundleCounters(selections.length),
-      run: async (runCtx) => runBundlePipeline(workerFs, sourceRoot, selections, runCtx),
+      run: async (runCtx) => {
+        runCtx.job.provenance = await sourceProvenance.capture(sourceRoot);
+        await runCtx.checkpoint();
+        return runBundlePipeline(workerFs, sourceRoot, selections, runCtx);
+      },
     });
     const value = { reused: submitted.reused, job: jobStatusValue(submitted.job) };
     return {

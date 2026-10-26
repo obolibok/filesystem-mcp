@@ -46,6 +46,22 @@ aliases для проверок PathGuard, но при omitted path считаю
 Tool descriptions фиксируют то же правило.
 `includeIgnored` управляет фильтрами обхода, но не снимает запреты доступа PathGuard.
 
+`list_roots` сохраняет `roots`/условный `hint` и добавляет `host: { name, machineId }`
+и `rootDetails: [{ path, volume: { label, serialNumber } }]` в порядке roots.
+Имя и системный UUID относятся к машине с MCP-процессом. Serial — номер тома
+`XXXX-XXXX` (uppercase hex), не заводской номер устройства. Недоступные поля — null;
+без roots возвращается пустой rootDetails. Общий provider
+[`source-provenance.ts`](../../src/core/source-provenance.ts) использует `os.hostname`,
+на Windows — `Win32_ComputerSystemProduct.UUID`, `GetVolumePathNameW` и отдельные
+`GetVolumeInformationW` запросы label/serial. Поддерживаются подкаталоги, mount points,
+mapped/UNC paths в пределах доступного ОС; metadata не расширяет root policy.
+UUID пустой, нулевой, all-ones sentinel или неверного формата становится null.
+PowerShell 5.1 helper получает path как environment data, возвращает UTF-8 JSON и
+работает без elevation; локализованный `vol` не используется. Запросы независимы,
+параллельны, каждый ограничен 3 секундами с остановкой дочернего процесса.
+Timeout/error одного запроса сохраняет остальные поля и не ломает tool/job.
+Кэша metadata нет. На других ОС UUID/volume fields — null, hostname при наличии.
+
 ## Выбор инструментов и трактовка инвентаризации
 
 Краткая серверная инструкция, `get-help`/instructions resource и опубликованные
@@ -241,6 +257,16 @@ Unreferenced final после crash между rename и metadata commit уда�
 удаления остаётся учтённой в scratch quota до успешного cleanup/restart. Expiry,
 artifact removal и terminal directory cleanup сериализованы для каждой job.
 
+Новые snapshot/bundle jobs перед чтением source фиксируют `provenance: { host, root }`
+и сохраняют checkpoint в `job.json`; `root` повторяет форму элемента rootDetails
+с фактическим guarded sourceRoot, в том числе выбранным подкаталогом. Оба manifest
+получают сохранённое значение. Reuse и fetch не вызывают provider; restart не
+подменяет происхождение текущими сведениями машины. Поле optional для совместимости:
+legacy jobs/manifests без него читаются без миграции и переписывания artifacts,
+`schemaVersion: 1`, прежние rootId/reuse fingerprints и формат CSV/ZIP сохранены.
+Provenance описывает происхождение, а не целостность/уникальность носителя или
+его неизменность за время обхода.
+
 `job.json` заменяется через уникальный metadata-temp и atomic rename без удаления
 старого destination. Только transient `EPERM`/`EACCES`/`EBUSY` при rename повторяются
 до 2,5 секунды на одну запись; checkpoint retry прерывается при cancel/timeout/close.
@@ -354,8 +380,9 @@ Raw original сначала проверяется против минимума
 ZIP/delivery/`FS_MAX_FILE_SIZE` cap; группа
 при необходимости делится, а одиночный непомещающийся original получает `too_large`.
 
-Bundle manifest v1 (`filesystem-mcp.bundle-manifest`) — отдельный JSON artifact без
-абсолютных source paths. Он содержит root ID, interval/caveat, limits, `complete`,
+Bundle manifest v1 (`filesystem-mcp.bundle-manifest`) — отдельный JSON artifact.
+`root` по-прежнему содержит только ID; новый `provenance.root.path` содержит абсолютный
+путь source вместе с host/volume metadata. Он также содержит interval/caveat, limits, `complete`,
 bundle counters, outcome каждого selector, expected/observed metadata, size/SHA-256
 включённых bytes и archive/part provenance, а также hashes/sizes частей. Outcomes
 `missing`, `inaccessible`, `changed`, `special`, `too_large` дают completed job с

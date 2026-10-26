@@ -1,3 +1,5 @@
+import type { SourceProvenance } from './source-provenance.js';
+
 export const JOB_STATES = [
   'queued',
   'running',
@@ -87,6 +89,8 @@ export interface StoredJob<Counters extends JobCounters = SnapshotCounters> {
   keyBindings?: { key: string; requestFingerprint: string }[];
   readonly sourceRoot: string;
   readonly sourceRootId: string;
+  /** Captured before source traversal; absent in legacy jobs. */
+  provenance?: SourceProvenance;
   readonly input: Record<string, unknown>;
   /** Paths whose current policy access is required to inspect or fetch this job. */
   readonly authorizationPaths?: readonly string[];
