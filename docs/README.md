@@ -56,7 +56,8 @@
   [памятка живого опыта](../scripts/windows-portable/template/TEST-011-012.md).
 - [Интеграция 013 и новая portable-сборка](testing/013-integration-2026-10-26.md):
   host/volume provenance, CI, проверка поставки и контрольная сумма;
-  [памятка проверки](../scripts/windows-portable/template/TEST-013.md).
+  [памятка проверки](../scripts/windows-portable/template/TEST-013.md);
+  [пользовательский smoke/restart PASS](testing/013-live-2026-10-26.md).
 - [Архитектура, форматы и лимиты](reference/architecture.md): карта владельцев кода
   и текущие возможности и ограничения.
 - [Baseline от 19 сентября](testing/baseline-2026-09-19.md): проверенные наблюдения,
