@@ -512,6 +512,7 @@ export async function writeSnapshotFromRecords(
     version: 1,
     jobId: ctx.job.jobId,
     root: { id: ctx.job.sourceRootId, path: ctx.job.sourceRoot },
+    ...(ctx.job.provenance ? { provenance: ctx.job.provenance } : {}),
     observed: { startedAt, endedAt, atomic: false },
     csv: {
       encoding: 'UTF-8',

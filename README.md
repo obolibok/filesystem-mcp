@@ -218,6 +218,18 @@ All tools are scoped to the configured roots. Call `list_roots` first to discove
 | `list`       | List directory contents. Returns entries (dirs-first, alphabetical) and an ASCII tree.      |
 | `find_files` | Find file paths by glob pattern (e.g. `**/*.ts`), with separate collection and page limits. |
 
+`list_roots` keeps `roots: string[]` and the configuration `hint` when no roots
+are allowed. It also returns `host: { name, machineId }` for the machine running
+the MCP process and `rootDetails: [{ path, volume: { label, serialNumber } }]`
+in the same order as `roots` (empty when there are none). `machineId` is the
+system UUID; `serialNumber` is the OS volume serial in `XXXX-XXXX` uppercase hex,
+not a manufacturer's device serial. Each unavailable field is `null`.
+Windows uses PowerShell 5.1-compatible CIM and Win32 volume queries for local,
+mapped and UNC roots, including subdirectories and mounted folders. Queries
+run in parallel with a 3-second timeout each; failures do not prevent tools or
+jobs from running, and subsequent lookups retry the metadata. Other operating
+systems return hostname when available and `null` for UUID/volume fields.
+
 `list` uses `maxDepth` to bound actual traversal (default 1: only this folder's
 children). `limit` caps collected entries across every page, including files,
 directories, symlinks and other accessible types (default 20000; range 1–20000).
@@ -327,6 +339,15 @@ starts another scan. A shared job has one cancellation state: `cancel_job` stops
 for every client, while closing one client does not stop it. Sharing is limited to
 one server process and its scratch directory; independent processes and machines
 do not share workers or results. `bundle` still requires `idempotencyKey`.
+
+New snapshot and bundle manifests include `provenance: { host, root }`, where
+`root` has the `rootDetails` entry shape and its absolute `path` is the actual
+guarded job source, including a selected subdirectory. Metadata is captured
+before traversal/capture and persisted in `job.json`. Reuse, repeated fetch and
+restart keep the original provenance and artifact bytes; legacy jobs/manifests
+without this optional field remain readable. These fields describe origin;
+they do not establish unique media identity, detect clones or guarantee that a
+volume stayed unchanged during the job. Root IDs and reuse rules are unchanged.
 
 Check both `state` and `complete` after polling. A snapshot can finish as
 `state: "completed", complete: false` when individual child paths were

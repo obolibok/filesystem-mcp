@@ -33,6 +33,14 @@ production dependencies через npm ci --omit=dev --ignore-scripts, доба�
 Проверенный SHA runtime и версии находятся в BUILD.json.
 Не менять upstream package/server version ради локальной упаковки.
 
+Runtime provenance берётся на целевой машине при работе MCP, независимо от BUILD.json.
+`list_roots` показывает имя/системный UUID хоста и label/серийный номер тома каждого
+root; недоступные значения — null без требования elevation. Новые snapshot/bundle
+manifest сохраняют `provenance` с абсолютным source path и этими сведениями.
+Перенос scratch/restart/reuse сохраняет исходное provenance старых результатов;
+старые artifacts без него не дополняются. Windows lookup и обезличенный native smoke:
+[runbook](windows.md#происхождение-машины-и-томов).
+
 Verify.mjs работает на копии поставки в ignored .tmp: перенос, Unicode/пробелы,
 несколько roots, реальные snapshot/bundle, SHA/CRC/содержимое ZIP, ошибочная
 конфигурация, junction, PowerShell 5.1 doctor и отказ emergency stop по чужому PID.
