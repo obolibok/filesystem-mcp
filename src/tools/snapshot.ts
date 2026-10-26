@@ -7,6 +7,7 @@ import { GuardedFileSystem } from '../core/fs.js';
 import { fingerprintJobInput, resolveSnapshotRoot } from '../core/job-manager.js';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.js';
 import { runSnapshotPipeline } from '../core/snapshot-pipeline.js';
+import { sourceProvenance } from '../core/source-provenance.js';
 import { defineTool, type ToolCtx } from './define.js';
 import { JobStatusOutputSchema, jobStatusValue } from './job-shared.js';
 
@@ -101,13 +102,16 @@ export const SNAPSHOT = defineTool({
         includeHidden: args.includeHidden,
         includeIgnored: args.includeIgnored,
       },
-      run: async (runCtx) =>
-        runSnapshotPipeline(
+      run: async (runCtx) => {
+        runCtx.job.provenance = await sourceProvenance.capture(sourceRoot);
+        await runCtx.checkpoint();
+        return runSnapshotPipeline(
           workerFs,
           sourceRoot,
           { includeHidden: args.includeHidden, includeIgnored: args.includeIgnored },
           runCtx,
-        ),
+        );
+      },
     });
     const value = {
       reused: submitted.reused,

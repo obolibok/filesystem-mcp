@@ -81,21 +81,21 @@ UUID/volume metadata — null; отдельные Linux/macOS probes не раз
 
 ## Acceptance и проверки
 
-- [ ] list_roots сохраняет roots/hint и возвращает host/rootDetails по контракту.
-- [ ] Windows hostname/UUID и volume label/serial получаются из ОС; пустые/нулевые
+- [x] list_roots сохраняет roots/hint и возвращает host/rootDetails по контракту.
+- [x] Windows hostname/UUID и volume label/serial получаются из ОС; пустые/нулевые
       UUID, недоступные значения и ошибки отражены как null.
-- [ ] Покрыты обычный root, подкаталог, несколько корней одного тома, сетевой
+- [x] Покрыты обычный root, подкаталог, несколько корней одного тома, сетевой
       root и частично недоступные метаданные. Сетевой provider тестируется
       синтетически; реальный SMB не является обязательной зависимостью тестов.
-- [ ] Metadata lookup конечен по времени; timeout/error не блокирует основные
+- [x] Metadata lookup конечен по времени; timeout/error не блокирует основные
       tools/jobs. Недоступные сведения не кешируются навечно как факт о носителе.
-- [ ] Новый snapshot и bundle manifest содержат provenance источника; сохранение
+- [x] Новый snapshot и bundle manifest содержат provenance источника; сохранение
       и чтение после restart не подменяет его текущими сведениями машины.
-- [ ] Legacy jobs/manifests без новых полей и reuse прежних результатов работают.
+- [x] Legacy jobs/manifests без новых полей и reuse прежних результатов работают.
       Root IDs, hashes ZIP/CSV, лимиты и доступ к исходным файлам сохранены.
-- [ ] Выполнены meaningful targeted regressions и npm run check; результаты,
+- [x] Выполнены meaningful targeted regressions и npm run check; результаты,
       skips и границы реального Windows smoke записаны в Work record.
-- [ ] Обновлены architecture/reference, Windows/portable инструкция по мере
+- [x] Обновлены architecture/reference, Windows/portable инструкция по мере
       необходимости. Реальные имена/UUID/серийные номера машины не коммитятся;
       в tests/отчёте только синтетические или обезличенные значения.
 
@@ -116,5 +116,74 @@ Push/PR/merge, сборку и пользовательский live прово�
 
 ## Work record
 
-Реализация не начата. Карточка подготовлена планированием 26.10.2026;
-исполнитель ещё не назначен.
+Реализовано 26.10.2026; **ready for review** (локальная самооценка acceptance,
+центральная приёмка остаётся за планированием).
+
+- Base: `96e8ab8fd9e9c9f2ec04f896814458cb24e250c1`, карточка уже присутствовала.
+  App-managed изолированный worktree был чистым, начальное состояние — detached HEAD.
+  Ветка: `codex/013-source-provenance`. Итоговый commit передаётся в handoff,
+  собственный SHA сюда не включается.
+- Общий provider `src/core/source-provenance.ts`: OS hostname;
+  `Win32_ComputerSystemProduct.UUID`; `GetVolumePathNameW` для фактического mount
+  point подкаталога/локального/mapped/UNC root; независимые label/serial вызовы
+  `GetVolumeInformationW`. Серийный номер тома — uppercase `XXXX-XXXX`, в том числе
+  допустимый OS serial `0000-0000`. Пустой/нулевой/all-ones/невалидный UUID — null.
+  Доступная метка сохраняется вместе с пробелами; пустая метка — null.
+- Helper совместим с Windows PowerShell 5.1, path передаётся environment data,
+  скрипт — EncodedCommand, JSON — UTF-8. Host UUID и каждый root volume запрашиваются
+  параллельно; каждый lookup имеет timeout 3 s и abort дочернего процесса. Ошибки
+  превращаются в null, не попадают в job errors/complete. Кэша metadata нет,
+  недоступный носитель повторно опрашивается при следующем вызове. На Linux/macOS
+  отдельные probes отсутствуют: hostname при наличии, остальные поля null.
+- `list_roots` сохраняет roots/hint и добавляет host/rootDetails. Сбор сведений
+  выполняется только для доступных roots или уже guarded sourceRoot новой job.
+  Новые snapshot/bundle workers фиксируют provenance и durable checkpoint до
+  source traversal/capture. Оба manifest получают то же значение. Существующий
+  manager сохраняет optional поле в `job.json`; его lifecycle/reuse код не менялся.
+  Повторные fetch, automatic/idempotent/in-flight reuse и restart не обновляют
+  provenance. Legacy JSON/artifacts читаются без миграции; rootId/fingerprints,
+  CSV/ZIP формат, квоты и проверка доступа сохранены.
+- Обновлены README, architecture, Windows и portable reference. Bundle manifest
+  теперь явно документирует абсолютный `provenance.root.path`; прежний `root`
+  по-прежнему содержит только ID. Новые build-time или постоянные machine IDs,
+  inventory, hardware topology, изменения tunnel/release/runtime settings не добавлены.
+
+Проверки (Node 24.15.0, npm 11.12.1, Windows 10.0.19045; только synthetic source fixtures):
+
+```powershell
+npm ci
+node --test --import tsx __tests__/source-provenance.test.ts
+node --test --import tsx __tests__/source-provenance.test.ts __tests__/snapshot.test.ts __tests__/bundle.test.ts __tests__/job-metadata-persistence.test.ts __tests__/tools.test.ts __tests__/roots-seeding.test.ts
+npm run check
+git diff --check
+```
+
+- `npm ci` — PASS, 248 packages. Targeted — **167 pass / 0 fail / 3 skip**,
+  170 tests. Skips: POSIX FIFO, POSIX-only 0222 append target и недоступный file symlink.
+  Финальный standalone suite 013 — **10 pass / 0 fail / 0 skip**; новые MCP fixtures
+  используют отдельный scratch и не зависят от default scratch других suites.
+- Полный `npm run check` — **PASS**: build, production/test types, ESLint,
+  Prettier, Knip; **490 pass / 0 fail / 8 skip**, 498 tests / 69 suites.
+  Полные skips относятся к POSIX inode/permissions/FIFO и file-symlink privilege;
+  не объявляются проверкой этих веток. `git diff --check` — PASS.
+- Новый suite содержит 10 tests: exact local/nested/same-volume/mapped/UNC paths,
+  partial metadata и UUID normalization, timeout/abort/error/retry, non-Windows
+  fallback, публичный MCP list_roots с/без roots, оба manifest, checkpoint/restart,
+  неизменность fetched bytes/SHA-256, прежний rootId, automatic/in-flight/idempotent
+  reuse, legacy job/manifest и успешные jobs при metadata error/timeout.
+- Native smoke — PASS на Windows PowerShell **5.1.19041.6456**: hostname и UUID
+  доступны, serial доступен у обычного root и Unicode-подкаталога с пробелами,
+  кавычкой, `$` и backtick. Метка локального тома null; Unicode/partial labels
+  проверены synthetic provider. Реальные имя/UUID/serial/label в вывод не пишутся
+  и в Git не сохранены. Smoke выводит только версию PowerShell и availability flags.
+- Первый test launch внутри sandbox остановился до загрузки suite:
+  `tsx` → `uv_os_get_passwd` / ENOMEM. Проверенные targeted/full команды выполнены
+  вне этого ограничения по Windows runbook; права ОС для заполнения metadata
+  специально не повышались. Обычный sandbox runtime smoke отдельно вернул hostname
+  и volume serial, UUID null без отказа tool/provider.
+
+Границы: реальный SMB, отдельная Windows 11/VM и native volume mount-folder не
+проверялись; API поддерживает эти пути, synthetic UNC/mapped provider проверен.
+Null при недоступности/timeout остаётся частью контракта. Production roots, рабочая
+установка и tunnel не использовались. Portable-сборка, пользовательский live,
+push/PR/merge и обновление центральной доски остаются за планированием.

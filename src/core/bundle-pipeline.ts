@@ -682,6 +682,7 @@ export async function runBundlePipeline(
     version: 1,
     jobId: ctx.job.jobId,
     root: { id: ctx.job.sourceRootId },
+    ...(ctx.job.provenance ? { provenance: ctx.job.provenance } : {}),
     observed: {
       startedAt,
       endedAt,

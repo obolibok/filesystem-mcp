@@ -275,3 +275,26 @@ JSON-конфиги зависят от клиента: README содержит 
 Доступ к UNC, сетевые credentials и permissions проверяются от фактической
 сервисной учётной записи. Это проверка будущего deployment, не основание читать
 сетевые диски в локальных regression tests.
+
+## Происхождение машины и томов
+
+`list_roots` сохраняет paths и показывает `host.name`, `host.machineId` (системный UUID)
+и `rootDetails[].volume.label/serialNumber`. Это текущая машина MCP-процесса и
+номер тома ОС (`XXXX-XXXX`), а не build machine/заводской номер диска. PowerShell 5.1
+helper получает volume root через Win32 API даже для подкаталога/mounted folder;
+для mapped/UNC используются сведения, доступные фактической учётной записи.
+Недоступное — null; каждый запрос имеет timeout 3 секунды, ошибки независимы,
+следующий вызов повторяет lookup. Не повышать права ради заполнения metadata.
+
+```powershell
+node --test --import tsx __tests__/source-provenance.test.ts
+```
+
+Suite использует synthetic provider для UUID/volume, UNC, partial/error/timeout,
+reuse/restart/legacy jobs; Windows-only native smoke создаёт synthetic directory с
+Unicode, пробелами и PowerShell metacharacters. В вывод попадают только версия
+PowerShell и флаги доступности, без реальных идентификаторов. Native smoke с null
+не доказывает доступность соответствующего поля; реальный SMB не является его
+зависимостью. Новый snapshot/bundle manifest содержит `provenance` с абсолютным
+source path и metadata, сохранёнными до чтения источников. Restart/reuse/fetch
+не обновляют их; legacy artifacts остаются как есть.

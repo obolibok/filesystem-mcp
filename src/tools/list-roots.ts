@@ -2,12 +2,15 @@ import * as z from 'zod/v4';
 
 import { NO_POSITIONAL_ROOTS_GUIDANCE } from '../core/config.js';
 import { ErrorCode } from '../core/errors.js';
+import { HostSchema, RootDetailsSchema, sourceProvenance } from '../core/source-provenance.js';
 import { defineTool } from './define.js';
 
 const RootsInputSchema = z.strictObject({});
 
 const RootsOutputSchema = z.strictObject({
   roots: z.array(z.string()).describe('Absolute paths of the allowed workspace root directories'),
+  host: HostSchema,
+  rootDetails: z.array(RootDetailsSchema),
   hint: z
     .string()
     .optional()
@@ -18,7 +21,7 @@ export const LIST_ROOTS = defineTool({
   name: 'list_roots',
   title: 'Workspace Roots',
   description:
-    'List the allowed workspace root directories. Call this first to discover what paths are accessible; all other tools are scoped to these roots. Allowed directories are configured via CLI arguments, the FS_ALLOWED_DIRS environment variable, or --allow-cwd.',
+    'List the allowed workspace root directories, MCP host name/system UUID and per-root volume label/serial (unavailable metadata is null). Call this first to discover what paths are accessible; all other tools are scoped to these roots. Allowed directories are configured via CLI arguments, the FS_ALLOWED_DIRS environment variable, or --allow-cwd.',
   input: RootsInputSchema,
   output: RootsOutputSchema,
   annotations: {
@@ -27,7 +30,7 @@ export const LIST_ROOTS = defineTool({
     destructiveHint: false,
     openWorldHint: false,
   },
-  run: (_args, ctx) => {
+  run: async (_args, ctx) => {
     const dirs = ctx.fs.pathGuard.getAllowedDirectories();
     // No `text` on purpose. A newline-joined path list and the JSON say the
     // same thing, and the JSON is the shape every caller of this tool parses.
@@ -39,12 +42,13 @@ export const LIST_ROOTS = defineTool({
     // and the elicitation route out — call a tool with a concrete path and
     // approve the grant — appears in no tool description. It is conditional
     // because a configured server pays nothing to be told how to configure.
-    return Promise.resolve({
+    return {
       structured: {
         roots: [...dirs],
+        ...(await sourceProvenance.describeRoots(dirs)),
         ...(dirs.length === 0 ? { hint: NO_POSITIONAL_ROOTS_GUIDANCE } : {}),
       },
-    });
+    };
   },
 
   defaultErrorCode: ErrorCode.UNKNOWN,
