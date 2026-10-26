@@ -22,7 +22,7 @@
 | 010          | [Ограниченный list и ясные лимиты](../tasks/010-bounded-list.md)                    | done     | 009                | Принята пользователем; R1–R3, local/CI/portable PASS; интегрирована через PR #9                                                   |
 | 011          | [Ограниченный поиск и пагинация](../tasks/011-bounded-search.md)                    | done     | 010, triage        | R1–R4 закрыты; PR #10 слит, CI/portable PASS; новый ChatGPT live ожидается                                                        |
 | 012          | [Память и TTL пагинации](../tasks/012-pagination-memory-study.md)                   | done     | 010, triage        | R1/R2 закрыты; PR #10 слит; исследование и post-011 проверки приняты, runtime budgets прежние                                     |
-| 013          | [Машина и тома источников](../tasks/013-source-provenance.md)                       | active   | 011, 012           | `013 — Машина и тома источников`; GPT-6.1-Sol / Extra High; изолированный worktree, начало работы подтверждено                    |
+| 013          | [Машина и тома источников](../tasks/013-source-provenance.md)                       | review   | 011, 012           | `013 — Машина и тома источников`; f14719b3 review PASS; local check и native/stdio probes PASS, ожидает интеграции                |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -32,6 +32,12 @@
 Не придумывать task ID приложения или commit SHA.
 
 ## Текущий следующий шаг
+
+[013 review](../testing/013-review-2026-10-26.md) завершено 26.10: **PASS**,
+head `f14719b38513e81c9452d029e2fe285c0d7de7db`. Блокирующих замечаний нет.
+Независимый check 490 pass / 0 fail / 8 skips (498 tests), native CIM comparison
+и stdio snapshot/bundle/restart PASS. Следующий шаг — интеграция с CI и новая
+переносимая сборка; целевой ChatGPT live и реальный SMB ещё не проверены.
 
 26.10 согласована [013 — машина и тома источников](../tasks/013-source-provenance.md):
 имя хоста/системный UUID и метка/серийный номер тома в list_roots и новых manifest.
