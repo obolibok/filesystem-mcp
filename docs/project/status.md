@@ -23,7 +23,7 @@
 | 011          | [Ограниченный поиск и пагинация](../tasks/011-bounded-search.md)                    | done     | 010, triage        | R1–R4 закрыты; PR #10 слит, CI/portable PASS; новый ChatGPT live ожидается                                                        |
 | 012          | [Память и TTL пагинации](../tasks/012-pagination-memory-study.md)                   | done     | 010, triage        | R1/R2 закрыты; PR #10 слит; исследование и post-011 проверки приняты, runtime budgets прежние                                     |
 | 013          | [Машина и тома источников](../tasks/013-source-provenance.md)                       | done     | 011, 012           | PR #11; review/CI/portable и пользовательский smoke/restart PASS                                                                  |
-| 014          | [Экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)                    | ready    | 013                | Пользователь разрешил параллельный формат; карточка готова, исполнитель назначается                                               |
+| 014          | [Экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)                    | active   | 013                | `014 — Экспериментальный snapshot_tree`; GPT-6.1-Sol / Extra High; worktree создан, начало работы подтверждено                    |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -37,8 +37,22 @@
 28.10 пользователь разрешил [014 — экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)
 рядом со стабильным snapshot. Согласованы числовая глубина, исходный путь первой
 CSV-записью, export каталогов и самостоятельные части. Эксперимент включается
-отдельно; legacy CSV/reuse сохраняются. Карточка ready, рабочий чат назначается.
-Задача включает synthetic сравнение raw/ZIP/time/memory без production данных.
+отдельно; legacy CSV/reuse сохраняются. Задача включает synthetic сравнение
+raw/ZIP/time/memory без production данных. Исполнитель запущен:
+
+- Чат `014 — Экспериментальный snapshot_tree`, thread
+  `01a1824e-d9c7-7662-be68-37015a6bd0d2`, host local.
+- GPT-6.1-Sol / Extra High (xhigh).
+- Опубликованный base: `272a841e47366bacbe6774689ca3113a2e8b890b`.
+- Managed checkout `b903/filesystem-mcp`: base, чистота дерева и наличие карточки
+  независимо проверены планированием. Назначенная ветка `codex/014-snapshot-tree`.
+- Получен первый ответ: исполнитель проверяет base/ветку и читает pipeline.
+  Active turn подтверждён приложением. Pending creation ID
+  `client-new-thread:3e6f2b77-9769-42f2-a022-8d0fb30314f4` — история запуска;
+  для дальнейших действий используется настоящий threadId выше.
+
+Центральную доску, review/PR/merge, portable и live ведёт планирование.
+Следующий шаг после handoff исполнителя — review exact head по карточке 014.
 
 **013 принята и слита через [PR #11](https://github.com/obolibok/filesystem-mcp/pull/11)**,
 merge `431860a1694abbf73d16b0eafbd9df7213e60950`.
@@ -53,9 +67,8 @@ scenarios и 29 packaged MCP вызовов provenance/restart PASS.
 сохранились. Планирование просмотрело открытый чат и независимо сверило оба jobs
 с локальными артефактами; BUILD.json установки подтвердил source 431860a1.
 Serial сетевого тома также сохранился после обновления/restart RaiDrive.
-013 закрыта. Следующее плановое направление — согласование предметного опыта 005:
-выборка, исходный вопрос и проверяемые критерии. Пока proposed, новый исполнитель
-не назначен. Реальный SMB server и Windows 11/VM остаются deployment-проверками.
+013 закрыта. Предметный опыт 005 остаётся proposed до выбора данных, исходного
+вопроса и критериев; новый исполнитель для него не назначен. Реальный SMB server и Windows 11/VM остаются deployment-проверками.
 
 26.10 согласована [013 — машина и тома источников](../tasks/013-source-provenance.md):
 имя хоста/системный UUID и метка/серийный номер тома в list_roots и новых manifest.
