@@ -23,7 +23,7 @@
 | 011          | [Ограниченный поиск и пагинация](../tasks/011-bounded-search.md)                    | done     | 010, triage        | R1–R4 закрыты; PR #10 слит, CI/portable PASS; новый ChatGPT live ожидается                                                        |
 | 012          | [Память и TTL пагинации](../tasks/012-pagination-memory-study.md)                   | done     | 010, triage        | R1/R2 закрыты; PR #10 слит; исследование и post-011 проверки приняты, runtime budgets прежние                                     |
 | 013          | [Машина и тома источников](../tasks/013-source-provenance.md)                       | done     | 011, 012           | PR #11; review/CI/portable и пользовательский smoke/restart PASS                                                                  |
-| 014          | [Экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)                    | review   | 013                | `014 — Экспериментальный snapshot_tree`; a9c7a7f8 review PASS; 498/0/8, legacy upgrade и A/B PASS                                 |
+| 014          | [Экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)                    | done     | 013                | PR #12 слит; review/CI/portable PASS; опытный комплект с tree включён, пользовательский A/B ожидается                             |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -39,9 +39,19 @@
 Независимый full check 498/0/8 (506 tests), upgrade/reuse старого комплекта 013
 через stdio и повтор 8 A/B workers PASS. ZIP меньше примерно на 41,3% shared/deep
 и 11,6% flat/noisy; устойчивое ускорение walk/снижение памяти не подтверждено.
-Пользователь предложил опыт на настоящем хранилище. Следующий шаг — интеграция
-с CI, опытный portable с opt-in и A/B на согласованном реальном каталоге.
-Слияние и новый build 014 пока не выполнены; стабильная установка не менялась.
+Пользователь разрешил сборку и слияние. **014 интегрирована через
+[PR #12](https://github.com/obolibok/filesystem-mcp/pull/12)**, merge
+`c96b7ea30a5a800145bd0571c6765fb8147db1b1`.
+[CI/portable](../testing/014-integration-2026-10-28.md) PASS: Windows 503/0/3,
+Ubuntu 491/0/15; push CI merge PASS. Опытная папка/ZIP
+`out/Schwarzbeck-MCP-014-test-2026-10-28` собрана из проверенного PR head 4f864ca5,
+идентичного merge по Git tree. Tree включён, обычный snapshot сохранён;
+13 portable scenarios и 63 packaged MCP calls PASS, финальный Check — 14 tools.
+Следующий шаг — пользовательский A/B на настоящем хранилище по TEST-014.html.
+Установленный сервис, его config/scratch и туннель не менялись.
+
+28.10 пользователь дал постоянное разрешение на commit/push/merge main и рабочих
+веток этого fork без повторных запросов; правило записано в AGENTS.md и workflow.
 
 28.10 пользователь разрешил [014 — экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)
 рядом со стабильным snapshot. Согласованы числовая глубина, исходный путь первой
@@ -60,7 +70,7 @@ raw/ZIP/time/memory без production данных. Исполнитель за�
   результат review и повторных измерений приведён выше.
 
 Центральную доску, review/PR/merge, portable и live ведёт планирование.
-Review exact head по карточке 014 завершено; интеграция и live пока впереди.
+Review и интеграция 014 завершены; реальный пользовательский live пока впереди.
 
 **013 принята и слита через [PR #11](https://github.com/obolibok/filesystem-mcp/pull/11)**,
 merge `431860a1694abbf73d16b0eafbd9df7213e60950`.

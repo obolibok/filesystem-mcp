@@ -62,6 +62,8 @@
   и текущие возможности и ограничения.
 - [Эксперимент snapshot_tree 014](testing/014-snapshot-tree.md): tree-depth-v1,
   совместимость, independent readback и synthetic A/B raw/ZIP/time/memory.
+- [Сборка 014](testing/014-integration-2026-10-28.md): review/CI, portable,
+  контрольная сумма ZIP и инструкция A/B на настоящем хранилище.
 - [Baseline от 19 сентября](testing/baseline-2026-09-19.md): проверенные наблюдения,
   отделённые от планируемых исправлений.
 - [Шаблон задачи](tasks/TEMPLATE.md): минимальный контракт для следующего чата.

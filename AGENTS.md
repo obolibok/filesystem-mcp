@@ -20,6 +20,10 @@ upstream documentation in English. Public tool descriptions remain English.
 ## Working across chats
 
 - The planning chat owns project scope, priorities, acceptance and `docs/project/status.md`.
+- The user has granted standing authorization for commits, pushes and merges to
+  `main` and working branches in this fork. Planning handles integration after
+  review/checks without requesting Git-operation approval again. Implementation
+  chats still follow their assigned scope and handoff responsibilities.
 - An implementation chat owns one assigned task, its task card and its isolated
   worktree/branch. Use `codex/<task-id>-<topic>` for new branches.
 - Do not switch branches in another chat's checkout or edit another task's files.
