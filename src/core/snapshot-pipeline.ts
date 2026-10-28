@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Dirent } from 'node:fs';
 import { createReadStream } from 'node:fs';
 import { open } from 'node:fs/promises';
-import { extname, join } from 'node:path';
+import { basename, extname, join } from 'node:path';
 import type { Readable } from 'node:stream';
 
 import ignore from 'ignore';
@@ -17,6 +17,17 @@ import { toPosixRelative } from './path.js';
 import { getMaxTextFileSize } from './util.js';
 
 export const SNAPSHOT_CSV_HEADER = 'RootId,RelativePath,Name,Extension,Length,LastWriteTime\r\n';
+const TREE_CSV_HEADER = 'Type,Depth,Name,Length,LastWriteTime\r\n';
+
+export interface SnapshotTreeRecord {
+  readonly type: 'D' | 'F' | 'U';
+  readonly depth: number;
+  readonly name: string;
+  readonly length?: number;
+  readonly lastWriteTime?: string;
+}
+
+type WalkRecord = SnapshotRecord | SnapshotTreeRecord;
 
 export interface SnapshotRecord {
   readonly rootId: string;
@@ -30,6 +41,7 @@ export interface SnapshotRecord {
 export interface SnapshotWalkOptions {
   readonly includeHidden: boolean;
   readonly includeIgnored: boolean;
+  readonly layout?: 'tree-depth-v1';
 }
 
 interface IgnoreRule {
@@ -40,6 +52,7 @@ interface IgnoreRule {
 
 export interface SnapshotPipelineHooks {
   readonly beforeCompress?: (rawPath: string) => Promise<void>;
+  readonly afterCompress?: () => void;
 }
 
 const IGNORE_CACHE_REFRESH_TESTS = 256;
@@ -79,6 +92,23 @@ const DEFAULT_IGNORED_FILES = new Set([
 
 function csvField(value: string): string {
   return /[",\r\n]/u.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
+}
+
+function serializeTreeRecord(
+  record: Omit<SnapshotTreeRecord, 'type'> & { type: 'D' | 'F' | 'C' | 'U' },
+): Buffer {
+  return Buffer.from(
+    [
+      record.type,
+      String(record.depth),
+      record.name,
+      record.length === undefined ? '' : String(record.length),
+      record.lastWriteTime ?? '',
+    ]
+      .map(csvField)
+      .join(',') + '\r\n',
+    'utf8',
+  );
 }
 
 export function serializeSnapshotRecord(record: SnapshotRecord): Buffer {
@@ -223,13 +253,18 @@ async function* walkSnapshotRecords(
   root: string,
   options: SnapshotWalkOptions,
   ctx: JobRunContext,
-): AsyncGenerator<SnapshotRecord> {
+): AsyncGenerator<WalkRecord> {
   async function* walkDirectory(
     absoluteDirectory: string,
     relativeDirectory: string,
     inheritedRules: readonly IgnoreRule[],
     depth: number,
-  ): AsyncGenerator<SnapshotRecord> {
+  ): AsyncGenerator<WalkRecord> {
+    const incomplete = (): SnapshotTreeRecord => ({
+      type: 'U',
+      depth: depth - 1,
+      name: basename(absoluteDirectory),
+    });
     ctx.signal.throwIfAborted();
     if (depth > ctx.config.maxWalkDepth) {
       throw new FsError(
@@ -244,13 +279,21 @@ async function* walkSnapshotRecords(
     } catch (error) {
       if (relativeDirectory === '') throw error;
       classifyWalkError(ctx, error, absoluteDirectory);
+      if (options.layout) yield incomplete();
       return;
     }
     snapshotCounters(ctx).directoriesVisited += 1;
     try {
+      const errorsBeforeIgnore = ctx.job.counters.errors;
       const localRule = options.includeIgnored
         ? undefined
         : await loadLocalIgnore(fs, absoluteDirectory, relativeDirectory, ctx);
+      if (
+        options.layout &&
+        relativeDirectory !== '' &&
+        ctx.job.counters.errors > errorsBeforeIgnore
+      )
+        yield incomplete();
       const rules = localRule ? [...inheritedRules, localRule] : inheritedRules;
       for (;;) {
         let entry;
@@ -259,6 +302,7 @@ async function* walkSnapshotRecords(
         } catch (error) {
           if (relativeDirectory === '') throw error;
           classifyWalkError(ctx, error, absoluteDirectory);
+          if (options.layout) yield incomplete();
           return;
         }
         if (entry === null) break;
@@ -287,6 +331,7 @@ async function* walkSnapshotRecords(
           continue;
         }
         if (entry.isDirectory()) {
+          if (options.layout) yield { type: 'D', depth, name: entry.name };
           yield* walkDirectory(absolutePath, relativePath, rules, depth + 1);
           continue;
         }
@@ -321,7 +366,7 @@ async function* walkSnapshotRecords(
           );
           continue;
         }
-        yield {
+        const record: SnapshotRecord = {
           rootId: ctx.job.sourceRootId,
           relativePath,
           name: entry.name,
@@ -329,6 +374,15 @@ async function* walkSnapshotRecords(
           length: detail.stats.size,
           lastWriteTime: detail.stats.mtime.toISOString(),
         };
+        yield options.layout
+          ? {
+              type: 'F',
+              depth,
+              name: record.name,
+              length: record.length,
+              lastWriteTime: record.lastWriteTime,
+            }
+          : record;
       }
     } finally {
       await directory.close().catch(() => undefined);
@@ -345,6 +399,7 @@ interface OpenPart {
   rows: number;
   rawBytes: number;
   closed: boolean;
+  tree?: { files: number; directories: number; contextRecords: number; errorRecords: number };
 }
 
 async function writeBuffer(part: OpenPart, bytes: Buffer, ctx: JobRunContext): Promise<void> {
@@ -365,21 +420,31 @@ async function writeBuffer(part: OpenPart, bytes: Buffer, ctx: JobRunContext): P
   }
 }
 
-async function openPart(number: number, ctx: JobRunContext): Promise<OpenPart> {
+async function openPart(number: number, ctx: JobRunContext, prefix?: Buffer): Promise<OpenPart> {
   if (number > ctx.config.maxParts) {
     throw new FsError(ErrorCode.TOO_LARGE, 'Snapshot part-count limit exceeded');
+  }
+  const header = prefix ?? Buffer.from(SNAPSHOT_CSV_HEADER, 'utf8');
+  if (prefix && header.length > ctx.config.maxRawPartBytes) {
+    throw new FsError(ErrorCode.TOO_LARGE, 'Tree root/header cannot fit in an empty snapshot part');
   }
   const rawPath = ctx.tempPath(`snapshot-${String(number).padStart(5, '0')}.csv`);
   const handle = await open(rawPath, 'wx', 0o600);
   const part: OpenPart = { number, rawPath, handle, rows: 0, rawBytes: 0, closed: false };
-  if (
-    snapshotCounters(ctx).rawCsvBytes + Buffer.byteLength(SNAPSHOT_CSV_HEADER) >
-    ctx.config.maxJobRawBytes
-  ) {
+  if (prefix) {
+    part.rows = 2;
+    part.tree = { files: 0, directories: 0, contextRecords: 0, errorRecords: 0 };
+  }
+  if (snapshotCounters(ctx).rawCsvBytes + header.length > ctx.config.maxJobRawBytes) {
     await handle.close();
     throw new FsError(ErrorCode.TOO_LARGE, 'Snapshot job raw CSV byte limit exceeded');
   }
-  await writeBuffer(part, Buffer.from(SNAPSHOT_CSV_HEADER, 'utf8'), ctx);
+  try {
+    await writeBuffer(part, header, ctx);
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
   return part;
 }
 
@@ -457,40 +522,100 @@ async function finalizePart(
     sha256: hash.digest('hex'),
     rows: part.rows,
     rawBytes: part.rawBytes,
+    ...(part.tree ?? {}),
   });
   snapshotCounters(ctx).zipBytes += zipBytes;
   snapshotCounters(ctx).parts += 1;
   await ctx.removeTemp(part.rawPath, part.rawBytes);
+  hooks.afterCompress?.();
   return artifact;
 }
 
 export async function writeSnapshotFromRecords(
-  records: AsyncIterable<SnapshotRecord>,
+  records: AsyncIterable<WalkRecord>,
   ctx: JobRunContext,
   options: SnapshotWalkOptions,
   hooks: SnapshotPipelineHooks = {},
 ): Promise<string> {
   const startedAt = ctx.job.startedAt ?? new Date().toISOString();
   const parts: StoredArtifact[] = [];
-  let part = await openPart(1, ctx);
+  const tree = options.layout === 'tree-depth-v1';
+  const rootRecord = Buffer.from(`${csvField(ctx.job.sourceRoot)}\r\n`, 'utf8');
+  const prefix = tree ? Buffer.concat([rootRecord, Buffer.from(TREE_CSV_HEADER)]) : undefined;
+  if (
+    tree &&
+    Math.max(rootRecord.length, Buffer.byteLength(TREE_CSV_HEADER)) > ctx.config.maxRecordBytes
+  ) {
+    throw new FsError(ErrorCode.TOO_LARGE, 'Tree root/header record exceeds configured cap');
+  }
+  const ancestors: string[] = [];
+  if (tree)
+    Object.assign(snapshotCounters(ctx), {
+      directoriesWritten: 0,
+      contextRecords: 0,
+      errorRecords: 0,
+    });
+  let part = await openPart(1, ctx, prefix);
   try {
     await ctx.setPhase('walking');
     for await (const record of records) {
       ctx.signal.throwIfAborted();
-      const row = serializeSnapshotRecord(record);
+      const node = 'type' in record ? record : undefined;
+      if (tree !== Boolean(node))
+        throw new FsError(ErrorCode.INVALID_INPUT, 'Snapshot record layout mismatch');
+      if (node) {
+        if (
+          !Number.isSafeInteger(node.depth) ||
+          node.depth < 0 ||
+          node.depth > ctx.config.maxWalkDepth ||
+          node.depth > ancestors.length
+        ) {
+          throw new FsError(ErrorCode.INVALID_INPUT, 'Invalid tree depth or missing ancestor');
+        }
+        ancestors.length = node.depth;
+      }
+      const row = node
+        ? serializeTreeRecord(node)
+        : serializeSnapshotRecord(record as SnapshotRecord);
       if (row.length > ctx.config.maxRecordBytes) {
         throw new FsError(
           ErrorCode.TOO_LARGE,
           `CSV record exceeds configured cap (${String(row.length)} bytes)`,
-          record.relativePath,
+          node?.name ?? (record as SnapshotRecord).relativePath,
         );
       }
-      if (Buffer.byteLength(SNAPSHOT_CSV_HEADER) + row.length > ctx.config.maxRawPartBytes) {
+      if (
+        (prefix?.length ?? Buffer.byteLength(SNAPSHOT_CSV_HEADER)) + row.length >
+        ctx.config.maxRawPartBytes
+      ) {
         throw new FsError(ErrorCode.TOO_LARGE, 'CSV record cannot fit in an empty snapshot part');
       }
-      if (part.rawBytes + row.length > ctx.config.maxRawPartBytes && part.rows > 0) {
+      if (part.rawBytes + row.length > ctx.config.maxRawPartBytes) {
+        const context = node
+          ? ancestors.map((name, depth) => serializeTreeRecord({ type: 'C', depth, name }))
+          : [];
+        if (
+          context.some((bytes) => bytes.length > ctx.config.maxRecordBytes) ||
+          (prefix?.length ?? Buffer.byteLength(SNAPSHOT_CSV_HEADER)) +
+            context.reduce((n, bytes) => n + bytes.length, 0) +
+            row.length >
+            ctx.config.maxRawPartBytes
+        ) {
+          throw new FsError(
+            ErrorCode.TOO_LARGE,
+            'Tree root/header/context and record cannot fit in an empty snapshot part',
+          );
+        }
         parts.push(await finalizePart(part, ctx, hooks));
-        part = await openPart(part.number + 1, ctx);
+        part = await openPart(part.number + 1, ctx, prefix);
+        for (const bytes of context) {
+          if (snapshotCounters(ctx).rawCsvBytes + bytes.length > ctx.config.maxJobRawBytes)
+            throw new FsError(ErrorCode.TOO_LARGE, 'Snapshot job raw CSV byte limit exceeded');
+          await writeBuffer(part, bytes, ctx);
+          part.rows += 1;
+          if (part.tree) part.tree.contextRecords += 1;
+          snapshotCounters(ctx).contextRecords = (snapshotCounters(ctx).contextRecords ?? 0) + 1;
+        }
         await ctx.setPhase('walking');
       }
       if (snapshotCounters(ctx).rawCsvBytes + row.length > ctx.config.maxJobRawBytes) {
@@ -498,8 +623,20 @@ export async function writeSnapshotFromRecords(
       }
       await writeBuffer(part, row, ctx);
       part.rows += 1;
-      snapshotCounters(ctx).filesWritten += 1;
-      if (snapshotCounters(ctx).filesWritten % 10_000 === 0) await ctx.checkpoint();
+      if (!node || node.type === 'F') {
+        snapshotCounters(ctx).filesWritten += 1;
+        if (part.tree) part.tree.files += 1;
+      } else if (node.type === 'D') {
+        snapshotCounters(ctx).directoriesWritten =
+          (snapshotCounters(ctx).directoriesWritten ?? 0) + 1;
+        if (part.tree) part.tree.directories += 1;
+      } else {
+        snapshotCounters(ctx).errorRecords = (snapshotCounters(ctx).errorRecords ?? 0) + 1;
+        if (part.tree) part.tree.errorRecords += 1;
+      }
+      if (node && node.type !== 'F') ancestors.push(node.name);
+      if ((tree ? part.rows : snapshotCounters(ctx).filesWritten) % 10_000 === 0)
+        await ctx.checkpoint();
     }
     parts.push(await finalizePart(part, ctx, hooks));
   } finally {
@@ -508,8 +645,9 @@ export async function writeSnapshotFromRecords(
   await ctx.setPhase('manifest');
   const endedAt = new Date().toISOString();
   const manifest = {
-    schema: 'filesystem-mcp.snapshot-manifest',
+    schema: tree ? 'filesystem-mcp.snapshot-tree-manifest' : 'filesystem-mcp.snapshot-manifest',
     version: 1,
+    ...(tree ? { layout: 'tree-depth-v1' } : {}),
     jobId: ctx.job.jobId,
     root: { id: ctx.job.sourceRootId, path: ctx.job.sourceRoot },
     ...(ctx.job.provenance ? { provenance: ctx.job.provenance } : {}),
@@ -519,8 +657,23 @@ export async function writeSnapshotFromRecords(
       bom: false,
       newline: 'CRLF',
       quoting: 'RFC 4180',
-      columns: ['RootId', 'RelativePath', 'Name', 'Extension', 'Length', 'LastWriteTime'],
-      relativePathSeparator: '/',
+      ...(tree
+        ? {
+            columns: ['Type', 'Depth', 'Name', 'Length', 'LastWriteTime'],
+            firstRecord: 'One field: absolute sourceRoot',
+            depth: '0 = children of sourceRoot; depth-first; basename at each depth',
+            types: {
+              F: 'file',
+              D: 'directory in selected scope',
+              C: 'ancestor context, not a new object',
+              U: 'incomplete child directory, not a new object',
+            },
+            rows: 'All CSV records including root, header, C and U',
+          }
+        : {
+            columns: ['RootId', 'RelativePath', 'Name', 'Extension', 'Length', 'LastWriteTime'],
+            relativePathSeparator: '/',
+          }),
       timestamp: 'ISO 8601 UTC',
     },
     policy: {
@@ -554,6 +707,14 @@ export async function writeSnapshotFromRecords(
       zipBytes: artifact.size,
       base64Bytes: 4 * Math.ceil(artifact.size / 3),
       sha256: artifact.sha256,
+      ...(tree
+        ? {
+            files: artifact.files,
+            directories: artifact.directories,
+            contextRecords: artifact.contextRecords,
+            errorRecords: artifact.errorRecords,
+          }
+        : {}),
     })),
   };
   const bytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
@@ -579,7 +740,7 @@ export async function writeSnapshotFromRecords(
   });
   const artifact = await ctx.commitArtifact(manifestPath, {
     kind: 'manifest',
-    name: 'snapshot-manifest.json',
+    name: tree ? 'snapshot-tree-manifest.json' : 'snapshot-manifest.json',
     mimeType: 'application/json',
     size: bytes.length,
     sha256: createHash('sha256').update(bytes).digest('hex'),

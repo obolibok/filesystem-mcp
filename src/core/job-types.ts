@@ -26,6 +26,10 @@ export interface SnapshotCounters {
   rawCsvBytes: number;
   zipBytes: number;
   parts: number;
+  /** Tree layout only; absent for stable/legacy jobs. */
+  directoriesWritten?: number;
+  contextRecords?: number;
+  errorRecords?: number;
 }
 
 export interface BundleCounters {
@@ -72,6 +76,10 @@ export interface StoredArtifact {
   readonly sha256: string;
   readonly rows?: number;
   readonly rawBytes?: number;
+  readonly files?: number;
+  readonly directories?: number;
+  readonly contextRecords?: number;
+  readonly errorRecords?: number;
 }
 
 export interface StoredJob<Counters extends JobCounters = SnapshotCounters> {

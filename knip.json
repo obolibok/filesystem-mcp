@@ -3,6 +3,7 @@
   "entry": [
     "__tests__/**/*.test.ts",
     "scripts/snapshot-benchmark/run.mts",
+    "scripts/snapshot-benchmark/tree-comparison.mts",
     "scripts/bundle-check/volume.mts"
   ],
   "ignoreBinaries": ["mkfifo"],

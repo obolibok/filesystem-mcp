@@ -358,6 +358,37 @@ bounded code/message and, when known and safe, path, native error code and
 operation. Cancellation and interruption use their existing state and
 `stopReason`; a timeout failure reports `fatalError.code: "TIMEOUT"`.
 
+#### Experimental tree snapshot
+
+Set `FS_EXPERIMENTAL_SNAPSHOT_TREE=1` to publish `snapshot_tree` alongside
+`snapshot` (20 tools, or 14 with `--read-only`). It is off by default; ordinary
+inventories still use `snapshot`. The inputs and shared job/artifact lifecycle
+are the same, but reuse is isolated by format. Sharing an idempotency key between
+formats is an error. Turning the flag off still permits status, cancellation and
+fetch of existing tree jobs under the same access policy and limits.
+
+Each independent ZIP part contains UTF-8, no-BOM, RFC 4180 CSV with CRLF record
+delimiters. The first record has one field: the job's absolute sourceRoot,
+including a selected subdirectory or UNC path. The second is
+`Type,Depth,Name,Length,LastWriteTime`. Depth 0 means children of that base;
+depth-first records carry exact basenames. `F` has byte length and UTC timestamp;
+`D` represents a directory, including directories with no exported children.
+`C` supplies ancestors at the start of a later part; `U` marks an incomplete
+child directory. C/U are service records, not additional objects. Directory
+metadata cells are empty. Never split CSV on physical lines: names may contain
+quoted commas, quotes or legal CR/LF characters.
+
+The separate `filesystem-mcp.snapshot-tree-manifest`, version 1, declares layout
+`tree-depth-v1`, scope, provenance, completeness, hashes and per-part
+files/directories/contextRecords/errorRecords. Tree `rows` includes root, header
+and service records; `filesWritten` counts only F. All encoded records, including
+root/header/context, consume existing byte/storage limits; impossible budgets
+fail explicitly. The guarded walk, exclusions and no-follow policy are shared.
+No exported children means empty within the selected scope; check completeness
+and policy before describing physical emptiness.
+
+Synthetic measurements and limitations: [task 014 comparison](docs/testing/014-snapshot-tree.md).
+
 #### Write
 
 | Tool           | Description                                                                                                                                                                                                          |

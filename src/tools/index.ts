@@ -22,7 +22,7 @@ import { PATCH } from './patch.js';
 import { READ } from './read.js';
 import { REPLACE_TEXT } from './replace-text.js';
 import { SEARCH_TEXT } from './search-text.js';
-import { SNAPSHOT } from './snapshot.js';
+import { SNAPSHOT, SNAPSHOT_TREE } from './snapshot.js';
 import { STAT } from './stat.js';
 
 export const ALL_TOOLS = [
@@ -54,7 +54,8 @@ export const MUTATING_TOOL_NAMES = new Set(
 
 /** The tools a server registers at this setting — the one owner of the `--read-only` gate. */
 export function registeredTools(readOnly: boolean): readonly DefinedTool[] {
-  return readOnly ? ALL_TOOLS.filter((t) => !MUTATING_TOOL_NAMES.has(t.name)) : ALL_TOOLS;
+  const tools = readOnly ? ALL_TOOLS.filter((t) => !MUTATING_TOOL_NAMES.has(t.name)) : ALL_TOOLS;
+  return process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'] === '1' ? [...tools, SNAPSHOT_TREE] : tools;
 }
 
 // Re-exported so documentation surfaces quote `.name` off the definition rather
