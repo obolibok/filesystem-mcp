@@ -23,7 +23,8 @@
 | 011          | [Ограниченный поиск и пагинация](../tasks/011-bounded-search.md)                    | done     | 010, triage        | R1–R4 закрыты; PR #10 слит, CI/portable PASS; новый ChatGPT live ожидается                                                        |
 | 012          | [Память и TTL пагинации](../tasks/012-pagination-memory-study.md)                   | done     | 010, triage        | R1/R2 закрыты; PR #10 слит; исследование и post-011 проверки приняты, runtime budgets прежние                                     |
 | 013          | [Машина и тома источников](../tasks/013-source-provenance.md)                       | done     | 011, 012           | PR #11; review/CI/portable и пользовательский smoke/restart PASS                                                                  |
-| 014          | [Экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)                    | done     | 013                | PR #12 слит; review/CI/portable PASS; опытный комплект с tree включён, пользовательский A/B ожидается                             |
+| 014          | [Экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)                    | done     | 013                | PR #12 слит; review/CI/portable PASS; live R1 PASS, R2 tree упёрся в ZIP cap; продолжение после настройки                         |
+| 015          | [Отдельные настройки snapshot_tree](../tasks/015-snapshot-tree-settings.md)         | proposed | 014 live           | Пожелание пользователя; tree-only raw part knob без изменения stable reuse; исполнитель не назначен                               |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -33,6 +34,15 @@
 Не придумывать task ID приложения или commit SHA.
 
 ## Текущий следующий шаг
+
+[Первый этап реального опыта 014](../testing/014-live-storage-2026-10-28.md):
+R1 stable/tree exact parity PASS, ZIP tree меньше на 42.49%. R2 stable завершён:
+2843566 files / 1073.157 s / 35.74 MB ZIP; R2 tree failed по closed-ZIP cap 8 MiB
+при raw part 45 MiB. Все completed jobs complete=false из-за access skips.
+16 artifacts доставлены/проверены локально, CRC/CSV/search measurements сохранены;
+R3 пока не запускался. Пользователю дан сигнал уменьшить raw part до 16 MiB и
+перезапустить с прежним scratch; подтверждение перезапуска ожидается.
+015 фиксирует предложение независимых tree settings, реализация не начата.
 
 [014 review](../testing/014-review-2026-10-28.md) **PASS**, head
 `a9c7a7f8e9ba83916298fa302c831b1ec1d0211b`; блокирующих замечаний нет.
@@ -49,6 +59,12 @@ Ubuntu 491/0/15; push CI merge PASS. Опытная папка/ZIP
 13 portable scenarios и 63 packaged MCP calls PASS, финальный Check — 14 tools.
 Следующий шаг — пользовательский A/B на настоящем хранилище по TEST-014.html.
 Установленный сервис, его config/scratch и туннель не менялись.
+
+**Подготовлен свежий стенд на три root для 29.10**: папка/ZIP
+`out/Schwarzbeck-MCP-014-independent-2026-10-28`, `snapshot_tree` включён, scratch
+отдельный. План шести последовательных jobs и передачи/поиска:
+[технический протокол](../testing/014-independent-2026-10-28.md). Live jobs сегодня
+не запускались; завтра перед ними Check подтвердит права на все три roots.
 
 28.10 пользователь дал постоянное разрешение на commit/push/merge main и рабочих
 веток этого fork без повторных запросов; правило записано в AGENTS.md и workflow.
