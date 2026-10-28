@@ -23,7 +23,7 @@
 | 011          | [Ограниченный поиск и пагинация](../tasks/011-bounded-search.md)                    | done     | 010, triage        | R1–R4 закрыты; PR #10 слит, CI/portable PASS; новый ChatGPT live ожидается                                                        |
 | 012          | [Память и TTL пагинации](../tasks/012-pagination-memory-study.md)                   | done     | 010, triage        | R1/R2 закрыты; PR #10 слит; исследование и post-011 проверки приняты, runtime budgets прежние                                     |
 | 013          | [Машина и тома источников](../tasks/013-source-provenance.md)                       | done     | 011, 012           | PR #11; review/CI/portable и пользовательский smoke/restart PASS                                                                  |
-| 014          | [Экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)                    | active   | 013                | `014 — Экспериментальный snapshot_tree`; GPT-6.1-Sol / Extra High; worktree создан, начало работы подтверждено                    |
+| 014          | [Экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)                    | review   | 013                | `014 — Экспериментальный snapshot_tree`; a9c7a7f8 review PASS; 498/0/8, legacy upgrade и A/B PASS                                 |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -33,6 +33,15 @@
 Не придумывать task ID приложения или commit SHA.
 
 ## Текущий следующий шаг
+
+[014 review](../testing/014-review-2026-10-28.md) **PASS**, head
+`a9c7a7f8e9ba83916298fa302c831b1ec1d0211b`; блокирующих замечаний нет.
+Независимый full check 498/0/8 (506 tests), upgrade/reuse старого комплекта 013
+через stdio и повтор 8 A/B workers PASS. ZIP меньше примерно на 41,3% shared/deep
+и 11,6% flat/noisy; устойчивое ускорение walk/снижение памяти не подтверждено.
+Пользователь предложил опыт на настоящем хранилище. Следующий шаг — интеграция
+с CI, опытный portable с opt-in и A/B на согласованном реальном каталоге.
+Слияние и новый build 014 пока не выполнены; стабильная установка не менялась.
 
 28.10 пользователь разрешил [014 — экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)
 рядом со стабильным snapshot. Согласованы числовая глубина, исходный путь первой
@@ -46,13 +55,12 @@ raw/ZIP/time/memory без production данных. Исполнитель за�
 - Опубликованный base: `272a841e47366bacbe6774689ca3113a2e8b890b`.
 - Managed checkout `b903/filesystem-mcp`: base, чистота дерева и наличие карточки
   независимо проверены планированием. Назначенная ветка `codex/014-snapshot-tree`.
-- Получен первый ответ: исполнитель проверяет base/ветку и читает pipeline.
-  Active turn подтверждён приложением. Pending creation ID
-  `client-new-thread:3e6f2b77-9769-42f2-a022-8d0fb30314f4` — история запуска;
-  для дальнейших действий используется настоящий threadId выше.
+- Исполнитель завершил работу на `a9c7a7f8`; work record и собственные проверки
+  записаны в карточке/протоколе ветки. Планирование независимо проверило exact head;
+  результат review и повторных измерений приведён выше.
 
 Центральную доску, review/PR/merge, portable и live ведёт планирование.
-Следующий шаг после handoff исполнителя — review exact head по карточке 014.
+Review exact head по карточке 014 завершено; интеграция и live пока впереди.
 
 **013 принята и слита через [PR #11](https://github.com/obolibok/filesystem-mcp/pull/11)**,
 merge `431860a1694abbf73d16b0eafbd9df7213e60950`.
