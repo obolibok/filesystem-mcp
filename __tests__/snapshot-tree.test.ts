@@ -278,7 +278,8 @@ describe('experimental snapshot_tree', () => {
     const nodes: SnapshotTreeRecord[] = [
       { type: 'D', depth: 0, name: 'shared,"\r\n大小' },
       { type: 'D', depth: 1, name: 'deep.目录' },
-      ...Array.from({ length: 14 }, (_, i): SnapshotTreeRecord => ({
+      // Force >4 parts even with the shortest sourceRoot record on Linux.
+      ...Array.from({ length: 28 }, (_, i): SnapshotTreeRecord => ({
         type: 'F',
         depth: 2,
         name: `file,"${i}\n.dat`,
@@ -308,7 +309,7 @@ describe('experimental snapshot_tree', () => {
         });
         if (node.type === 'D') stack.push(node.name);
       }
-      assert.equal(job.counters.filesWritten, 15);
+      assert.equal(job.counters.filesWritten, 29);
       assert.equal(job.counters.directoriesWritten, 5);
       assert.equal(
         parts.reduce((n, p) => n + p.rawBytes, 0),

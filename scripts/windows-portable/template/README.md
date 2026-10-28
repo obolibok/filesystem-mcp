@@ -30,7 +30,8 @@ Set-Location 'C:\SWB-MCP'
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Check.ps1
 ```
 
-Ожидается LOCAL_MCP_PASS и 13 read-only tools, включая snapshot, bundle,
+Ожидается LOCAL_MCP_PASS и 13 read-only tools (14 при включённом
+experimentalSnapshotTree), включая snapshot, bundle,
 job_status, cancel_job, get_artifact и get_file. По умолчанию открыт только
 маленький sample-source. Проверка не соединяется с OpenAI и использует отдельный
 временный scratch, не изменяя сохранённые jobs рабочего сервера.
