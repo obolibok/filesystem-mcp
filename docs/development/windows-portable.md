@@ -52,6 +52,17 @@ Production roots не нужны. Synthetic копии и отчёты оста�
 На новую VM доставлять чистый комплект; рабочие данные и локальную конфигурацию
 переносить отдельно по операторской инструкции.
 
+## Opt-in snapshot_tree (014)
+
+Шаблон содержит optional boolean `experimentalSnapshotTree` (default false/absent).
+`serverEnvironment` после очистки inherited FS_* явно задаёт
+`FS_EXPERIMENTAL_SNAPSHOT_TREE=1` только при true; строковые значения отклоняются.
+Preflight ожидает 13 tools при выключенном и 14 при включённом эксперименте.
+Новый creation-tool не участвует в config/policy fingerprint jobs, поэтому
+выключение не блокирует status/fetch/cancel сохранённых tree результатов.
+Runtime формат, локальные проверки и границы: [014](../testing/014-snapshot-tree.md).
+Сборка и live-проверка нового комплекта выполняются планированием после review.
+
 ## Приёмка 22.09.2026
 
 - Платформа: Windows 10 Pro x64, build 19045, Windows PowerShell 5.1.

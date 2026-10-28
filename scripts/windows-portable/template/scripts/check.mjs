@@ -60,6 +60,8 @@ try {
   child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
   const tools = await request('tools/list', {});
   const names = tools.tools.map((tool) => tool.name);
+  assert.equal(names.includes('snapshot_tree'), config.experimentalSnapshotTree === true);
+  assert.equal(names.length, config.experimentalSnapshotTree === true ? 14 : 13);
   for (const name of ['list_roots', 'snapshot', 'bundle', 'get_artifact', 'get_file'])
     assert(names.includes(name), 'Missing tool: ' + name);
   for (const name of ['create', 'edit', 'delete', 'move', 'copy', 'patch', 'replace_text'])

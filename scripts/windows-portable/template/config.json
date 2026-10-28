@@ -2,6 +2,7 @@
   "tunnelId": "",
   "roots": ["./sample-source"],
   "scratchDirectory": "./data/jobs",
+  "experimentalSnapshotTree": false,
   "limits": {
     "FS_MAX_FILE_SIZE": 67108864,
     "FS_SNAPSHOT_RESULT_TTL_MS": 86400000,

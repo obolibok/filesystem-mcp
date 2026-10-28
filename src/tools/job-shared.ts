@@ -19,6 +19,9 @@ const SnapshotCountersSchema = z.strictObject({
   rawCsvBytes: NonNegInt,
   zipBytes: NonNegInt,
   parts: NonNegInt,
+  directoriesWritten: NonNegInt.optional(),
+  contextRecords: NonNegInt.optional(),
+  errorRecords: NonNegInt.optional(),
 });
 
 const BundleCountersSchema = z.strictObject({
@@ -65,6 +68,7 @@ const ArtifactSummarySchema = z.strictObject({
 export const JobStatusOutputSchema = z.strictObject({
   jobId: z.string(),
   kind: z.string(),
+  layout: z.literal('tree-depth-v1').optional(),
   state: z.enum(JOB_STATES),
   phase: z.string(),
   createdAt: IsoDateTime,
@@ -91,6 +95,7 @@ export function jobStatusValue(job: StoredJob<JobCounters>): JobStatusValue {
   return {
     jobId: job.jobId,
     kind: job.kind,
+    ...(job.input['layout'] === 'tree-depth-v1' ? { layout: 'tree-depth-v1' as const } : {}),
     state: job.state,
     phase: job.phase,
     createdAt: job.createdAt,

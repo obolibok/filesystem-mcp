@@ -208,6 +208,42 @@ blob SDK-клиентом само по себе не доказывает ма�
 аналитической среде; проверенный ChatGPT-маршрут записан в
 [tool delivery protocol](../testing/tool-originals-delivery.md).
 
+## Экспериментальный tree snapshot (014)
+
+`FS_EXPERIMENTAL_SNAPSHOT_TREE=1` добавляет `snapshot_tree` к стандартным 19/13
+tools (20/14 с экспериментом). Tool имеет те же inputs и доступен в read-only;
+обычная инструкция продолжает направлять inventory в `snapshot`. В portable
+управляет optional boolean `config.experimentalSnapshotTree`, default false;
+inherited environment не включает эксперимент вопреки config.
+
+Общий `snapshot-pipeline.ts` выдаёт в tree-режиме D/F/U события из прежнего
+guarded depth-first walker. Источник не читается вторично, stat каталога не
+добавлен. Writer хранит стек имён глубины и текущий spool; ZIP, quotas, commit,
+TTL и delivery остаются общими. Stable CSV/manifest и его normalized identity
+не изменены. Для tree discriminator `layout: tree-depth-v1` добавлен в normalized
+input и все три fingerprints (ordinary/reuse/request). Job kind остаётся snapshot.
+Один idempotency key между форматами конфликтует. Flag не входит в captured
+config/policy identity: legacy и tree status/fetch/cancel работают при flag off.
+
+Каждая часть: одна CSV-запись absolute sourceRoot, header
+`Type,Depth,Name,Length,LastWriteTime`, затем basename/depth записи. UTF-8 без BOM,
+CRLF и RFC 4180, включая quoting root и имён с CR/LF. Depth 0 — содержимое
+sourceRoot, сам sourceRoot не дублируется как D. D включает пустые в выборке
+каталоги, F — bytes/UTC metadata. C в начале следующей части восстанавливает
+ancestor stack 0..N-1. U уточняет уже экспортированный D при child open/readdir
+или ignore-read failure; это incomplete каталог, а не дополнительный объект.
+Root open/readdir и policy/storage failures остаются fatal. Физическая пустота
+каталога при exclusions/ошибках не утверждается.
+
+Tree manifest имеет отдельную schema `filesystem-mcp.snapshot-tree-manifest`,
+version 1 и layout `tree-depth-v1`, root/provenance/policy/errors/complete.
+Part `rows` включает root/header/D/F/C/U; `files`, `directories`,
+`contextRecords`, `errorRecords` разделены. В status добавлен optional layout,
+в counters — directoriesWritten/contextRecords/errorRecords только для tree.
+Root/header/context учитываются в maxRecordBytes/raw-part/job-raw/scratch limits;
+невмещающиеся preamble+context+объект дают TOO_LARGE до следующей части.
+SHA/CRC и независимый readback, A/B и ограничения: [014](../testing/014-snapshot-tree.md).
+
 ## Лимиты и контракт результата
 
 | Ограничение                           | Baseline default / cap                                                            | Владелец                        |

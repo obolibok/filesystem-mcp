@@ -163,15 +163,15 @@ raw bytes, ZIP bytes, parts, serialization/compression time и peak memory.
 
 ## Acceptance
 
-- [ ] Два toolset варианта доступны по явной настройке; stable default сохранён.
-- [ ] Tree layout lossless по files/dirs, с числовой глубиной и первой root записью.
-- [ ] Empty/unreadable/excluded случаи различены, прежние guards/policy сохранены.
-- [ ] Multipart parts отдельно декодируются; служебный контекст корректен и учтён.
-- [ ] Reuse изолирован по формату, legacy stable jobs и restart/fetch работают.
-- [ ] Independent verifier/readback не делит CSV по физическим строкам; проверяет
+- [x] Два toolset варианта доступны по явной настройке; stable default сохранён.
+- [x] Tree layout lossless по files/dirs, с числовой глубиной и первой root записью.
+- [x] Empty/unreadable/excluded случаи различены, прежние guards/policy сохранены.
+- [x] Multipart parts отдельно декодируются; служебный контекст корректен и учтён.
+- [x] Reuse изолирован по формату, legacy stable jobs и restart/fetch работают.
+- [x] Independent verifier/readback не делит CSV по физическим строкам; проверяет
       hashes/CRC/формат и сопоставляет дерево с synthetic эталоном.
-- [ ] Targeted regressions и npm run check; pass/fail/skips и границы зафиксированы.
-- [ ] Сравнение raw/ZIP/time/memory выполнено; обновлены reference/portable docs
+- [x] Targeted regressions и npm run check; pass/fail/skips и границы зафиксированы.
+- [x] Сравнение raw/ZIP/time/memory выполнено; обновлены reference/portable docs
       и Work record. Исходные данные/серийники/ключи/архивы в Git не попали.
 
 ## Launch prompt
@@ -192,5 +192,46 @@ raw bytes, ZIP bytes, parts, serialization/compression time и peak memory.
 
 ## Work record
 
-Реализация не начата. Карточка подготовлена планированием 28.10.2026;
-исполнитель ещё не назначен.
+28.10.2026 — реализация завершена, **ready for review**. Приёмка и центральная
+доска остаются за планированием.
+
+- Base: `272a841e47366bacbe6774689ca3113a2e8b890b`; managed worktree, ветка
+  `codex/014-snapshot-tree`. При старте detached HEAD/чистый diff, карточка уже
+  в base. Ветка создана в этом worktree; другие checkouts не менялись.
+- Два tools используют общий submit/walker/writer/ZIP/jobs/storage. Stable inputs,
+  CSV/manifest schema и fingerprints сохранены. Tree добавляет layout только в
+  свою normalized identity; общий idempotency key между форматами конфликтует.
+  Feature flag не изменяет config/policy fingerprint и доступ к старым artifacts.
+- Encoder держит ancestor stack и одну текущую часть; D/F — объекты, C/U —
+  service records. Part rows включает root/header/C/U; filesWritten считает F.
+  Невмещающиеся root/header/context+record завершаются TOO_LARGE до создания
+  следующей части. Shared guarded traversal сохраняет фильтры/no-follow/scratch;
+  child open/readdir/ignore-read faults дополнительно получают U.
+- Выбран отдельный manifest schema `filesystem-mcp.snapshot-tree-manifest`,
+  version 1, layout `tree-depth-v1`; part breakdown и optional status layout/
+  tree counters. Job kind остаётся snapshot. Старые metadata/bytes не мигрируют.
+- Portable optional boolean `experimentalSnapshotTree` default false/absent;
+  inherited env очищается, затем launcher выставляет явный 1/0. Preflight
+  проверяет 13/14 tools. Default full/read-only — 19/13, прежние budgets проходят;
+  эксперимент — 20/14, измерен отдельно.
+- Проверки: `npm ci` PASS; `npm run check:static` PASS; targeted snapshot-tree,
+  snapshot, walk-recovery, source-provenance — 66 PASS / 0 FAIL / 0 SKIP;
+  final `npm run check` — PASS, 506 tests: 498 PASS / 0 FAIL / 8 SKIP. Skips:
+  3 POSIX-only и 5 Windows file-symlink permission; новый tree suite без skips,
+  настоящий junction проверен. Sandbox tsx сначала упал на uv_os_get_passwd
+  до загрузки tests; рабочие прогоны выполнены согласно Windows runbook.
+- Independent verifier и negative SHA/CRC controls; forced multipart, exact
+  CR/LF/quotes/Unicode, empty/unreadable/excluded, limits/cleanup/cancel/TTL,
+  restart/stable bytes и MCP flag-off status/fetch/cancel — PASS. A/B completed/
+  in-flight/retry проверен в обоих направлениях с детерминированным source gate.
+- `tree-comparison.mts --files 100000 --walk-files 1200`: оба формата, два профиля,
+  streaming metadata и настоящий walk, DEFLATE 6, independent readback — PASS.
+  Числа, методика/границы и все команды: [014 local report](../testing/014-snapshot-tree.md).
+  Shared/deep и flat/noisy дают меньшие raw/ZIP; время и peak memory не дают
+  основания обещать ускорение/снижение памяти реального большого walk.
+- Обновлены README/reference, docs map и portable template/docs. Production
+  source paths, inventories, host/volume identifiers, keys и ZIP не коммитились.
+  Новых зависимостей/БД/job managers нет; package/server versions не менялись.
+- Осталось вне этой карточки: независимый review/приёмка, remote CI, PR/merge,
+  portable build и live ChatGPT/UNC/SMB опыт. Рабочая установка и tunnel не менялись;
+  `docs/project/status.md` не редактировалась. Итоговый commit SHA — в handoff.

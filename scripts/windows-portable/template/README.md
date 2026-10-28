@@ -70,6 +70,17 @@ Scratch не должен пересекаться с исходниками д�
 list_roots в новом чате. При нескольких roots передавайте явный path нужного корня
 в snapshot/search/list; для bundle выбирайте файлы в рамках его source path.
 
+Эксперимент 014 включается только полем `"experimentalSnapshotTree": true` в
+config.json. False или отсутствие поля сохраняет стандартные 13 tools; true
+добавляет read-only `snapshot_tree` (14 tools). Поле принимает только boolean.
+Inherited `FS_EXPERIMENTAL_SNAPSHOT_TREE` игнорируется, как и остальные FS_*;
+launcher явно задаёт `1`/`0` из config. После изменения нужен restart.
+Обычные inventory-запросы по-прежнему используют `snapshot`; `snapshot_tree`
+выбирают для явного опыта с деревом. Уже созданные tree jobs/artifacts доступны
+через status/fetch/cancel после выключения эксперимента, пока policy/TTL позволяют.
+Каждая ZIP-часть дерева содержит root, header, D/F объекты и служебные C/U записи;
+правила восстановления и счётчики указаны в отдельном tree manifest.
+
 ## 3. Создание туннеля и runtime API key
 
 1. Войдите в нужную Platform organization:

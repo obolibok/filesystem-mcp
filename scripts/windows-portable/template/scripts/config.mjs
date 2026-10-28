@@ -49,6 +49,11 @@ export async function configuration() {
   const config = JSON.parse(
     (await readFile(join(kit, 'config.json'), 'utf8')).replace(/^\uFEFF/, ''),
   );
+  if (
+    config.experimentalSnapshotTree !== undefined &&
+    typeof config.experimentalSnapshotTree !== 'boolean'
+  )
+    throw new Error('experimentalSnapshotTree must be a boolean.');
   if (!Array.isArray(config.roots) || config.roots.length === 0)
     throw new Error('config.json must contain at least one explicit source root.');
   const roots = [];
@@ -98,6 +103,7 @@ export function serverEnvironment(config) {
   }
   process.env.FS_ROOT_BOUNDARY = config.roots.join(delimiter);
   process.env.FS_SNAPSHOT_DIR = config.scratchDirectory;
+  process.env.FS_EXPERIMENTAL_SNAPSHOT_TREE = config.experimentalSnapshotTree === true ? '1' : '0';
   for (const [key, value] of Object.entries(config.limits)) process.env[key] = String(value);
   delete process.env.CONTROL_PLANE_API_KEY;
   delete process.env.OPENAI_API_KEY;
