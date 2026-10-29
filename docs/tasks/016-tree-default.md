@@ -1,6 +1,6 @@
 # 016: tree-depth-v1 по умолчанию
 
-Статус реализации: review прошла; check PASS, ожидает интеграции. Зависимости: задачи 014 и 015 интегрированы.
+Статус реализации: принята и интегрирована через PR #15; check PASS. Зависимости: задачи 014 и 015 интегрированы.
 Планирующий чат ведёт центральную доску и принимает результат после ревью.
 
 ## Зачем
@@ -177,3 +177,5 @@ Planning интегрирует результат после независим
   task/main head, `npm run check` passed: build, production/test types, ESLint,
   Prettier, Knip, and 516 tests (508 passed, 8 platform skips, 0 failures).
   No service, tunnel, or production sources were touched.
+- Интегрирована через [PR #15](https://github.com/obolibok/filesystem-mcp/pull/15). Merge commit:
+  `77a9e71ba6242afce39cc025ac63f2c86aa885c9`; GitHub CI Windows/Ubuntu — PASS.
