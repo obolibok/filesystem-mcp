@@ -387,13 +387,15 @@ export class ArtifactJobManager {
   }
 
   /** Captured settings that can change snapshot traversal or published artifact shape. */
-  snapshotConfigFingerprint(): string {
+  snapshotConfigFingerprint(tree = false): string {
     const config = this.config;
     return fingerprintJobInput({
       version: 1,
       scratchDirectory: this.#scratchDirectory,
       maxRecordBytes: config.maxRecordBytes,
-      maxRawPartBytes: config.maxRawPartBytes,
+      maxRawPartBytes: tree
+        ? (config.maxTreeRawPartBytes ?? config.maxRawPartBytes)
+        : config.maxRawPartBytes,
       maxZipBytes: config.maxZipBytes,
       maxDeliveryBytes: config.maxDeliveryBytes,
       maxFileSizeBytes: config.maxFileSizeBytes,
@@ -819,6 +821,7 @@ export class ArtifactJobManager {
     const timeout = AbortSignal.timeout(this.config.maxJobMs);
     const signal = AbortSignal.any([runtime.abortController.signal, timeout]);
     const ctx = new JobRunContext(this, runtime, signal);
+    let failure: { stopReason: string; fatalError: JobFatalError } | undefined;
     try {
       await this.persist(job);
       signal.throwIfAborted();
@@ -835,18 +838,26 @@ export class ArtifactJobManager {
         await this.#removeArtifacts(runtime);
         return;
       }
-      job.state = 'failed';
-      job.phase = 'failed';
-      job.complete = false;
-      job.stopReason = timeout.aborted ? 'time-limit-exceeded' : formatUnknownErrorMessage(error);
-      job.fatalError = timeout.aborted
-        ? { code: ErrorCode.TIMEOUT, message: 'Job timed out' }
-        : safeDiagnostic(error, job, this.#scratchDirectory);
-      job.finishedAt = new Date(this.#now()).toISOString();
+      failure = {
+        stopReason: timeout.aborted ? 'time-limit-exceeded' : formatUnknownErrorMessage(error),
+        fatalError: timeout.aborted
+          ? { code: ErrorCode.TIMEOUT, message: 'Job timed out' }
+          : safeDiagnostic(error, job, this.#scratchDirectory),
+      };
       ctx.addError(error);
       await this.#removeArtifacts(runtime);
     } finally {
       await this.#removePartials(runtime);
+      // A visible failure must follow cleanup, not race it. Cancel/close may have
+      // changed the state while deletion was pending; preserve that terminal state.
+      if (failure && isJobRunning(job)) {
+        job.state = 'failed';
+        job.phase = 'failed';
+        job.complete = false;
+        job.stopReason = failure.stopReason;
+        job.fatalError = failure.fatalError;
+        job.finishedAt = new Date(this.#now()).toISOString();
+      }
       await this.#persistTerminal(job);
     }
   }
@@ -1292,7 +1303,13 @@ export class ArtifactJobManager {
     ) {
       throw new FsError(ErrorCode.ACCESS_DENIED, 'Snapshot access policy has changed');
     }
-    if (job.configFingerprint && job.configFingerprint !== this.snapshotConfigFingerprint()) {
+    if (
+      job.configFingerprint &&
+      job.configFingerprint !==
+        this.snapshotConfigFingerprint(
+          job.kind === 'snapshot' && job.input['layout'] === 'tree-depth-v1',
+        )
+    ) {
       throw new FsError(ErrorCode.ACCESS_DENIED, 'Snapshot reuse policy has changed');
     }
     for (const path of job.authorizationPaths ?? []) {

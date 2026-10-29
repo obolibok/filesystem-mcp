@@ -259,6 +259,7 @@ export async function runPrintConfig(options: {
         scratchDirectory: snapshot.scratchDirectory,
         maxRecordBytes: snapshot.maxRecordBytes,
         maxRawPartBytes: snapshot.maxRawPartBytes,
+        maxTreeRawPartBytes: snapshot.maxTreeRawPartBytes ?? snapshot.maxRawPartBytes,
         maxZipBytes: snapshot.maxZipBytes,
         maxDeliveryBytes: snapshot.maxDeliveryBytes,
         maxJobRawBytes: snapshot.maxJobRawBytes,

@@ -63,6 +63,16 @@ Preflight ожидает 13 tools при выключенном и 14 при в�
 Runtime формат, локальные проверки и границы: [014](../testing/014-snapshot-tree.md).
 Сборка и live-проверка нового комплекта выполняются планированием после review.
 
+Настройка [015](../tasks/015-snapshot-tree-settings.md): optional
+`limits.FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES` задаёт только tree raw part cap.
+Шаблон содержит 16777216 (16 MiB) рядом с общим stable cap 47185920 (45 MiB);
+удаление tree ключа возвращает fallback на общий cap. Portable принимает только
+целое JSON-число в диапазоне 65536–536870912, отклоняет неверное значение до
+запуска MCP и очищает inherited FS_* перед применением config. Ключ не включает
+эксперимент. Tree manifest и automatic reuse используют effective cap;
+stable fingerprint/reuse/bytes сохраняются. Общие ZIP/delivery/job/quota/TTL
+ограничения не меняются; меньший raw cap не гарантирует compression ratio.
+
 ## Приёмка 22.09.2026
 
 - Платформа: Windows 10 Pro x64, build 19045, Windows PowerShell 5.1.
