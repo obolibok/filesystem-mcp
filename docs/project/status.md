@@ -24,7 +24,7 @@
 | 012          | [Память и TTL пагинации](../tasks/012-pagination-memory-study.md)                   | done     | 010, triage        | R1/R2 закрыты; PR #10 слит; исследование и post-011 проверки приняты, runtime budgets прежние                                     |
 | 013          | [Машина и тома источников](../tasks/013-source-provenance.md)                       | done     | 011, 012           | PR #11; review/CI/portable и пользовательский smoke/restart PASS                                                                  |
 | 014          | [Экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)                    | done     | 013                | PR #12 слит; review/CI/portable PASS; live R1 PASS, R2 tree упёрся в ZIP cap; продолжение после настройки                         |
-| 015          | [Отдельные настройки snapshot_tree](../tasks/015-snapshot-tree-settings.md)         | proposed | 014 live           | Пожелание пользователя; tree-only raw part knob без изменения stable reuse; исполнитель не назначен                               |
+| 015          | [Отдельные настройки snapshot_tree](../tasks/015-snapshot-tree-settings.md)         | ready    | 014 live           | Tree-only `limits.FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES`; 16 MiB для повтора R2, stable cap без изменений                          |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -38,11 +38,11 @@
 [Независимый live-прогон 014 на трёх корнях](../testing/014-independent-live-2026-10-29.md):
 R1/R3 stable-tree metadata parity PASS, ZIP tree меньше на 42.5% и 38.6%; все
 jobs `complete=false` из-за access skips. R2 stable сгенерирован за 1182.688 s
-(2,843,566 files, 11 parts). Мой `get_artifact` для part 2 вернул `NOT_FOUND`, но
-пользователь сообщает, что видит все архивы; потеря не подтверждена. R2 tree завершился
-`TOO_LARGE` на closed-ZIP cap 8 MiB без artifacts. Сначала сверить открытие
-`snapshot-00002.zip`, затем уменьшить отдельный tree raw-part limit (предложение
-015, реализация не начата) и повторить tree на R2.
+(2,843,566 files, 11 parts). Пользователь подтвердил, что part 2 открывается; мой
+`get_artifact` возвращал `NOT_FOUND`, это assistant-side несоответствие, не потеря файла.
+R2 tree завершился `TOO_LARGE` на closed-ZIP cap 8 MiB. Параметр
+`FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES` ещё не читается runtime; сначала реализовать 015,
+оставить stable cap без изменений, затем собрать, перезапустить и повторить tree R2.
 
 [014 review](../testing/014-review-2026-10-28.md) **PASS**, head
 `a9c7a7f8e9ba83916298fa302c831b1ec1d0211b`; блокирующих замечаний нет.
