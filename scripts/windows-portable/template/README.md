@@ -84,6 +84,25 @@ launcher явно задаёт `1`/`0` из config. После изменени�
 Каждая ZIP-часть дерева содержит root, header, D/F объекты и служебные C/U записи;
 правила восстановления и счётчики указаны в отдельном tree manifest.
 
+В `limits` предусмотрен отдельный optional ключ для сырой части дерева:
+
+```json
+"FS_SNAPSHOT_MAX_RAW_PART_BYTES": 47185920,
+"FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES": 16777216
+```
+
+Это фрагмент объекта `limits`: stable сохраняет 45 MiB, tree получает 16 MiB.
+Ключ принимает только целое число bytes от 65536 до 536870912. Если удалить его,
+tree использует общий `FS_SNAPSHOT_MAX_RAW_PART_BYTES`, как прежде. Сам ключ не
+включает эксперимент. Inherited tree cap очищается; применяется только config.
+После изменения нужен restart. Меняется только tree partitioning/reuse;
+stable jobs и их bytes остаются совместимыми. Tree jobs прежнего effective cap
+не выдаются при новом cap; если вернуть прежнее значение, доступ возможен до TTL.
+Manifest `policy.maxRawPartBytes` показывает фактически использованный cap,
+включая root/header/C/U bytes. Общие ZIP/delivery 8 MiB, file/job/quota/TTL caps
+сохраняются. Даже меньшая сырая часть может не поместиться в закрытый ZIP;
+тогда остаётся явная ошибка `TOO_LARGE`.
+
 ## 3. Создание туннеля и runtime API key
 
 1. Войдите в нужную Platform organization:
@@ -199,6 +218,7 @@ Snapshot с одним `path` автоматически возвращает с
 | Параллельность                    | 1 running job, до 4 queued                   |
 | Snapshot raw bytes / job          | 512 MiB                                      |
 | Snapshot raw CSV / part           | 45 MiB                                       |
+| Tree raw CSV / part (opt-in)      | 16 MiB; без отдельного ключа — общий raw cap |
 | ZIP / artifact delivery           | 8 MiB                                        |
 | Bundle raw file / raw part        | 64 MiB                                       |
 | Bundle raw bytes / job            | 512 MiB                                      |

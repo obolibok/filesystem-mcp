@@ -74,7 +74,7 @@ function snapshotTool(tree: boolean) {
         ...(tree ? { layout: 'tree-depth-v1' as const } : {}),
       };
       const policyFingerprint = await ctx.fs.pathGuard.snapshotPolicyFingerprint();
-      const configFingerprint = ctx.jobManager.snapshotConfigFingerprint();
+      const configFingerprint = ctx.jobManager.snapshotConfigFingerprint(tree);
       const automaticFingerprint = fingerprintJobInput({
         version: 2,
         ...normalized,

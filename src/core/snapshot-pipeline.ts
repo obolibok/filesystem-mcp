@@ -420,12 +420,17 @@ async function writeBuffer(part: OpenPart, bytes: Buffer, ctx: JobRunContext): P
   }
 }
 
-async function openPart(number: number, ctx: JobRunContext, prefix?: Buffer): Promise<OpenPart> {
+async function openPart(
+  number: number,
+  ctx: JobRunContext,
+  maxRawPartBytes: number,
+  prefix?: Buffer,
+): Promise<OpenPart> {
   if (number > ctx.config.maxParts) {
     throw new FsError(ErrorCode.TOO_LARGE, 'Snapshot part-count limit exceeded');
   }
   const header = prefix ?? Buffer.from(SNAPSHOT_CSV_HEADER, 'utf8');
-  if (prefix && header.length > ctx.config.maxRawPartBytes) {
+  if (prefix && header.length > maxRawPartBytes) {
     throw new FsError(ErrorCode.TOO_LARGE, 'Tree root/header cannot fit in an empty snapshot part');
   }
   const rawPath = ctx.tempPath(`snapshot-${String(number).padStart(5, '0')}.csv`);
@@ -540,6 +545,9 @@ export async function writeSnapshotFromRecords(
   const startedAt = ctx.job.startedAt ?? new Date().toISOString();
   const parts: StoredArtifact[] = [];
   const tree = options.layout === 'tree-depth-v1';
+  const maxRawPartBytes = tree
+    ? (ctx.config.maxTreeRawPartBytes ?? ctx.config.maxRawPartBytes)
+    : ctx.config.maxRawPartBytes;
   const rootRecord = Buffer.from(`${csvField(ctx.job.sourceRoot)}\r\n`, 'utf8');
   const prefix = tree ? Buffer.concat([rootRecord, Buffer.from(TREE_CSV_HEADER)]) : undefined;
   if (
@@ -555,7 +563,7 @@ export async function writeSnapshotFromRecords(
       contextRecords: 0,
       errorRecords: 0,
     });
-  let part = await openPart(1, ctx, prefix);
+  let part = await openPart(1, ctx, maxRawPartBytes, prefix);
   try {
     await ctx.setPhase('walking');
     for await (const record of records) {
@@ -586,11 +594,11 @@ export async function writeSnapshotFromRecords(
       }
       if (
         (prefix?.length ?? Buffer.byteLength(SNAPSHOT_CSV_HEADER)) + row.length >
-        ctx.config.maxRawPartBytes
+        maxRawPartBytes
       ) {
         throw new FsError(ErrorCode.TOO_LARGE, 'CSV record cannot fit in an empty snapshot part');
       }
-      if (part.rawBytes + row.length > ctx.config.maxRawPartBytes) {
+      if (part.rawBytes + row.length > maxRawPartBytes) {
         const context = node
           ? ancestors.map((name, depth) => serializeTreeRecord({ type: 'C', depth, name }))
           : [];
@@ -599,7 +607,7 @@ export async function writeSnapshotFromRecords(
           (prefix?.length ?? Buffer.byteLength(SNAPSHOT_CSV_HEADER)) +
             context.reduce((n, bytes) => n + bytes.length, 0) +
             row.length >
-            ctx.config.maxRawPartBytes
+            maxRawPartBytes
         ) {
           throw new FsError(
             ErrorCode.TOO_LARGE,
@@ -607,7 +615,7 @@ export async function writeSnapshotFromRecords(
           );
         }
         parts.push(await finalizePart(part, ctx, hooks));
-        part = await openPart(part.number + 1, ctx, prefix);
+        part = await openPart(part.number + 1, ctx, maxRawPartBytes, prefix);
         for (const bytes of context) {
           if (snapshotCounters(ctx).rawCsvBytes + bytes.length > ctx.config.maxJobRawBytes)
             throw new FsError(ErrorCode.TOO_LARGE, 'Snapshot job raw CSV byte limit exceeded');
@@ -681,7 +689,7 @@ export async function writeSnapshotFromRecords(
       includeIgnored: options.includeIgnored,
       symlinksFollowed: false,
       maxRecordBytes: ctx.config.maxRecordBytes,
-      maxRawPartBytes: ctx.config.maxRawPartBytes,
+      maxRawPartBytes,
       maxZipBytes: ctx.config.maxZipBytes,
       maxDeliveryBytes: ctx.config.maxDeliveryBytes,
       maxFileSizeBytes: ctx.config.maxFileSizeBytes,

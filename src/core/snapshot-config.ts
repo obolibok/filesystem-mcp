@@ -10,6 +10,8 @@ export interface SnapshotConfig {
   readonly scratchDirectory: string;
   readonly maxRecordBytes: number;
   readonly maxRawPartBytes: number;
+  /** Tree-only override; absent means use maxRawPartBytes. */
+  readonly maxTreeRawPartBytes?: number;
   readonly maxZipBytes: number;
   readonly maxDeliveryBytes: number;
   /** General file cap captured when this endpoint/process manager is created. */
@@ -43,10 +45,26 @@ export function getSnapshotConfig(): SnapshotConfig {
     tmpdir(),
     isTest ? `filesystem-mcp-snapshot-test-${randomUUID()}` : 'filesystem-mcp-snapshot-v1',
   );
+  const maxRawPartBytes = parseEnvInt(
+    'FS_SNAPSHOT_MAX_RAW_PART_BYTES',
+    45 * MIB,
+    64 * 1024,
+    512 * MIB,
+  );
   return {
     scratchDirectory: resolve(process.env['FS_SNAPSHOT_DIR'] ?? defaultScratch),
     maxRecordBytes: parseEnvInt('FS_SNAPSHOT_MAX_RECORD_BYTES', MIB, 1024, 16 * MIB),
-    maxRawPartBytes: parseEnvInt('FS_SNAPSHOT_MAX_RAW_PART_BYTES', 45 * MIB, 64 * 1024, 512 * MIB),
+    maxRawPartBytes,
+    ...(process.env['FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES'] === undefined
+      ? {}
+      : {
+          maxTreeRawPartBytes: parseEnvInt(
+            'FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES',
+            maxRawPartBytes,
+            64 * 1024,
+            512 * MIB,
+          ),
+        }),
     maxZipBytes: parseEnvInt('FS_SNAPSHOT_MAX_ZIP_BYTES', 8 * MIB, 64 * 1024, 100 * MIB),
     maxDeliveryBytes: parseEnvInt('FS_SNAPSHOT_MAX_DELIVERY_BYTES', 8 * MIB, 64 * 1024, 100 * MIB),
     maxFileSizeBytes: getMaxTextFileSize(),

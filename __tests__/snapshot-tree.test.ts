@@ -4,7 +4,17 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Dir } from 'node:fs';
-import { cp, mkdir, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  cp,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -57,7 +67,10 @@ async function terminal(
   }
 }
 
-async function fixture(overrides: Partial<SnapshotConfig> = {}) {
+async function fixture(
+  overrides: Partial<SnapshotConfig> = {},
+  deps: ConstructorParameters<typeof ArtifactJobManager>[1] = {},
+) {
   const root = await realpath(await createTestRoot());
   const scratch = await realpath(await createTestRoot());
   const guard = await makeGuard([root]);
@@ -67,7 +80,7 @@ async function fixture(overrides: Partial<SnapshotConfig> = {}) {
     ephemeralScratch: false,
     ...overrides,
   };
-  const manager = new ArtifactJobManager(config);
+  const manager = new ArtifactJobManager(config, deps);
   return {
     root,
     scratch,
@@ -183,6 +196,326 @@ async function pairFor(f: Awaited<ReturnType<typeof fixture>>, readOnly: boolean
 }
 
 describe('experimental snapshot_tree', () => {
+  it('publishes closed-ZIP failure only after partial cleanup and preserves cancellation during cleanup', async () => {
+    for (const cancel of [false, true]) {
+      let release = () => {};
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      let entered = () => {};
+      const deleting = new Promise<void>((r) => {
+        entered = r;
+      });
+      const f = await fixture(
+        { maxZipBytes: 100 },
+        {
+          unlinkFile: async (path) => {
+            if (path.endsWith('.partial')) {
+              entered();
+              await gate;
+            }
+            await unlink(path);
+          },
+        },
+      );
+      try {
+        const pending = await f.manager.submit({
+          kind: 'snapshot',
+          idempotencyKey: randomUUID(),
+          fingerprint: randomUUID(),
+          sourceRoot: f.root,
+          sourceRootId: 'root-test',
+          input: { layout: 'tree-depth-v1' },
+          run: (ctx) => writeSnapshotFromRecords(records([]), ctx, treeOptions),
+        });
+        await deleting;
+        const duringCleanup = await f.manager.getJob(pending.job.jobId, f.guard);
+        assert.equal(duringCleanup.state, 'running');
+        assert(
+          (await readdir(f.manager.jobDirectory(pending.job.jobId))).some((name) =>
+            name.endsWith('.partial'),
+          ),
+        );
+        if (cancel) await f.manager.cancel(pending.job.jobId, f.guard);
+        release();
+        const done = await terminal(f.manager, pending.job.jobId, f.guard);
+        assert.equal(done.state, cancel ? 'cancelled' : 'failed');
+        assert.equal(done.fatalError?.code, cancel ? undefined : 'TOO_LARGE');
+        // Cancellation has its existing immediate status; close awaits its worker.
+        if (cancel) await f.manager.close();
+        assert(
+          (await readdir(f.manager.jobDirectory(done.jobId))).every(
+            (name) => !name.endsWith('.partial'),
+          ),
+        );
+      } finally {
+        release();
+        await f.close();
+      }
+    }
+  });
+
+  it('uses independent raw caps and accounts for every tree service byte without changing stable ZIP bytes', async () => {
+    const f = await fixture({ maxRawPartBytes: 1200, maxTreeRawPartBytes: 330, maxRunningJobs: 2 });
+    const nodes: SnapshotTreeRecord[] = [
+      { type: 'D', depth: 0, name: 'ancestor' },
+      { type: 'U', depth: 1, name: 'unreadable' },
+      ...Array.from({ length: 30 }, (_, i): SnapshotTreeRecord => ({
+        type: 'F',
+        depth: 1,
+        name: `file-${i}.dat`,
+        length: i,
+        lastWriteTime: timestamp,
+      })),
+    ];
+    const stableOptions = { includeHidden: false, includeIgnored: false };
+    const stableRun: Parameters<typeof submit>[1] = (ctx) =>
+      writeSnapshotFromRecords(
+        (async function* () {
+          for (const node of nodes.filter((n) => n.type === 'F'))
+            yield {
+              rootId: 'root-test',
+              relativePath: `ancestor/${node.name}`,
+              name: node.name,
+              extension: '.dat',
+              length: node.length ?? 0,
+              lastWriteTime: timestamp,
+            };
+        })(),
+        ctx,
+        stableOptions,
+      );
+    try {
+      const [stable, tree] = await Promise.all([
+        submit(f, stableRun, false),
+        submit(f, (ctx) => writeSnapshotFromRecords(records(nodes), ctx, treeOptions)),
+      ]);
+      assert.equal(stable.state, 'completed', stable.stopReason);
+      const parts = await readTree(f, tree);
+      assert(parts.length > 1);
+      assert(parts.every((p) => p.rawBytes <= 330));
+      assert((tree.counters.contextRecords ?? 0) > 0);
+      assert.equal(tree.counters.errorRecords, 1);
+      assert.equal(
+        parts.reduce((n, p) => n + p.rawBytes, 0),
+        tree.counters.rawCsvBytes,
+      );
+      assert(stable.artifacts.some((a) => a.kind === 'snapshot-part' && (a.rawBytes ?? 0) > 330));
+      for (const [job, cap] of [
+        [stable, 1200],
+        [tree, 330],
+      ] as const) {
+        const manifest = JSON.parse(
+          (await f.manager.getArtifact(required(job.manifestArtifactId), f.guard)).bytes.toString(),
+        ) as { policy: Record<string, number> };
+        assert.equal(manifest.policy['maxRawPartBytes'], cap);
+        for (const name of [
+          'maxZipBytes',
+          'maxDeliveryBytes',
+          'maxFileSizeBytes',
+          'maxJobRawBytes',
+          'maxJobArtifactBytes',
+          'maxParts',
+        ] as const)
+          assert.equal(manifest.policy[name], f.config[name]);
+        assert(
+          job.artifacts
+            .filter((a) => a.kind === 'snapshot-part')
+            .every((a) => (a.rawBytes ?? 0) <= cap),
+        );
+      }
+      const hashes = stable.artifacts
+        .filter((a) => a.kind === 'snapshot-part')
+        .map((a) => a.sha256);
+      const original = f.manager.snapshotConfigFingerprint();
+      // Probe identity changes on the captured config without two owners of one scratch.
+      Object.assign(f.config, { maxTreeRawPartBytes: 500 });
+      assert.equal(f.manager.snapshotConfigFingerprint(), original);
+      const stableAgain = await submit(f, stableRun, false);
+      assert.deepEqual(
+        stableAgain.artifacts.filter((a) => a.kind === 'snapshot-part').map((a) => a.sha256),
+        hashes,
+      );
+      assert.deepEqual(stableAgain.counters, stable.counters);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('keeps the shared closed-ZIP ceiling on noisy records while a smaller tree cap succeeds', async () => {
+    const f = await fixture({
+      maxRawPartBytes: 512 * 1024,
+      maxTreeRawPartBytes: 512 * 1024,
+      maxZipBytes: 128 * 1024,
+      maxDeliveryBytes: 64 * 1024,
+    });
+    const nodes = Array.from({ length: 1800 }, (_, i): SnapshotTreeRecord => ({
+      type: 'F',
+      depth: 0,
+      name: createHash('sha512').update(String(i)).digest('hex'),
+      length: i,
+      lastWriteTime: timestamp,
+    }));
+    try {
+      const large = await submit(f, (ctx) =>
+        writeSnapshotFromRecords(records(nodes), ctx, treeOptions),
+      );
+      assert.equal(large.state, 'failed');
+      assert.equal(large.fatalError?.code, 'TOO_LARGE');
+      assert.match(large.stopReason ?? '', /Closed ZIP.*65536/u);
+      assert.deepEqual(large.artifacts, []);
+      assert(
+        (await readdir(f.manager.jobDirectory(large.jobId))).every(
+          (name) => !name.endsWith('.partial'),
+        ),
+      );
+      Object.assign(f.config, { maxTreeRawPartBytes: 64 * 1024 });
+      const small = await submit(f, (ctx) =>
+        writeSnapshotFromRecords(records(nodes), ctx, treeOptions),
+      );
+      const parts = await readTree(f, small);
+      assert(parts.length > 1);
+      assert.equal(small.counters.filesWritten, nodes.length);
+      assert.equal(mergeTrees(parts).size, nodes.length);
+      for (const artifact of small.artifacts.filter((a) => a.kind === 'snapshot-part')) {
+        assert((artifact.rawBytes ?? 0) <= 64 * 1024);
+        assert(artifact.size <= 64 * 1024);
+      }
+      assert.equal(f.config.maxRawPartBytes, 512 * 1024);
+      assert.equal(f.config.maxZipBytes, 128 * 1024);
+      assert.equal(f.config.maxDeliveryBytes, 64 * 1024);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('separates tree cap reuse while preserving stable completed/inflight/retry and restart/flag-off access', async () => {
+    const f = await fixture({ maxRawPartBytes: 1200, maxRunningJobs: 2 });
+    const previous = process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'];
+    process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'] = '1';
+    let pair = await pairFor(f, true);
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- restored below; original is called with this.
+    const original = GuardedFileSystem.prototype.opendir;
+    let release = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    GuardedFileSystem.prototype.opendir = async function (path, options) {
+      if (path === f.root) await gate;
+      return original.call(this, path, options);
+    };
+    const call = async (name: string, args: Record<string, unknown> = {}) => {
+      const response = await pair.client.callTool({ name, arguments: { path: f.root, ...args } });
+      assert(!response.isError, firstTextBlock(response).text);
+      return (response.structuredContent ?? response._meta) as {
+        reason: string;
+        job: { jobId: string };
+      };
+    };
+    try {
+      await writeFile(join(f.root, 'probe.txt'), 'synthetic');
+      const legacyFingerprint = fingerprintJobInput({
+        version: 1,
+        scratchDirectory: f.scratch,
+        maxRecordBytes: f.config.maxRecordBytes,
+        maxRawPartBytes: f.config.maxRawPartBytes,
+        maxZipBytes: f.config.maxZipBytes,
+        maxDeliveryBytes: f.config.maxDeliveryBytes,
+        maxFileSizeBytes: f.config.maxFileSizeBytes,
+        maxJobRawBytes: f.config.maxJobRawBytes,
+        maxJobArtifactBytes: f.config.maxJobArtifactBytes,
+        maxParts: f.config.maxParts,
+        maxWalkDepth: f.config.maxWalkDepth,
+      });
+      assert.equal(f.manager.snapshotConfigFingerprint(), legacyFingerprint);
+      assert.equal(f.manager.snapshotConfigFingerprint(true), legacyFingerprint);
+      const stable = await call('snapshot', { idempotencyKey: 'stable-settings-key' });
+      const tree = await call('snapshot_tree', { idempotencyKey: 'tree-settings-key' });
+      // No producer has passed the gate: compare in-flight identity at different effective caps.
+      Object.assign(f.config, { maxTreeRawPartBytes: 1200 });
+      assert.equal((await call('snapshot_tree')).job.jobId, tree.job.jobId);
+      Object.assign(f.config, { maxTreeRawPartBytes: 330 });
+      assert.equal((await call('snapshot')).reason, 'inflight_reuse');
+      assert.equal((await call('snapshot')).job.jobId, stable.job.jobId);
+      assert.equal(
+        (await call('snapshot', { idempotencyKey: 'stable-settings-key' })).reason,
+        'idempotent_replay',
+      );
+      const changed = await call('snapshot_tree');
+      assert.equal(changed.reason, 'created');
+      assert.notEqual(changed.job.jobId, tree.job.jobId);
+      assert.equal((await call('snapshot_tree')).job.jobId, changed.job.jobId);
+      const denied = await pair.client.callTool({
+        name: 'snapshot_tree',
+        arguments: { path: f.root, idempotencyKey: 'tree-settings-key' },
+      });
+      assert(denied.isError);
+      assert.match(firstTextBlock(denied).text ?? '', /reuse policy has changed/u);
+      await f.manager.cancel(changed.job.jobId, f.guard);
+      // Restore the legacy effective cap before allowing those producers to execute.
+      Reflect.deleteProperty(f.config, 'maxTreeRawPartBytes');
+      assert.equal((await call('snapshot_tree')).job.jobId, tree.job.jobId);
+      release();
+      const stableDone = await terminal(f.manager, stable.job.jobId, f.guard);
+      const treeDone = await terminal(f.manager, tree.job.jobId, f.guard);
+      assert.equal(stableDone.state, 'completed');
+      assert.equal(treeDone.state, 'completed');
+      const stableBytes = await Promise.all(
+        stableDone.artifacts.map(async (a) => ({
+          a,
+          bytes: (await f.manager.getArtifact(a.artifactId, f.guard)).bytes,
+        })),
+      );
+      await pair.close();
+      const restarted = new ArtifactJobManager({ ...f.config, maxTreeRawPartBytes: 330 });
+      pair = await pairFor({ ...f, manager: restarted }, true);
+      assert.equal((await call('snapshot')).reason, 'completed_reuse');
+      assert.equal((await call('snapshot')).job.jobId, stable.job.jobId);
+      assert.equal(
+        (await call('snapshot', { idempotencyKey: 'stable-settings-key' })).reason,
+        'idempotent_replay',
+      );
+      for (const { a, bytes } of stableBytes)
+        assert.deepEqual((await restarted.getArtifact(a.artifactId, f.guard)).bytes, bytes);
+      await assert.rejects(restarted.getJob(tree.job.jobId, f.guard), /reuse policy has changed/u);
+      await assert.rejects(
+        restarted.getArtifact(required(treeDone.manifestArtifactId), f.guard),
+        /reuse policy has changed/u,
+      );
+      const fresh = await call('snapshot_tree');
+      assert.notEqual(fresh.job.jobId, tree.job.jobId);
+      const freshDone = await terminal(restarted, fresh.job.jobId, f.guard);
+      assert.equal((await call('snapshot_tree')).job.jobId, fresh.job.jobId);
+      await pair.close();
+      process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'] = '0';
+      const off = new ArtifactJobManager({ ...f.config, maxTreeRawPartBytes: 330 });
+      pair = await pairFor({ ...f, manager: off }, true);
+      assert.equal((await pair.client.listTools()).tools.length, 13);
+      for (const job of [stableDone, freshDone]) {
+        const status = await pair.client.callTool({
+          name: 'job_status',
+          arguments: { jobId: job.jobId },
+        });
+        assert(!status.isError, firstTextBlock(status).text);
+        for (const artifact of job.artifacts) {
+          const response = await pair.client.callTool({
+            name: 'get_artifact',
+            arguments: { artifactId: artifact.artifactId },
+          });
+          assert(!response.isError, firstTextBlock(response).text);
+        }
+      }
+    } finally {
+      release();
+      GuardedFileSystem.prototype.opendir = original;
+      await pair.close();
+      if (previous === undefined)
+        Reflect.deleteProperty(process.env, 'FS_EXPERIMENTAL_SNAPSHOT_TREE');
+      else process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'] = previous;
+      await f.close();
+    }
+  });
+
   it('walks the selected subdir losslessly and keeps stable files/policy unchanged', async () => {
     const f = await fixture({ maxRawPartBytes: 330 });
     const base = join(f.root, 'chosen,大小');
@@ -452,14 +785,17 @@ describe('experimental snapshot_tree', () => {
     ];
     for (const [overrides, pattern] of [
       [{ maxRawPartBytes: 1 }, /root\/header/u],
+      [{ maxRawPartBytes: 99999, maxTreeRawPartBytes: 1 }, /root\/header/u],
       [{ maxRecordBytes: 1 }, /root\/header record/u],
       [{ maxRecordBytes: 60 }, /record exceeds/u],
       [{ maxRawPartBytes: 180 }, /context and record/u],
+      [{ maxRawPartBytes: 99999, maxTreeRawPartBytes: 180 }, /context and record/u],
       [{ maxJobRawBytes: 160 }, /raw CSV byte/u],
       [{ maxZipBytes: 100 }, /ZIP part/u],
       [{ maxDeliveryBytes: 100 }, /ZIP part/u],
       [{ maxFileSizeBytes: 100 }, /ZIP part/u],
       [{ maxParts: 1, maxRawPartBytes: 300 }, /part-count/u],
+      [{ maxParts: 1, maxRawPartBytes: 99999, maxTreeRawPartBytes: 300 }, /part-count/u],
       [{ scratchQuotaBytes: 2000 }, /quota/u],
       [{ maxJobArtifactBytes: 100 }, /artifact-byte/u],
     ] as const) {
@@ -780,7 +1116,7 @@ describe('experimental snapshot_tree', () => {
     }
   });
 
-  it('validates portable opt-in and removes inherited experiment settings', async () => {
+  it('validates portable tree caps before launch and removes inherited experiment settings', async () => {
     const kit = await createTestRoot();
     try {
       await cp(resolve('scripts/windows-portable/template'), kit, { recursive: true });
@@ -803,8 +1139,105 @@ describe('experimental snapshot_tree', () => {
         if (setting === '1') assert.throws(run, /must be a boolean/u);
         else assert.equal(run(), setting === true ? '1' : '0');
       }
+      const limits = initial['limits'] as Record<string, number>;
+      for (const cap of [
+        undefined,
+        65536,
+        16777216,
+        536870912,
+        65535,
+        536870913,
+        1.5,
+        '16777216',
+        null,
+        true,
+        {},
+        [],
+      ]) {
+        await writeFile(
+          configPath,
+          JSON.stringify({
+            ...initial,
+            experimentalSnapshotTree: false,
+            limits: { ...limits, FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES: cap },
+          }),
+        );
+        const code = `
+          const m = await import(${JSON.stringify(url)});
+          const before = { ...process.env };
+          try {
+            const c = await m.configuration();
+            m.serverEnvironment(c);
+            process.stdout.write(JSON.stringify({
+              tree: process.env.FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES,
+              stable: process.env.FS_SNAPSHOT_MAX_RAW_PART_BYTES,
+              enabled: process.env.FS_EXPERIMENTAL_SNAPSHOT_TREE,
+              inherited: process.env.FS_SNAPSHOT_TREE_MAX_ZIP_BYTES,
+            }));
+          } catch (error) {
+            if (JSON.stringify(before) !== JSON.stringify(process.env)) throw new Error('Invalid config changed environment');
+            throw error;
+          }
+        `;
+        const run = () =>
+          execFileSync(process.execPath, ['--input-type=module', '-e', code], {
+            env: {
+              ...process.env,
+              FS_EXPERIMENTAL_SNAPSHOT_TREE: '1',
+              FS_SNAPSHOT_MAX_RAW_PART_BYTES: '99999',
+              FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES: '88888',
+              FS_SNAPSHOT_TREE_MAX_ZIP_BYTES: '77777',
+            },
+            encoding: 'utf8',
+            windowsHide: true,
+            stdio: 'pipe',
+          });
+        if (
+          cap === undefined ||
+          (typeof cap === 'number' && Number.isInteger(cap) && cap >= 65536 && cap <= 536870912)
+        ) {
+          assert.deepEqual(JSON.parse(run()), {
+            ...(cap === undefined ? {} : { tree: String(cap) }),
+            stable: String(limits['FS_SNAPSHOT_MAX_RAW_PART_BYTES']),
+            enabled: '0',
+          });
+        } else assert.throws(run, /out-of-range limit: FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES/u);
+      }
     } finally {
       await rm(kit, { recursive: true, force: true });
+    }
+  });
+
+  it('captures optional runtime tree caps with the common range and fallback without enabling discovery', () => {
+    const before = { ...process.env };
+    try {
+      process.env['FS_SNAPSHOT_MAX_RAW_PART_BYTES'] = '131072';
+      process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'] = '0';
+      for (const cap of [
+        undefined,
+        '65536',
+        '16777216',
+        '536870912',
+        '65535',
+        '536870913',
+        '1.5',
+        'bad',
+      ]) {
+        if (cap === undefined)
+          Reflect.deleteProperty(process.env, 'FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES');
+        else process.env['FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES'] = cap;
+        const config = getSnapshotConfig();
+        assert.equal(config.maxRawPartBytes, 131072);
+        assert.equal(
+          config.maxTreeRawPartBytes ?? config.maxRawPartBytes,
+          cap !== undefined && ['65536', '16777216', '536870912'].includes(cap)
+            ? Number(cap)
+            : 131072,
+        );
+        assert.equal(process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'], '0');
+      }
+    } finally {
+      process.env = before;
     }
   });
 });

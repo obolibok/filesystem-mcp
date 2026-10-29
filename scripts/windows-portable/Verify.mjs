@@ -141,6 +141,120 @@ try {
 } finally {
   await client.close();
 }
+
+// Exercise both effective caps in one packaged process, then reuse after a tree-only change.
+const capRoot = join(stage, 'Tree cap source');
+await mkdir(capRoot);
+for (let offset = 0; offset < 900; offset += 50) {
+  await Promise.all(
+    Array.from({ length: 50 }, (_, n) =>
+      writeFile(
+        join(
+          capRoot,
+          createHash('sha256')
+            .update(String(offset + n))
+            .digest('hex') + '.txt',
+        ),
+        'synthetic',
+      ),
+    ),
+  );
+}
+const capConfig = {
+  ...multi,
+  roots: [capRoot],
+  experimentalSnapshotTree: true,
+  limits: {
+    ...multi.limits,
+    FS_SNAPSHOT_MAX_RAW_PART_BYTES: 131072,
+    FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES: 65536,
+  },
+};
+const saved = new Map();
+const savedBytes = new Map();
+for (const phase of ['initial', 'changed', 'flag-off']) {
+  const treeCap = phase === 'initial' ? 65536 : 131072;
+  await save({
+    ...capConfig,
+    experimentalSnapshotTree: phase !== 'flag-off',
+    limits: { ...capConfig.limits, FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES: treeCap },
+  });
+  const capClient = new Client({ name: 'portable-tree-caps', version: '1' });
+  const capTransport = new StdioClientTransport({
+    command: node,
+    args: [join(kit, 'scripts/serve.mjs')],
+    cwd: stage,
+    env: { ...process.env, NODE_OPTIONS: '', FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES: '536870912' },
+    stderr: 'pipe',
+  });
+  const capCall = async (name, args) => {
+    const response = await capClient.callTool({ name, arguments: args });
+    assert(!response.isError, JSON.stringify(response));
+    return response;
+  };
+  try {
+    await capClient.connect(capTransport);
+    assert.equal((await capClient.listTools()).tools.length, phase === 'flag-off' ? 13 : 14);
+    for (const name of ['snapshot', 'snapshot_tree']) {
+      if (phase === 'flag-off') {
+        const response = await capCall('job_status', { jobId: saved.get(name) });
+        const job = response.structuredContent ?? response._meta;
+        for (const artifact of job.artifacts) {
+          assert.deepEqual(
+            bytes(await capCall('get_artifact', { artifactId: artifact.artifactId })),
+            savedBytes.get(artifact.artifactId),
+          );
+        }
+        continue;
+      }
+      const response = await capCall(name, { path: capRoot });
+      const submission = response.structuredContent ?? response._meta;
+      if (phase === 'changed') {
+        assert.equal(submission.reason, name === 'snapshot' ? 'completed_reuse' : 'created');
+        assert.equal(submission.job.jobId === saved.get(name), name === 'snapshot');
+      }
+      const deadline = Date.now() + 30000;
+      let job = submission.job;
+      while (['queued', 'running'].includes(job.state)) {
+        assert(Date.now() < deadline, 'Tree cap job timeout');
+        await delay(25);
+        const status = await capCall('job_status', { jobId: job.jobId });
+        job = status.structuredContent ?? status._meta;
+      }
+      assert.equal(job.state, 'completed', JSON.stringify(job));
+      assert.equal(job.complete, true);
+      assert.equal(job.counters.filesWritten, 900);
+      const manifestBytes = bytes(
+        await capCall('get_artifact', { artifactId: job.manifestArtifactId }),
+      );
+      const manifest = JSON.parse(manifestBytes.toString('utf8'));
+      const cap = name === 'snapshot' ? 131072 : treeCap;
+      assert.equal(manifest.policy.maxRawPartBytes, cap);
+      assert.equal(manifest.policy.maxZipBytes, capConfig.limits.FS_SNAPSHOT_MAX_ZIP_BYTES);
+      assert.equal(
+        manifest.policy.maxDeliveryBytes,
+        capConfig.limits.FS_SNAPSHOT_MAX_DELIVERY_BYTES,
+      );
+      if (phase === 'initial') assert(manifest.parts.length > 1);
+      let rawBytes = 0;
+      for (const part of manifest.parts) {
+        const zip = bytes(await capCall('get_artifact', { artifactId: part.artifactId }));
+        assert.equal(createHash('sha256').update(zip).digest('hex'), part.sha256);
+        const unpacked = unzipSingle(zip);
+        assert.equal(unpacked.length, part.rawBytes);
+        assert(unpacked.length <= cap);
+        rawBytes += unpacked.length;
+        savedBytes.set(part.artifactId, zip);
+      }
+      assert.equal(rawBytes, job.counters.rawCsvBytes);
+      savedBytes.set(job.manifestArtifactId, manifestBytes);
+      saved.set(name, job.jobId);
+    }
+    reports.push('tree-raw-caps-' + phase + '-packaged-MCP: PASS');
+  } finally {
+    await capClient.close();
+  }
+}
 const cases = [
   ['empty-roots', { ...multi, roots: [] }],
   ['missing-root', { ...multi, roots: [join(stage, 'missing-root')] }],
@@ -148,6 +262,10 @@ const cases = [
   ['source-scratch-overlap', { ...multi, scratchDirectory: join(rootA, 'missing-scratch') }],
   ['invalid-limit', { ...multi, limits: { ...multi.limits, FS_MAX_FILE_SIZE: -1 } }],
   ['unknown-limit', { ...multi, limits: { ...multi.limits, FS_ALLOW_SENSITIVE: 1 } }],
+  [
+    'invalid-tree-limit',
+    { ...multi, limits: { ...multi.limits, FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES: '16777216' } },
+  ],
 ];
 const alias = join(stage, 'source-alias');
 await symlink(rootA, alias, 'junction');
@@ -164,6 +282,7 @@ for (const [label, config] of cases) {
     'source-scratch-overlap': /Scratch and source roots must not overlap/,
     'invalid-limit': /out-of-range limit: FS_MAX_FILE_SIZE/,
     'unknown-limit': /out-of-range limit: FS_ALLOW_SENSITIVE/,
+    'invalid-tree-limit': /out-of-range limit: FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES/,
     'junction-missing-scratch': /Scratch and source roots must not overlap/,
   };
   assert.throws(
