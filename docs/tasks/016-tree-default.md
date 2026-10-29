@@ -179,3 +179,10 @@ Planning интегрирует результат после независим
   No service, tunnel, or production sources were touched.
 - Интегрирована через [PR #15](https://github.com/obolibok/filesystem-mcp/pull/15). Merge commit:
   `77a9e71ba6242afce39cc025ac63f2c86aa885c9`; GitHub CI Windows/Ubuntu — PASS.
+
+- Пользовательский комплект: `out/Schwarzbeck-MCP-016-tree-default-2026-10-29/`;
+  ZIP `out/Schwarzbeck-MCP-016-tree-default-2026-10-29.zip` — 70,695,727 bytes,
+  SHA-256 `ff18b9f04b765fe298b8a7e3300ef922f25cdf3ee478cb71f6eb1e7e8a007ed8`.
+  Portable Verify и независимое сравнение ZIP прошли: 24 сценария, 2,801 file.
+  npm ci также сообщил о 9 dependency audit findings (4 moderate, 4 high, 1 critical);
+  этот аудит передан в отдельный triage, версии в 016 не менялись.
