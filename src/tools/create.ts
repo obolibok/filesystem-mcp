@@ -12,7 +12,7 @@ import {
   buildWrittenFileMeta,
   type WrittenFileMeta,
 } from '../core/file-uri.js';
-import { destExists, type Stats } from '../core/fs.js';
+import { entryIdentity, type Stats } from '../core/fs.js';
 import {
   choiceInput,
   confirmKey,
@@ -126,7 +126,8 @@ export const CREATE = defineTool({
         if (entry.append || entry.overwrite) return undefined;
         try {
           const validPath = await ctx.fs.pathGuard.validatePathForWrite(entry.path);
-          return (await destExists(ctx.fs, validPath, 'create')) ? validPath : undefined;
+          const { stats } = await ctx.fs.lstat(validPath);
+          return { validPath, identity: entryIdentity(stats) };
         } catch (error) {
           rethrowIfAborted(error);
           return undefined;
@@ -135,18 +136,20 @@ export const CREATE = defineTool({
       PARALLEL_CONCURRENCY,
       ctx.signal,
     );
-    const pendingByPath = new Map<string, string>();
+    const pendingByPath = new Map<string, NonNullable<(typeof planned)[number]['value']>>();
     for (const { index, value } of planned) {
       const requested = args.files[index]?.path;
       if (value && requested) pendingByPath.set(requested, value);
     }
-    const pendingSorted = [...new Set(pendingByPath.values())].sort();
-    if (pendingSorted.length > 0) {
+    const identities = new Map([...pendingByPath.values()].map((p) => [p.validPath, p.identity]));
+    const pendingSorted = [...identities.keys()].sort();
+    {
       // Round 1 returns input_required; a retry whose verified state does not
       // bind this overwrite set throws (R9) via `pendingRoundTrip`.
       const round = await pendingRoundTrip({
         op: 'create',
         pending: pendingSorted,
+        identities: [...identities].map(([path, identity]) => ({ path, identity })),
         requestState: ctx.requestState,
         clientCapabilities: ctx.clientCapabilities,
         buildInputs: (paths) =>
@@ -169,7 +172,8 @@ export const CREATE = defineTool({
       async ({ path, override }) => {
         const content = override?.content ?? '';
 
-        const pendingPath = pendingByPath.get(path);
+        const pendingEntry = pendingByPath.get(path);
+        const pendingPath = pendingEntry?.validPath;
         if (pendingPath !== undefined) {
           const key = confirmKey(pendingSorted.indexOf(pendingPath));
           const choice = readAcceptedChoice(ctx.inputResponses, key);
@@ -260,7 +264,9 @@ export const CREATE = defineTool({
             encoding: 'utf-8',
             signal: ctx.signal,
             exclusive: !override?.overwrite && pendingPath === undefined,
-            ...(pendingPath !== undefined ? { expectedPath: pendingPath } : {}),
+            ...(pendingEntry !== undefined
+              ? { expectedPath: pendingEntry.validPath, expectedIdentity: pendingEntry.identity }
+              : {}),
           });
           validPath = written.validPath;
           const fileStats = (await ctx.fs.stat(written.validPath, { signal: ctx.signal })).stats;

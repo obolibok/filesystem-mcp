@@ -15,7 +15,7 @@ import {
   rethrowIfAborted,
 } from '../core/errors.js';
 import { joinRoster, pathLabel } from '../core/fmt.js';
-import { destExists } from '../core/fs.js';
+import { destExists, type EntryIdentity, entryIdentity } from '../core/fs.js';
 import type { GuardedFileSystem } from '../core/fs.js';
 import {
   choiceInput,
@@ -96,6 +96,7 @@ interface TransferPlan {
   isCaseOnlyRename: boolean;
   /** Whether the destination existed when planned (drives the TOCTOU guard). */
   destExistedOriginally: boolean;
+  destIdentity: EntryIdentity | undefined;
   /** Destination exists and is not a self/case-only target → needs overwrite confirmation. */
   pending: boolean;
 }
@@ -155,12 +156,33 @@ async function planTransfer(
     };
   }
 
-  const destExistedOriginally = !isCaseOnlyRename && (await destExists(fs, validDest, op));
+  let destIdentity: EntryIdentity | undefined;
+  if (!isCaseOnlyRename) {
+    try {
+      destIdentity = entryIdentity((await fs.lstat(validDest)).stats);
+    } catch (error) {
+      if (
+        !(isNodeError(error) && error.code === 'ENOENT') &&
+        !(isFsError(error) && error.code === ErrorCode.NOT_FOUND)
+      ) {
+        return { status: 'fail', failure: pairFailure(pair, error) };
+      }
+    }
+  }
+  const destExistedOriginally = destIdentity !== undefined;
   const pending = destExistedOriginally && !overwrite;
 
   return {
     status: 'plan',
-    plan: { pair, opSource, validDest, isCaseOnlyRename, destExistedOriginally, pending },
+    plan: {
+      pair,
+      opSource,
+      validDest,
+      isCaseOnlyRename,
+      destExistedOriginally,
+      destIdentity,
+      pending,
+    },
   };
 }
 
@@ -207,6 +229,10 @@ async function executeTransfer(
   }
 
   await ctx.fs.mkdir(dirname(plan.validDest), { recursive: true });
+
+  if (plan.pending && plan.destIdentity !== undefined) {
+    await ctx.fs.assertEntryIdentity(plan.validDest, plan.destIdentity);
+  }
 
   if (op === 'move') {
     await performRenameWithFallback(plan.opSource, plan.validDest, ctx.fs, plan.pair.source);
@@ -306,12 +332,17 @@ async function runTransfers(
     .filter((p) => p.pending)
     .map((p) => p.validDest)
     .sort();
-  if (pendingSorted.length > 0) {
+  {
     // Round 1 returns input_required; a retry whose verified state does not
     // bind this overwrite set throws (R9) via `pendingRoundTrip`.
     const round = await pendingRoundTrip({
       op,
       pending: pendingSorted,
+      identities: ready.flatMap((p) =>
+        p.pending && p.destIdentity !== undefined
+          ? [{ path: p.validDest, identity: p.destIdentity }]
+          : [],
+      ),
       requestState: ctx.requestState,
       clientCapabilities: ctx.clientCapabilities,
       buildInputs: (dests) =>

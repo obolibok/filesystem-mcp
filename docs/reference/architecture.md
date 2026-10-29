@@ -77,10 +77,37 @@ Abort во время open/fstat освобождает поздний descripto
 Подтверждение применяется к согласованному canonical target: если перед atomic
 overwrite этот pathname разрешается уже в другую цель, запись отменяется.
 Явный/подтверждённый overwrite сохраняет temp+rename и mode.
-Identity содержимого между раундами подтверждения не связывается токеном;
-подтверждение по-прежнему разрешает overwrite pathname. Остальные pathname
-mutations, metadata, snapshot walk/jobs и undo/history этим изменением не
-перерабатываются. См. [018](../tasks/018-guarded-io-race-hardening.md).
+Guarded open и exclusive creation описаны в [018](../tasks/018-guarded-io-race-hardening.md).
+
+### Подтверждения destructive operations
+
+`input_required` для overwrite в `create`, `move`/`copy` и recursive `delete`
+связывает HMAC `requestState` с operation, отсортированным набором canonical
+pending paths и identity каждой записи: тип (`mode & S_IFMT`), `dev`, `ino`,
+`birthtimeMs`. Это identity объекта, а не hash содержимого: in-place изменения
+файла или дочерних записей каталога не считаются заменой самого объекта.
+
+Retry строит свежий план и сверяет его до чтения `inputResponses`. При замене
+объекта по тому же пути старые ответы отбрасываются; сервер запрашивает весь
+pending set заново ровно один раз и запечатывает `reprompted`. Вторая замена
+отменяет весь вызов с `CANCELLED`, прежде чем batch начинает мутации. Legacy state
+без identities тоже даёт `CANCELLED`. State другой operation начинает собственный
+новый confirmation round и не использует старые ответы.
+
+Изменение pending path set, включая новую цель или исчезновение последней,
+сохраняет строгий fail-closed `INVALID_INPUT`: клиенту нужен новый вызов без старого
+state. Поэтому исчезновение первого пути не сдвигает `confirm_N` на следующий.
+Ранее подтверждаемый существующий путь в `delete` остаётся pending после
+опустошения каталога или изменения типа; unchanged directory по-прежнему уважает
+Skip. Обычные skip/decline и явный `overwrite:true` в `create`/`copy` сохранены.
+
+Перед мутацией identity проверяется снова: `create` делает это после записи
+временного файла перед rename, `move`/`copy` — после mkdir перед transfer,
+`delete` — перед удалением. При замеченной замене мутация отменяется. Проверки
+pathname-based и зависят от доступных filesystem identity fields; они не дают
+атомарной защиты от external swap после последней проверки и требуют доверенных
+ancestors. Остальные pathname operations, cross-device move semantics, metadata,
+snapshot/jobs и undo/history не перерабатываются. См. [019](../tasks/019-confirmation-identity.md).
 
 | Группа                      | Tools                                                            |
 | --------------------------- | ---------------------------------------------------------------- |

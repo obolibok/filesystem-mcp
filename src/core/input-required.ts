@@ -7,8 +7,8 @@
 //
 // `requestState` round-trips through the client (attacker-controlled on
 // re-entry), so it is sealed with the SDK's HMAC-SHA256 codec. The payload binds
-// each confirmation to its operation kind and sorted target-path set (spec R9,
-// R10); the handler additionally rejects any retry whose decoded paths do not
+// each confirmation to its operation kind, sorted target-path set (spec R9,
+// R10), and destructive target identities; the handler rejects retries whose paths do not
 // match the retried request's parameters (the codec only proves the state was
 // not tampered — it cannot see the current args).
 import type {
@@ -28,6 +28,7 @@ import { randomBytes } from 'node:crypto';
 import * as z from 'zod/v4';
 
 import { ErrorCode, FsError } from './errors.js';
+import { type EntryIdentity, sameEntryIdentity } from './fs.js';
 import { Logger } from './observability.js';
 
 /** The destructive operation a pending confirmation authorizes. */
@@ -42,6 +43,10 @@ type PendingOp = 'delete' | 'move' | 'copy' | 'create' | 'grant';
 export interface PendingState {
   readonly op: PendingOp;
   readonly paths: readonly string[];
+  /** Destructive confirmations seal one identity per canonical pending path. */
+  readonly identities?: readonly { readonly path: string; readonly identity: EntryIdentity }[];
+  /** At most one identity-change prompt in this confirmation chain. */
+  readonly reprompted?: true;
 }
 
 /** One embedded form-mode confirmation, keyed within the call. */
@@ -163,8 +168,8 @@ function requestedSchemaFor(input: PendingInput): z.ZodObject {
 
 /**
  * Build an `input_required` result carrying one boolean confirmation per pending
- * item, plus the integrity-protected `requestState` sealing the operation kind
- * and sorted target paths. `mint` is async (HMAC + base64url).
+ * item, plus the integrity-protected `requestState` sealing the operation kind,
+ * sorted target paths and optional identities. `mint` is async (HMAC + base64url).
  */
 export async function buildInputRequired(
   pending: PendingState,
@@ -178,6 +183,7 @@ export async function buildInputRequired(
     });
   }
   const requestState = await requestStateCodec.mint({
+    ...pending,
     op: pending.op,
     paths: [...pending.paths].sort(),
   });
@@ -193,7 +199,11 @@ export async function buildInputRequired(
  * op. A retry whose verified state matches this op but not the pending path
  * set throws `FsError(INVALID_INPUT)` (R9) — uniformly surfaced as an
  * `isError` tool result by the handler's catch. Returns `undefined` on a
- * matching same-op retry so the caller proceeds.
+ * matching same-op retry so the caller proceeds. Destructive callers supply
+ * `identities`: a legacy path-only token cancels, one changed identity re-prompts
+ * the full set without consuming answers, and a second change cancels the call.
+ * A changed pending path set (including disappearance of its last entry) still
+ * fails closed; callers invoke this even when the fresh pending set is empty.
  *
  * One home for the R9 binding check means a future fix cannot miss two of three
  * sites. The caller supplies `buildInputs` so only the prompt text varies.
@@ -201,6 +211,8 @@ export async function buildInputRequired(
 interface PendingRoundTripOpts {
   readonly op: PendingOp;
   readonly pending: readonly string[];
+  /** Required by destructive handlers; omitted for access grants. */
+  readonly identities?: PendingState['identities'];
   readonly requestState: (() => PendingState | undefined) | undefined;
   /**
    * What the client declared it can do, or `undefined` when this connection
@@ -256,6 +268,8 @@ export async function pendingRoundTrip(
   opts: PendingRoundTripOpts,
 ): Promise<InputRequiredResult | undefined> {
   const state = opts.requestState?.();
+  // Also validate same-op retries when every formerly pending target vanished.
+  if (opts.pending.length === 0 && state?.op !== opts.op) return undefined;
   // No verified state yet, OR the verified state belongs to a different
   // flow (e.g. an access-grant round's state is still the retried request's
   // requestState after the grant was applied, and this call is now the
@@ -265,7 +279,14 @@ export async function pendingRoundTrip(
   // tamper/mismatch error.
   if (state?.op !== opts.op) {
     assertCanElicit(opts.op, opts.clientCapabilities);
-    return buildInputRequired({ op: opts.op, paths: opts.pending }, opts.buildInputs(opts.pending));
+    return buildInputRequired(
+      {
+        op: opts.op,
+        paths: opts.pending,
+        ...(opts.identities ? { identities: opts.identities } : {}),
+      },
+      opts.buildInputs(opts.pending),
+    );
   }
   // Retry for THIS op (R9): the verified state must bind the same pending set.
   if (!pathsEqual(state.paths, opts.pending)) {
@@ -273,6 +294,29 @@ export async function pendingRoundTrip(
       ErrorCode.INVALID_INPUT,
       `${opts.op}: confirmation does not match the requested paths`,
     );
+  }
+  if (opts.identities !== undefined) {
+    // Legacy tokens only bind paths. They can never authorize a destructive retry.
+    if (state.identities === undefined) {
+      throw new FsError(ErrorCode.CANCELLED, `${opts.op}: confirmation has no target identities`);
+    }
+    const changed = opts.identities.some((current) => {
+      const sealed = state.identities?.find((entry) => entry.path === current.path);
+      return sealed === undefined || !sameEntryIdentity(sealed.identity, current.identity);
+    });
+    if (changed) {
+      if (state.reprompted === true) {
+        throw new FsError(
+          ErrorCode.CANCELLED,
+          `${opts.op}: target changed again during confirmation`,
+        );
+      }
+      assertCanElicit(opts.op, opts.clientCapabilities);
+      return buildInputRequired(
+        { op: opts.op, paths: opts.pending, identities: opts.identities, reprompted: true },
+        opts.buildInputs(opts.pending),
+      );
+    }
   }
   return undefined;
 }
