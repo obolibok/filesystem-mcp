@@ -24,7 +24,7 @@
 | 012          | [Память и TTL пагинации](../tasks/012-pagination-memory-study.md)                   | done     | 010, triage        | R1/R2 закрыты; PR #10 слит; исследование и post-011 проверки приняты, runtime budgets прежние                                                                       |
 | 013          | [Машина и тома источников](../tasks/013-source-provenance.md)                       | done     | 011, 012           | PR #11; review/CI/portable и пользовательский smoke/restart PASS                                                                                                    |
 | 014          | [Экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)                    | done     | 013                | PR #12 слит; review/CI/portable PASS; live R1 PASS, R2 tree упёрся в ZIP cap; продолжение после настройки                                                           |
-| 015 | [Отдельные настройки snapshot_tree](../tasks/015-snapshot-tree-settings.md) | done | 014 live | Принята через [PR #13](https://github.com/obolibok/filesystem-mcp/pull/13), merge `6c89ab58`; review и CI Windows/Ubuntu PASS; portable Verify 17/17, архив SHA-аудит PASS. Новая сборка готова; live R2 ожидает установки. |
+| 015 | [Отдельные настройки snapshot_tree](../tasks/015-snapshot-tree-settings.md) | done | 014 live | PR #13 принят; [live R2](../testing/015-live-r2-2026-10-29.md): tree job и выдача 10 ZIP parts PASS; raw -65.7%, ZIP -28.2%; `complete=false` из-за 470 inaccessible и 8 error records. Распаковка/search harness ещё не прогонялись. |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                                                             |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -35,11 +35,13 @@
 
 ## Текущий следующий шаг
 
-[Независимый live-прогон 014 на трёх корнях](../testing/014-independent-live-2026-10-29.md) подтвердил stable/tree metadata parity для R1/R3, ZIP уменьшился на 42.5% и 38.6%; все jobs отмечены `complete=false` из-за access skips. R2 stable завершился за 1182.688 s на 2,843,566 files и 11 parts. Пользователь подтвердил, что part 2 открывается; `get_artifact` ассистента вернул `NOT_FOUND`, что не было потерей файла. R2 tree остановился на общем closed-ZIP cap 8 MiB.
+[Независимый live-прогон 014 на трёх корнях](../testing/014-independent-live-2026-10-29.md) показал стабильный формат на R2, но tree-job завершился `TOO_LARGE` на первом ZIP при 8 MiB cap.
 
-Задача 015 добавила `FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES` в runtime и portable validator, не меняя stable cap и общие ZIP/delivery limits. [PR #13](https://github.com/obolibok/filesystem-mcp/pull/13) слит, CI Windows/Ubuntu и portable acceptance PASS. [Интеграция и комплект](../testing/015-integration-2026-10-29.md): Verify 17/17; папка/ZIP `out/Schwarzbeck-MCP-015-test-2026-10-29`; SHA-256 ZIP `65d4037188cec322386f48dffdd787dfd0c33d18c3a30889aa024d81be9b143c`.
+[Повторный live R2 после 015](../testing/015-live-r2-2026-10-29.md) подтвердил, что отдельный raw cap принят: tree завершился за 881.308 s, сформировал 10 ZIP parts (raw всего 162,372,414 B; ZIP всего 25,664,531 B). Все 10 parts и manifest получили через `get_artifact`; каждый ZIP ниже 8 MiB, byte sizes совпали с `job_status`. По сравнению со stable R2 raw уменьшился на 65.7%, ZIP на 28.2%, elapsed — на 25.5% в этом single run.
 
-**Следующий шаг — пользователь устанавливает комплект и повторяет R2 в tree-режиме** с `experimentalSnapshotTree=true`, tree raw cap 16 MiB и прежними shared ZIP/delivery caps. Пользовательский live результат пока не заявляется; установленный `C:\FileMCP`, его config/scratch, service и tunnel не менялись.
+Полнота результата — `complete=false`: 470 недоступных объектов и 8 tree error records; это соответствует прежним 470 inaccessible в stable R2. Настройка и выдача исправлены, потерю/полноту всего source tree этот прогон не подтверждает.
+
+**Не измерены локальная распаковка и scan/search harness на этих tree parts**; предыдущие R2 harness-замеры относятся к stable. Если продолжать эксперимент, следующий проверочный шаг — локально распаковать и обработать tree parts. Предметный опыт 005 остаётся proposed до выбора данных, исходного вопроса и критериев.
 
 [014 review](../testing/014-review-2026-10-28.md) **PASS**, head
 `a9c7a7f8e9ba83916298fa302c831b1ec1d0211b`; блокирующих замечаний нет.
