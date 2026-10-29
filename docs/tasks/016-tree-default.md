@@ -1,6 +1,6 @@
 # 016: tree-depth-v1 по умолчанию
 
-Статус реализации: ready for review; полный check заблокирован formatting базы. Зависимости: задачи 014 и 015 интегрированы.
+Статус реализации: review прошла; check PASS, ожидает интеграции. Зависимости: задачи 014 и 015 интегрированы.
 Планирующий чат ведёт центральную доску и принимает результат после ревью.
 
 ## Зачем
@@ -78,7 +78,7 @@ lifecycle jobs, общие ZIP/delivery limits, отдельный tree raw cap 
       настройке и изоляцию от inherited env без production данных.
 - [x] Обновлены README, architecture, portable/operator docs и карта docs.
       tree-depth-v1 описан как поддерживаемый default, а не эксперимент.
-- [ ] npm run check, targeted regressions и portable verification проходят.
+- [x] npm run check, targeted regressions и portable verification проходят.
       В Work record записаны команды, среда, результаты и skips. Версия пакета
       не меняется, release workflow не запускается.
 
@@ -171,3 +171,9 @@ Planning интегрирует результат после независим
   code/docs/synthetic tests. Live ChatGPT/SMB и итоговая portable поставка —
   следующая ответственность planning после review. Функциональных failures нет;
   остаётся унаследованный repository-wide formatting blocker выше.
+- Planning review/integration follow-up (2026-10-29): independent code review found
+  no correctness issues. The six inherited Markdown formatting blockers listed
+  above were normalized in the isolated integration worktree. On the combined
+  task/main head, `npm run check` passed: build, production/test types, ESLint,
+  Prettier, Knip, and 516 tests (508 passed, 8 platform skips, 0 failures).
+  No service, tunnel, or production sources were touched.

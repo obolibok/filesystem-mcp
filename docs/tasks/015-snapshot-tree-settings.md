@@ -170,7 +170,6 @@ Live R2 на новой сборке завершён: tree job `completed`, в�
 
 Планирование не меняло установленный пользователем сервис, его config/scratch или туннель; прогон запущен на обновлённом комплекте через подключённый FileMCP. 015 закрыта. Предметный опыт 005 остаётся proposed до выбора данных, вопроса и критериев.
 
-
 ### Follow-up: correction to local processing benchmark — 2026-10-29
 
 Review of the local harness found asymmetric work inside the original timers: tree
