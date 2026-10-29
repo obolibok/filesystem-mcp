@@ -79,19 +79,19 @@
 ## Acceptance
 
 - [ ] HMAC `requestState` связывает подтверждение с operation, canonical paths и
-  identity snapshots; неподдерживаемый/старый state не может разрешить запись.
+      identity snapshots; неподдерживаемый/старый state не может разрешить запись.
 - [ ] Замена цели между prompt и retry вызывает максимум один новый prompt;
-  первый ответ не применяется к заменённому объекту.
+      первый ответ не применяется к заменённому объекту.
 - [ ] Повторная замена после нового prompt завершается fail-closed без записи,
-  копирования, перемещения или удаления замены.
+      копирования, перемещения или удаления замены.
 - [ ] Подтверждённые цели, обычные skip/decline, новая цель, исчезнувшая цель,
-  смена операции и порядок ключей multi-item batch проверены synthetic tests.
+      смена операции и порядок ключей multi-item batch проверены synthetic tests.
 - [ ] Явный `overwrite: true` сохраняет прежнюю семантику; новый функционал
-  не ослабляет PathGuard, HMAC, sensitive paths или guards из 018.
+      не ослабляет PathGuard, HMAC, sensitive paths или guards из 018.
 - [ ] Обновлены reference и Work record; полный `npm run check` проходит на Windows
-  и Linux. Отдельно записаны skips и границы pathname-based проверки.
+      и Linux. Отдельно записаны skips и границы pathname-based проверки.
 - [ ] Изменения ограничены подтверждениями destructive operations; никаких
-  нерелевантных upstream imports или API/output изменений.
+      нерелевантных upstream imports или API/output изменений.
 
 ## Launch prompt
 
