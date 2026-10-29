@@ -39,9 +39,9 @@
 
 [015 live R2](../testing/015-live-r2-2026-10-29.md) завершился через 881.308 s: те же 2,843,566 files и 345,209 посещённых папок, 10 tree ZIP parts, raw 162,372,414 B, ZIP 25,664,531 B. Все manifest/ZIP artifacts получены. `maxRawPartBytes=16 MiB` применён; каждый ZIP меньше 8 MiB. Job `completed`, но `complete=false`: те же 470 inaccessible skips и 8 tree error records.
 
-[Локальное сравнение](../testing/015-local-r2-2026-10-29.md): SHA и CRC 21/21; все 2,843,566 точных relative paths, lengths и LastWriteTime совпали между stable/tree; path-only и metadata mismatches — 0. Tree уменьшил raw на 65.7% и ZIP на 28.2%; распаковка на этом host быстрее на 52.8%, а Python CSV path reconstruction/search scan медленнее примерно в 2.16×/2.45×. Три контрольных search counts совпали.
+[Локальное сравнение](../testing/015-local-r2-2026-10-29.md): SHA и CRC 21/21; все 2,843,566 точных relative paths, lengths и LastWriteTime совпали между stable/tree; path-only и metadata mismatches — 0. Tree уменьшил raw на 65.7% и ZIP на 28.2%; распаковка на этом host быстрее на 52.8%. Исправленный одинаковый local consumer benchmark показал tree быстрее примерно на 24% в query scan и на 27% при построении полного индекса (медианы повторов); прежние медленные tree timings исключены как несопоставимые из-за дополнительной parity-проверки внутри таймера.
 
-**015 завершена на генерации, доставке и локальном сравнении.** UX/Excel и ChatGPT internal search latency отдельно не измерялись. Следующее направление 005 остаётся proposed; перед его запуском выбрать набор данных, исходный вопрос и критерии.
+**015 завершена на генерации, доставке и исправленном локальном сравнении.** UX/Excel и обработка внутри ChatGPT отдельно не измерялись; сейчас готовится одинаковый live-chat A/B stable/tree. Следующее направление 005 остаётся proposed; перед его запуском выбрать набор данных, исходный вопрос и критерии.
 
 [014 review](../testing/014-review-2026-10-28.md) **PASS**, head
 `a9c7a7f8e9ba83916298fa302c831b1ec1d0211b`; блокирующих замечаний нет.
