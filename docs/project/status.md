@@ -26,7 +26,7 @@
 | 014          | [Экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)                       | done     | 013                | PR #12; tree-depth-v1 и общий job lifecycle; первая большая R2 часть выявила ZIP ceiling, продолжено в 015                                                            |
 | 015          | [Отдельные настройки snapshot_tree](../tasks/015-snapshot-tree-settings.md)            | done     | 014 live           | PR #13 слит; независимый tree raw-part cap, большой R2 delivery, local SHA/CRC и exact path/metadata parity PASS; `complete=false`: 470 inaccessible в обоих форматах |
 | 016          | [Tree как основной формат snapshot](../tasks/016-tree-default.md)                      | done     | 014, 015, live A/B | Слита через [PR #15](https://github.com/obolibok/filesystem-mcp/pull/15), merge `77a9e71`; CI 516 tests (8 platform skips), portable Verify 24 scenarios PASS         |
-| 017          | [Production dependency remediation](../tasks/017-production-dependency-remediation.md) | ready    | 016                | Устранить известные production advisories; проверить source и portable dependency graph                                                                               |
+| 017          | [Production dependency remediation](../tasks/017-production-dependency-remediation.md) | active   | 016                | Чат `017 — production dependencies` (`01a187dc-249a-79c2-81a1-7a4ee02c964b`), worktree `16df`, branch `codex/017-production-dependency-remediation`; base `82e7357b`  |
 | 018          | [Guarded I/O race hardening](../tasks/018-guarded-io-race-hardening.md)                | ready    | 017                | Закрыть path-validation/open race; запуск после интеграции 017                                                                                                        |
 | 005          | Контролируемое повторение предметного исследования                                     | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                                                               |
 
@@ -46,7 +46,7 @@
 
 **016 принята и интегрирована через [PR #15](https://github.com/obolibok/filesystem-mcp/pull/15), merge `77a9e71ba6242afce39cc025ac63f2c86aa885c9`.** Tree-depth-v1 теперь основной snapshot формат; stable остаётся явной конфигурацией. Независимое review и `npm run check` PASS (516 tests, 8 platform skips), portable Verify PASS (24 сценария).
 
-**Следующий шаг — 017:** обновить только production dependencies и lockfile, устранить известные advisories и проверить audit также на собранном portable package. После review/merge 017 запустить **018**: адаптировать точечные upstream защиты от symlink/path TOCTOU и гонки overwrite в `create`. Whole-upstream merge и новые функции в scope не входят.
+**Активная задача — 017:** исполнитель обновляет production dependencies и lockfile, устраняет известные advisories и проверяет portable dependency graph. После review и интеграции запускаем **018** для адаптации точечных upstream защит от symlink/path TOCTOU и гонки overwrite в `create`.
 [014 review](../testing/014-review-2026-10-28.md) **PASS**, head
 `a9c7a7f8e9ba83916298fa302c831b1ec1d0211b`; блокирующих замечаний нет.
 Независимый full check 498/0/8 (506 tests), upgrade/reuse старого комплекта 013
