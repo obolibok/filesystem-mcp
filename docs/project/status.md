@@ -24,7 +24,7 @@
 | 012          | [Память и TTL пагинации](../tasks/012-pagination-memory-study.md)                   | done     | 010, triage        | R1/R2 закрыты; PR #10 слит; исследование и post-011 проверки приняты, runtime budgets прежние                                                                       |
 | 013          | [Машина и тома источников](../tasks/013-source-provenance.md)                       | done     | 011, 012           | PR #11; review/CI/portable и пользовательский smoke/restart PASS                                                                                                    |
 | 014          | [Экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)                    | done     | 013                | PR #12 слит; review/CI/portable PASS; live R1 PASS, R2 tree упёрся в ZIP cap; продолжение после настройки                                                           |
-| 015          | [Отдельные настройки snapshot_tree](../tasks/015-snapshot-tree-settings.md)         | active   | 014 live           | Чат `015 — отдельные настройки snapshot_tree`, thread `01a186c9-41df-7b73-8886-ec1a1f197180`; worktree `8733`, назначенная ветка `codex/015-snapshot-tree-settings` |
+| 015 | [Отдельные настройки snapshot_tree](../tasks/015-snapshot-tree-settings.md) | done | 014 live | Принята через [PR #13](https://github.com/obolibok/filesystem-mcp/pull/13), merge `6c89ab58`; review и CI Windows/Ubuntu PASS; portable Verify 17/17, архив SHA-аудит PASS. Новая сборка готова; live R2 ожидает установки. |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                                                             |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -35,14 +35,11 @@
 
 ## Текущий следующий шаг
 
-[Независимый live-прогон 014 на трёх корнях](../testing/014-independent-live-2026-10-29.md):
-R1/R3 stable-tree metadata parity PASS, ZIP tree меньше на 42.5% и 38.6%; все
-jobs `complete=false` из-за access skips. R2 stable сгенерирован за 1182.688 s
-(2,843,566 files, 11 parts). Пользователь подтвердил, что part 2 открывается; мой
-`get_artifact` возвращал `NOT_FOUND`, это assistant-side несоответствие, не потеря файла.
-R2 tree завершился `TOO_LARGE` на closed-ZIP cap 8 MiB. Параметр
-`FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES` ещё не читается runtime; сначала реализовать 015,
-оставить stable cap без изменений, затем собрать, перезапустить и повторить tree R2.
+[Независимый live-прогон 014 на трёх корнях](../testing/014-independent-live-2026-10-29.md) подтвердил stable/tree metadata parity для R1/R3, ZIP уменьшился на 42.5% и 38.6%; все jobs отмечены `complete=false` из-за access skips. R2 stable завершился за 1182.688 s на 2,843,566 files и 11 parts. Пользователь подтвердил, что part 2 открывается; `get_artifact` ассистента вернул `NOT_FOUND`, что не было потерей файла. R2 tree остановился на общем closed-ZIP cap 8 MiB.
+
+Задача 015 добавила `FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES` в runtime и portable validator, не меняя stable cap и общие ZIP/delivery limits. [PR #13](https://github.com/obolibok/filesystem-mcp/pull/13) слит, CI Windows/Ubuntu и portable acceptance PASS. [Интеграция и комплект](../testing/015-integration-2026-10-29.md): Verify 17/17; папка/ZIP `out/Schwarzbeck-MCP-015-test-2026-10-29`; SHA-256 ZIP `65d4037188cec322386f48dffdd787dfd0c33d18c3a30889aa024d81be9b143c`.
+
+**Следующий шаг — пользователь устанавливает комплект и повторяет R2 в tree-режиме** с `experimentalSnapshotTree=true`, tree raw cap 16 MiB и прежними shared ZIP/delivery caps. Пользовательский live результат пока не заявляется; установленный `C:\FileMCP`, его config/scratch, service и tunnel не менялись.
 
 [014 review](../testing/014-review-2026-10-28.md) **PASS**, head
 `a9c7a7f8e9ba83916298fa302c831b1ec1d0211b`; блокирующих замечаний нет.
