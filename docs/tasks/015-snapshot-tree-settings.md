@@ -121,6 +121,51 @@ ENOMEM` до старта tsx (повтор вне sandbox); полный про
   и `.tmp/015-check-r2.log`; `.tmp/015-tests.log` относится к раннему прогону
   до lifecycle patch и не является итоговым evidence.
 
-Portable builder/acceptance и итоговый handoff будут записаны после сборки из
-зафиксированного runtime checkpoint. Установка пользователя, tunnel/service и
-live R2 job не затрагивались.
+### Portable и handoff — ready for review
+
+Runtime/build checkpoint: `0985bfa1dbc37bed39c7e1d20f6d22ea8edf17ab`, на базе
+`873b8c1779dff6a0411e154f8d23fa4397abf697`. Следующий commit добавляет только
+итоговую запись в эту карточку; runtime/templates совпадают с BUILD source.
+
+Фактические команды из корня checkout:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/windows-portable/Build.ps1 -NodeArchive .tmp/portable-downloads/node-v24.15.0-win-x64.zip -TunnelArchive .tmp/portable-downloads/tunnel-client-v0.0.14-windows-amd64.zip -OutputDirectory out/Schwarzbeck-MCP-015-test-2026-10-29
+node scripts/windows-portable/Verify.mjs out/Schwarzbeck-MCP-015-test-2026-10-29
+```
+
+- Builder — **PORTABLE_BUILD_PASS**, packaged preflight — **LOCAL_MCP_PASS**,
+  default 13 tools. `BUILD.json` содержит source commit, UTC build time и SHA-256
+  закреплённых Node 24.15.0 и tunnel-client 0.0.14 archives.
+- `Verify.mjs` — **PORTABLE_ACCEPTANCE_PASS, 17/17 scenarios**. Проверены перенос
+  с Unicode/пробелами и чужим cwd, roots/env isolation, snapshot/bundle SHA/CRC,
+  разные stable/tree raw caps в одном packaged процессе, stable completed reuse
+  при tree-only change, tree repartition, restart/flag off fetch и negative config.
+  На initial фазе synthetic 900-file source даёт multipart у обоих форматов;
+  каждый manifest/ZIP raw size и shared ceilings проверены отдельно.
+- Первый Verify дошёл до старого negative PID test и получил sandbox-only
+  `Get-CimInstance: Access denied`. Повтор той же команды вне sandbox разрешил
+  чтение process metadata: все 17 сценариев PASS, в том числе отказ Stop.ps1 по
+  synthetic чужому PID. Тест никого не останавливает. `Start.ps1 -DoctorOnly`
+  использовал только dummy key/local doctor, tunnel run/service не запускались.
+- Папка: `out/Schwarzbeck-MCP-015-test-2026-10-29/`.
+  Архив: `out/Schwarzbeck-MCP-015-test-2026-10-29.zip`, **70891252 bytes**.
+  SHA-256: `65d4037188cec322386f48dffdd787dfd0c33d18c3a30889aa024d81be9b143c`.
+  Рядом записан `.zip.sha256`; внутри — `BUILD.json` и `SHA256SUMS.json`.
+- Независимый локальный readback: все **2799** строк SHA256SUMS совпадают с
+  delivered files; ZIP имеет ровно **2800** files (включая сам SHA256SUMS),
+  проверены exact entry set, uncompressed sizes, CRC-32 и SHA-256 каждого файла.
+  Только `./sample-source`, scratch `./data/jobs`, flag false, stable 45 MiB /
+  tree 16 MiB, ZIP/delivery 8 MiB. В data нет файлов; production roots/jobs,
+  пользовательские документы и credentials не включены.
+- Итоговые portable evidence: ignored `.tmp/015-build.log`,
+  `.tmp/015-portable-verify-final.log`, `.tmp/015-kit-audit.json` и
+  `.tmp/015-zip-audit.json`. Бинарники/архивы/evidence не коммитятся.
+
+Acceptance 1–7 выполнен локально. Результат готов к независимому review и
+интеграции планированием; центральная доска исполнителем не менялась. Известные
+границы: shared cap и `TOO_LARGE` остаются; 16 MiB не гарантирует compression
+ratio для настоящего R2. Полный check содержит описанные выше штатные skips;
+неустойчивый unrelated directoryBytes helper не менялся. Реальная установка,
+её config/scratch, tunnel/service и live R2 job не затрагивались. Следующий шаг:
+review этой ветки, затем планирование настраивает новый стенд и решает запуск R2.
