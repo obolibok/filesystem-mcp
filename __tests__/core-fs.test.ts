@@ -5,7 +5,7 @@ import { after, before, describe, it } from 'node:test';
 
 import { ErrorCode, isFsError } from '../src/core/errors.js';
 import { buildWrittenFileMeta } from '../src/core/file-uri.js';
-import { countFileLines, GuardedFileSystem } from '../src/core/fs.js';
+import { GuardedFileSystem } from '../src/core/fs.js';
 import { isSamePath, normalizePath } from '../src/core/path-utils.js';
 import { searchContent, searchFiles } from '../src/core/search.js';
 import { getDefaultReadManyMaxTotalSize } from '../src/core/util.js';
@@ -319,13 +319,13 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       const lines = Array.from({ length: 12000 }, (_, i) => `line-${String(i)}`);
       const filePath = await writeTestFile(tmpDir, 'count_lines_big.txt', lines.join('\n'));
 
-      assert.strictEqual(await countFileLines(filePath), lines.length);
+      assert.strictEqual(await fs.countFileLines(filePath), lines.length);
     });
 
     it('TC-FUNC-052c: a NUL final byte counts as an unterminated line, not an empty file', async () => {
       const filePath = await writeTestFile(tmpDir, 'count_lines_nul.txt', 'x\n\0');
 
-      assert.strictEqual(await countFileLines(filePath), 2);
+      assert.strictEqual(await fs.countFileLines(filePath), 2);
     });
 
     it('TC-FUNC-052d: a single physical line larger than the read buffer counts as 1 line', async () => {
@@ -338,7 +338,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
         'x'.repeat(200 * 1024),
       );
 
-      assert.strictEqual(await countFileLines(filePath), 1);
+      assert.strictEqual(await fs.countFileLines(filePath), 1);
     });
 
     it('TC-FUNC-049b: appendFile to a sensitive file is denied', async () => {
@@ -393,10 +393,10 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
 
     it('TC-FUNC-052b: countFileLines handles empty and trailing-newline files', async () => {
       const emptyPath = await writeTestFile(tmpDir, 'count_lines_empty.txt', '');
-      assert.strictEqual(await countFileLines(emptyPath), 0);
+      assert.strictEqual(await fs.countFileLines(emptyPath), 0);
 
       const terminatedPath = await writeTestFile(tmpDir, 'count_lines_term.txt', 'a\nb\n');
-      assert.strictEqual(await countFileLines(terminatedPath), 2);
+      assert.strictEqual(await fs.countFileLines(terminatedPath), 2);
     });
 
     it('TC-FUNC-052e: countFileLines counts LF only — a CRLF file is not double-counted', async () => {
@@ -405,7 +405,7 @@ describe('Core Filesystem (GuardedFileSystem + core search) Tests', () => {
       // line count of the CRLF text files this server runs against on Windows.
       const filePath = await writeTestFile(tmpDir, 'count_lines_crlf.txt', 'a\r\nb\r\nc');
 
-      assert.strictEqual(await countFileLines(filePath), 3);
+      assert.strictEqual(await fs.countFileLines(filePath), 3);
     });
 
     it('TC-FUNC-053: appendFile to a non-regular file is rejected before the open', async () => {

@@ -6,9 +6,7 @@ import {
   cp as fsCp,
   lstat as fsLstat,
   mkdir as fsMkdir,
-  open as fsOpen,
   opendir as fsOpendir,
-  readFile as fsReadFile,
   readlink as fsReadlink,
   rename as fsRename,
   rm as fsRm,
@@ -21,6 +19,7 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 
 import { withAbort } from './concurrency.js';
 import { ErrorCode, formatUnknownErrorMessage, FsError, isFsError, isNodeError } from './errors.js';
+import { APPEND_FLAGS, CREATE_FLAGS, openGuardedFile, removeCreatedFile } from './guarded-open.js';
 import {
   classifyTextSample,
   detectMimeFromContent,
@@ -28,6 +27,7 @@ import {
   MIME_SAMPLE_SIZE,
 } from './mime.js';
 import { Logger } from './observability.js';
+import { isSamePath } from './path-utils.js';
 import type { PathGuard } from './path.js';
 import type { EntryType as FileType } from './primitives.js';
 import type { ReadFileResult, ReadSpec } from './read.js';
@@ -35,6 +35,7 @@ import {
   assertFileStats,
   createTooLargeError,
   normalizeSpec,
+  readFileBufferWithLimit,
   readFileWithStats,
   readNormalized,
 } from './read.js';
@@ -74,10 +75,21 @@ async function atomicWriteFile(
   filePath: string,
   content: string,
   pathGuard: PathGuard,
-  options: { encoding?: BufferEncoding; signal?: AbortSignal | undefined } = {},
+  options: {
+    encoding?: BufferEncoding;
+    signal?: AbortSignal | undefined;
+    expectedPath?: string;
+  } = {},
 ): Promise<{ validPath: string }> {
   const { encoding = 'utf-8', signal } = options;
   const validPath = await resolveForWrite(pathGuard, filePath);
+  if (options.expectedPath !== undefined && !isSamePath(validPath, options.expectedPath)) {
+    throw new FsError(
+      ErrorCode.CANCELLED,
+      'Write target changed since overwrite confirmation.',
+      filePath,
+    );
+  }
 
   const tempSuffix = randomUUID().replace(/-/g, '').slice(0, 12);
   const tempPath = `${validPath}.${tempSuffix}.tmp`;
@@ -136,30 +148,25 @@ const LINE_COUNT_CHUNK_BYTES = 64 * 1024;
  * Matches read.ts's countLines semantics: a trailing newline does not open
  * a new line, an unterminated final line counts, an empty file is 0.
  */
-export async function countFileLines(filePath: string, signal?: AbortSignal): Promise<number> {
-  const handle = await fsOpen(filePath, 'r');
-  try {
-    let newlines = 0;
-    let lastByte = 0;
-    let totalBytes = 0;
-    const chunk = Buffer.alloc(LINE_COUNT_CHUNK_BYTES);
-    for (;;) {
-      signal?.throwIfAborted();
-      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
-      if (bytesRead === 0) break;
-      totalBytes += bytesRead;
-      for (let i = 0; i < bytesRead; i++) {
-        const byte = chunk[i] ?? 0;
-        if (byte === CHAR_LF) newlines++;
-        lastByte = byte;
-      }
+async function countFileLines(handle: FileHandle, signal?: AbortSignal): Promise<number> {
+  let newlines = 0;
+  let lastByte = 0;
+  let totalBytes = 0;
+  const chunk = Buffer.alloc(LINE_COUNT_CHUNK_BYTES);
+  for (;;) {
+    signal?.throwIfAborted();
+    const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+    if (bytesRead === 0) break;
+    totalBytes += bytesRead;
+    for (let i = 0; i < bytesRead; i++) {
+      const byte = chunk[i] ?? 0;
+      if (byte === CHAR_LF) newlines++;
+      lastByte = byte;
     }
-    // totalBytes is the empty-file sentinel: a NUL (0x00) final byte is real
-    // content and must count as an unterminated final line, not "empty".
-    return totalBytes === 0 ? 0 : lastByte === CHAR_LF ? newlines : newlines + 1;
-  } finally {
-    await handle.close();
   }
+  // totalBytes is the empty-file sentinel: a NUL (0x00) final byte is real
+  // content and must count as an unterminated final line, not "empty".
+  return totalBytes === 0 ? 0 : lastByte === CHAR_LF ? newlines : newlines + 1;
 }
 
 export class GuardedFileSystem {
@@ -221,8 +228,37 @@ export class GuardedFileSystem {
   async writeFile(
     filePath: string,
     content: string,
-    options: { encoding?: BufferEncoding; signal?: AbortSignal | undefined } = {},
+    options: {
+      encoding?: BufferEncoding;
+      signal?: AbortSignal | undefined;
+      exclusive?: boolean;
+      expectedPath?: string;
+    } = {},
   ): Promise<{ validPath: string }> {
+    if (options.exclusive) {
+      const validPath = await resolveForWrite(this.pathGuard, filePath);
+      const { handle, stats } = await openGuardedFile(
+        this.pathGuard,
+        validPath,
+        filePath,
+        CREATE_FLAGS,
+        options.signal,
+        true,
+      );
+      try {
+        options.signal?.throwIfAborted();
+        await handle.writeFile(content, {
+          encoding: options.encoding ?? 'utf-8',
+          signal: options.signal,
+        });
+      } catch (error) {
+        await removeCreatedFile(this.pathGuard, validPath, stats);
+        throw error;
+      } finally {
+        await handle.close();
+      }
+      return { validPath };
+    }
     return atomicWriteFile(filePath, content, this.pathGuard, options);
   }
 
@@ -265,18 +301,26 @@ export class GuardedFileSystem {
     // the winner's file.
     signal?.throwIfAborted();
     let created = false;
-    let handle: FileHandle;
+    let opened: { handle: FileHandle; stats: Stats };
     if (existed) {
-      handle = await fsOpen(validPath, 'a');
+      opened = await openGuardedFile(this.pathGuard, validPath, filePath, APPEND_FLAGS, signal);
     } else {
       try {
-        handle = await fsOpen(validPath, 'ax');
+        opened = await openGuardedFile(
+          this.pathGuard,
+          validPath,
+          filePath,
+          CREATE_FLAGS | APPEND_FLAGS,
+          signal,
+          true,
+        );
         created = true;
       } catch (error) {
         if (!isNodeError(error) || error.code !== 'EEXIST') throw error;
-        handle = await fsOpen(validPath, 'a');
+        opened = await openGuardedFile(this.pathGuard, validPath, filePath, APPEND_FLAGS, signal);
       }
     }
+    const { handle, stats } = opened;
     try {
       signal?.throwIfAborted();
       // Ceiling: an append is not transactional, so an abort landing
@@ -287,11 +331,7 @@ export class GuardedFileSystem {
       await handle.writeFile(content, { encoding, signal });
     } catch (error) {
       if (created) {
-        await fsUnlink(validPath).catch((unlinkError: unknown) => {
-          Logger.warn(
-            `Failed to remove newly created ${validPath} after a failed append: ${formatUnknownErrorMessage(unlinkError)}`,
-          );
-        });
+        await removeCreatedFile(this.pathGuard, validPath, stats);
       }
       throw error;
     } finally {
@@ -310,8 +350,14 @@ export class GuardedFileSystem {
     size: number,
     options: { signal?: AbortSignal | undefined } = {},
   ): Promise<Buffer> {
-    const { validPath } = await this.stat(filePath, options);
-    const handle = await fsOpen(validPath, 'r');
+    const validPath = await this.pathGuard.validateExistingPath(filePath);
+    const { handle } = await openGuardedFile(
+      this.pathGuard,
+      validPath,
+      filePath,
+      undefined,
+      options.signal,
+    );
     try {
       options.signal?.throwIfAborted();
       const buffer = Buffer.alloc(size);
@@ -320,6 +366,13 @@ export class GuardedFileSystem {
     } finally {
       await handle.close();
     }
+  }
+
+  async countFileLines(filePath: string, signal?: AbortSignal): Promise<number> {
+    const validPath = await this.pathGuard.validateExistingPath(filePath);
+    const opened = await openGuardedFile(this.pathGuard, validPath, filePath, undefined, signal);
+    await using handle = opened.handle;
+    return await countFileLines(handle, signal);
   }
 
   async rm(filePath: string, options?: Parameters<typeof fsRm>[1]): Promise<{ validPath: string }> {
@@ -355,7 +408,7 @@ export class GuardedFileSystem {
     const validPath = await this.pathGuard.validateExistingPath(filePath);
     normalized.signal?.throwIfAborted();
     const stats = await withAbort(fsStat(validPath), normalized.signal);
-    return readNormalized(filePath, validPath, stats, normalized);
+    return readNormalized(filePath, validPath, stats, normalized, this.pathGuard);
   }
 
   async readEditableText(
@@ -373,10 +426,16 @@ export class GuardedFileSystem {
         { size: stats.size, maxFileSize: maxSize },
       );
     }
-    const { content } = await readFileWithStats(filePath, validPath, stats, {
-      kind: 'full',
-      ...(options?.signal ? { signal: options.signal } : {}),
-    });
+    const { content } = await readFileWithStats(
+      filePath,
+      validPath,
+      stats,
+      {
+        kind: 'full',
+        ...(options?.signal ? { signal: options.signal } : {}),
+      },
+      this.pathGuard,
+    );
     return { validPath, content, stats };
   }
 
@@ -385,7 +444,15 @@ export class GuardedFileSystem {
     options?: { signal?: AbortSignal },
   ): Promise<{ content: Buffer; mimeType: string; isBinary: boolean; validPath: string }> {
     const validPath = await this.pathGuard.validateExistingPath(filePath);
-    const stats = await withAbort(fsStat(validPath), options?.signal);
+    const opened = await openGuardedFile(
+      this.pathGuard,
+      validPath,
+      filePath,
+      undefined,
+      options?.signal,
+    );
+    await using handle = opened.handle;
+    const stats = opened.stats;
     assertFileStats(filePath, stats);
     // Enforce size limit before reading to avoid loading large files into memory.
     // Binary detection is best-effort, but this is a hard limit.
@@ -393,7 +460,12 @@ export class GuardedFileSystem {
     if (stats.size > maxTextFileSize) {
       throw createTooLargeError(stats.size, maxTextFileSize, filePath);
     }
-    const content = await withAbort(fsReadFile(validPath), options?.signal);
+    const content = await readFileBufferWithLimit(
+      handle,
+      maxTextFileSize,
+      filePath,
+      options?.signal,
+    );
     const mimeInfo = detectMimeFromContent(validPath, content);
     const textClassification = classifyTextSample(content.subarray(0, MIME_SAMPLE_SIZE));
     return {
@@ -411,7 +483,7 @@ export class GuardedFileSystem {
 
   async open(filePath: string): Promise<FileHandle> {
     const validPath = await this.pathGuard.validateExistingPath(filePath);
-    return fsOpen(validPath, 'r');
+    return (await openGuardedFile(this.pathGuard, validPath, filePath)).handle;
   }
 
   /**
@@ -455,18 +527,14 @@ export class GuardedFileSystem {
       throw new FsError(ErrorCode.NOT_FILE, 'Bundle selector is not a regular file', filePath);
     }
     options?.signal?.throwIfAborted();
-    const handle = await fsOpen(details.resolvedPath, 'r');
-    try {
-      options?.signal?.throwIfAborted();
-      const stats = await withAbort(handle.stat(), options?.signal);
-      if (!stats.isFile()) {
-        throw new FsError(ErrorCode.NOT_FILE, 'Bundle selector is not a regular file', filePath);
-      }
-      return { handle, stats, validPath: details.resolvedPath };
-    } catch (error) {
-      await handle.close().catch(() => undefined);
-      throw error;
-    }
+    const { handle, stats } = await openGuardedFile(
+      this.pathGuard,
+      details.resolvedPath,
+      filePath,
+      undefined,
+      options?.signal,
+    );
+    return { handle, stats, validPath: details.resolvedPath };
   }
 
   /**

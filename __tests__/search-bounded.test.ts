@@ -12,6 +12,7 @@ import { it, type TestContext } from 'node:test';
 import { GuardedFileSystem } from '../src/core/fs.js';
 import { ArtifactJobManager } from '../src/core/job-manager.js';
 import { PageSnapshotStore } from '../src/core/page-store.js';
+import { isSamePath } from '../src/core/path-utils.js';
 import { searchContent, searchFiles } from '../src/core/search.js';
 import { createServer } from '../src/server.js';
 import { FIND_FILES } from '../src/tools/find-files.js';
@@ -128,7 +129,7 @@ it('content line loops observe cancellation after partial matches and in a no-ma
     const original = fsPromises.open;
     t.mock.method(fsPromises, 'open', async (...args: Parameters<typeof original>) => {
       const handle = await original(...args);
-      if (String(args[0]) === file) {
+      if (isSamePath(String(args[0]), file)) {
         const read = handle.read.bind(handle);
         t.mock.method(handle, 'read', async (...readArgs: Parameters<typeof read>) => {
           const result = await read(...readArgs);
@@ -1611,5 +1612,89 @@ it(
       assert.notEqual(second.isError, true, firstTextBlock(second).text);
       assert.equal(rows(second._meta as unknown as SearchMeta).length, 1);
     }
+  },
+);
+
+it(
+  'Windows core content search keeps canonical I/O paths for real 8.3 roots and in-root aliases',
+  { skip: process.platform !== 'win32' },
+  async (t) => {
+    const root = await fixture(t);
+    const target = join(root, '018 long synthetic search source directory');
+    await mkdir(target);
+    await writeTestFile(target, 'long text sample.txt', 'token\ntoken\n');
+    await writeTestFile(target, 'inside/data.txt', 'token\n');
+    await writeTestFile(target, 'empty.txt', '');
+    for (const name of ['binary.bin', 'binary.txt']) {
+      await writeFile(join(target, name), Buffer.from([0, 1, 2, 0xff]));
+    }
+    const utf16 = Buffer.from('token\n', 'utf16le');
+    await writeFile(
+      join(target, 'utf16-le.txt'),
+      Buffer.concat([Buffer.from([0xff, 0xfe]), utf16]),
+    );
+    await writeFile(
+      join(target, 'utf16-be.txt'),
+      Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(utf16).swap16()]),
+    );
+    const short = execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        '(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:FSMCP_SEARCH_SHORT_ROOT).ShortPath',
+      ],
+      {
+        env: { ...process.env, FSMCP_SEARCH_SHORT_ROOT: target },
+        encoding: 'utf8',
+        windowsHide: true,
+      },
+    ).trim();
+    if (!/~\d/u.test(basename(short))) {
+      t.skip('actual 8.3 short name unavailable on fixture volume');
+      return;
+    }
+    assert.equal(await fsPromises.realpath(short), await fsPromises.realpath(target));
+    const guard = await makeGuard([short]);
+    for (const isRegex of [false, true]) {
+      const result = await searchContent(short, 'token', { isRegex }, guard);
+      assert.equal(result.summary.filesScanned, 7);
+      assert.equal(result.summary.filesMatched, 2);
+      assert.equal(result.summary.matchingLines, 3);
+      assert.equal(result.summary.skippedInaccessible, 0);
+      assert.equal(result.summary.skippedBinary, 2);
+      assert.equal(result.summary.skippedUnsupportedEncoding, 2);
+      assert(
+        result.matches.every((match) => match.file.toLowerCase().startsWith(short.toLowerCase())),
+      );
+    }
+    const singleFile = join(short, 'long text sample.txt');
+    const single = await searchContent(short, 'token', { singleFile }, guard);
+    assert.equal(single.summary.filesScanned, 1);
+    assert.equal(single.summary.matchingLines, 2);
+    assert.equal(single.matches[0]?.file, singleFile);
+
+    const alias = join(target, 'alias');
+    if (!(await trySymlink(join(target, 'inside'), alias, () => t.skip('junction unavailable'))))
+      return;
+    const aliasedFile = join(short, 'alias', 'data.txt');
+    const aliased = await searchContent(short, 'token', { singleFile: aliasedFile }, guard);
+    assert.equal(aliased.summary.filesMatched, 1);
+    assert.equal(aliased.matches[0]?.file, aliasedFile);
+
+    const outside = await fsPromises.realpath(await createTestRoot());
+    t.after(() => cleanupTestRoot(outside));
+    await writeTestFile(outside, 'outside.txt', 'token outside');
+    await fsPromises.symlink(outside, join(target, 'escape'), 'junction');
+    const denied = await searchContent(
+      short,
+      'token',
+      { singleFile: join(short, 'escape', 'outside.txt') },
+      guard,
+    );
+    assert.equal(denied.summary.filesScanned, 0);
+    assert.equal(denied.summary.skippedInaccessible, 1);
+    assert.equal(denied.matches.length, 0);
   },
 );

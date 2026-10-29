@@ -1,44 +1,21 @@
 // File reading pipeline split out of fs.ts. fs.ts imports from here; never the reverse.
 import type { Stats } from 'node:fs';
-import { open as fsOpen } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { StringDecoder } from 'node:string_decoder';
 
 import { withAbort } from './concurrency.js';
-import { ErrorCode, formatUnknownErrorMessage, FsError, isFsError } from './errors.js';
+import { ErrorCode, FsError, isFsError } from './errors.js';
+import { openGuardedFile } from './guarded-open.js';
 import {
   classifyTextSample,
   isKnownBinaryExtension,
   MIME_SAMPLE_SIZE,
   type TextSampleClassification,
 } from './mime.js';
-import { Logger } from './observability.js';
+import type { PathGuard } from './path.js';
 import { getMaxTextFileSize } from './util.js';
 
 const STREAM_CHUNK_SIZE = 64 * 1024;
-
-const READ_ONLY_FILE_FLAG = 'r';
-
-async function openReadableFileHandle(filePath: string, signal?: AbortSignal): Promise<FileHandle> {
-  const handlePromise = fsOpen(filePath, READ_ONLY_FILE_FLAG);
-  if (!signal) return handlePromise;
-  try {
-    return await withAbort(handlePromise, signal);
-  } catch (error) {
-    void handlePromise
-      .then((handle) => {
-        void handle.close().catch((closeErr: unknown) => {
-          Logger.warn(
-            `Failed to close file handle for ${filePath} after abort: ${formatUnknownErrorMessage(closeErr)}`,
-          );
-        });
-      })
-      .catch(() => {
-        /* ignore open error */
-      });
-    throw error;
-  }
-}
 
 async function readProbe(handle: FileHandle, signal?: AbortSignal): Promise<Buffer> {
   const buffer = Buffer.allocUnsafe(MIME_SAMPLE_SIZE);
@@ -53,20 +30,14 @@ async function readProbe(handle: FileHandle, signal?: AbortSignal): Promise<Buff
 
 async function classifyForTextRead(
   filePath: string,
-  existingHandle?: FileHandle,
+  existingHandle: FileHandle,
   signal?: AbortSignal,
 ): Promise<TextSampleClassification> {
   if (isKnownBinaryExtension(filePath)) {
     return { kind: 'binary' };
   }
 
-  if (existingHandle) {
-    const slice = await readProbe(existingHandle, signal);
-    return classifyTextSample(slice);
-  }
-
-  await using handle = await openReadableFileHandle(filePath, signal);
-  const slice = await readProbe(handle, signal);
+  const slice = await readProbe(existingHandle, signal);
   return classifyTextSample(slice);
 }
 
@@ -626,17 +597,19 @@ export async function readNormalized(
   validPath: string,
   stats: Stats,
   spec: NormalizedSpec,
+  pathGuard: PathGuard,
 ): Promise<ReadFileResult> {
   spec.signal?.throwIfAborted();
 
   assertFileStats(filePath, stats);
 
-  await using handle = await openReadableFileHandle(validPath, spec.signal);
+  const opened = await openGuardedFile(pathGuard, validPath, filePath, undefined, spec.signal);
+  await using handle = opened.handle;
 
   await assertNotBinary(validPath, filePath, handle, spec);
   spec.signal?.throwIfAborted();
 
-  return await readByMode({ handle, validPath, filePath, stats, spec });
+  return await readByMode({ handle, validPath, filePath, stats: opened.stats, spec });
 }
 
 export async function readFileWithStats(
@@ -644,6 +617,13 @@ export async function readFileWithStats(
   validPath: string,
   stats: Stats,
   spec: ReadSpec | undefined,
+  pathGuard: PathGuard,
 ): Promise<ReadFileResult> {
-  return readNormalized(filePath, validPath, stats, normalizeSpec(spec ?? { kind: 'full' }));
+  return readNormalized(
+    filePath,
+    validPath,
+    stats,
+    normalizeSpec(spec ?? { kind: 'full' }),
+    pathGuard,
+  );
 }
