@@ -38,11 +38,11 @@
 [Независимый live-прогон 014 на трёх корнях](../testing/014-independent-live-2026-10-29.md):
 R1/R3 stable-tree metadata parity PASS, ZIP tree меньше на 42.5% и 38.6%; все
 jobs `complete=false` из-за access skips. R2 stable сгенерирован за 1182.688 s
-(2,843,566 files, 11 parts), но part 2 не выдаётся (`NOT_FOUND`, при
-`resultExpired=false`). R2 tree завершился `TOO_LARGE` на effective closed-ZIP cap
-8 MiB без artifacts. Следующие шаги — отдельный tree raw-part limit (предложение
-015, реализация не начата) и исправление artifact lookup/lifecycle, затем повторный
-прогон затронутого R2.
+(2,843,566 files, 11 parts). Мой `get_artifact` для part 2 вернул `NOT_FOUND`, но
+пользователь сообщает, что видит все архивы; потеря не подтверждена. R2 tree завершился
+`TOO_LARGE` на closed-ZIP cap 8 MiB без artifacts. Сначала сверить открытие
+`snapshot-00002.zip`, затем уменьшить отдельный tree raw-part limit (предложение
+015, реализация не начата) и повторить tree на R2.
 
 [014 review](../testing/014-review-2026-10-28.md) **PASS**, head
 `a9c7a7f8e9ba83916298fa302c831b1ec1d0211b`; блокирующих замечаний нет.
