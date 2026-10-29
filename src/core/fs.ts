@@ -45,6 +45,42 @@ export type { FileType };
 export type { Stats };
 export type { FileHandle };
 
+/** Entry identity, not content freshness: in-place edits keep their approval. */
+export interface EntryIdentity {
+  readonly type: number;
+  readonly dev: number;
+  readonly ino: number;
+  readonly birthtimeMs: number;
+}
+
+export function entryIdentity(stats: Stats): EntryIdentity {
+  return {
+    type: stats.mode & 0o170000,
+    dev: stats.dev,
+    ino: stats.ino,
+    birthtimeMs: stats.birthtimeMs,
+  };
+}
+
+export function sameEntryIdentity(a: EntryIdentity, b: EntryIdentity): boolean {
+  return a.type === b.type && a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
+}
+
+function confirmationChanged(path: string): FsError {
+  return new FsError(ErrorCode.CANCELLED, 'Target changed since confirmation.', path);
+}
+
+async function assertIdentity(path: string, expected: EntryIdentity): Promise<void> {
+  try {
+    if (!sameEntryIdentity(expected, entryIdentity(await fsLstat(path)))) {
+      throw confirmationChanged(path);
+    }
+  } catch (error) {
+    if (isNodeError(error) && error.code === 'ENOENT') throw confirmationChanged(path);
+    throw error;
+  }
+}
+
 // ─── Domain primitives ────────────────────────────────────────────────────────
 
 /**
@@ -79,6 +115,7 @@ async function atomicWriteFile(
     encoding?: BufferEncoding;
     signal?: AbortSignal | undefined;
     expectedPath?: string;
+    expectedIdentity?: EntryIdentity;
   } = {},
 ): Promise<{ validPath: string }> {
   const { encoding = 'utf-8', signal } = options;
@@ -117,6 +154,11 @@ async function atomicWriteFile(
     await fsWriteFile(tempPath, content, { encoding, signal });
     if (existingMode !== undefined) {
       await fsChmod(tempPath, existingMode);
+    }
+    if (options.expectedIdentity !== undefined) {
+      const currentPath = await resolveForWrite(pathGuard, filePath);
+      if (!isSamePath(currentPath, validPath)) throw confirmationChanged(filePath);
+      await assertIdentity(validPath, options.expectedIdentity);
     }
     await withAbort(fsRename(tempPath, validPath), signal);
   } catch (error) {
@@ -194,6 +236,13 @@ export class GuardedFileSystem {
     return { stats, validPath };
   }
 
+  /** Pathname recheck immediately before mutation; not an atomic swap guard. */
+  async assertEntryIdentity(filePath: string, expected: EntryIdentity): Promise<void> {
+    const validPath = await this.pathGuard.validatePathForDelete(filePath);
+    if (!isSamePath(validPath, filePath)) throw confirmationChanged(filePath);
+    await assertIdentity(validPath, expected);
+  }
+
   async readlink(
     filePath: string,
     options?: Parameters<typeof fsReadlink>[1],
@@ -233,6 +282,7 @@ export class GuardedFileSystem {
       signal?: AbortSignal | undefined;
       exclusive?: boolean;
       expectedPath?: string;
+      expectedIdentity?: EntryIdentity;
     } = {},
   ): Promise<{ validPath: string }> {
     if (options.exclusive) {

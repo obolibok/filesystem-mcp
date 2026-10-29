@@ -16,10 +16,12 @@ import {
 } from '../core/errors.js';
 import { joinRoster, pathLabel } from '../core/fmt.js';
 import type { FileType, GuardedFileSystem } from '../core/fs.js';
+import { entryIdentity, sameEntryIdentity } from '../core/fs.js';
 import {
   choiceInput,
   confirmKey,
   pendingRoundTrip,
+  type PendingState,
   readAcceptedChoice,
 } from '../core/input-required.js';
 import { resolveEntryType } from '../core/primitives.js';
@@ -229,15 +231,18 @@ async function finalizeDeletion(
   // the type but changes dev/ino/birthtimeMs. birthtimeMs is the primary
   // cross-platform signal — dev/ino can read 0 on some non-POSIX drivers — so
   // combine all three rather than trusting dev/ino alone.
-  const identityChanged =
-    plan.firstStats.stats.dev !== currentStats.stats.dev ||
-    plan.firstStats.stats.ino !== currentStats.stats.ino ||
-    plan.firstStats.stats.birthtimeMs !== currentStats.stats.birthtimeMs;
-  if (plan.itemType !== 'other' && (currentItemType !== plan.itemType || identityChanged)) {
+  const identityChanged = !sameEntryIdentity(
+    entryIdentity(plan.firstStats.stats),
+    entryIdentity(currentStats.stats),
+  );
+  if (
+    (plan.pending || plan.itemType !== 'other') &&
+    (currentItemType !== plan.itemType || identityChanged)
+  ) {
     return {
       failure: {
         path: plan.validPath,
-        error: Problem.invalidInput(
+        error: (plan.pending ? Problem.cancelled : Problem.invalidInput)(
           `Delete failed: item type changed from ${plan.itemType} to ${currentItemType} during confirmation.`,
           { path: plan.validPath },
         ),
@@ -308,7 +313,13 @@ async function handleDelete(
   for (const { index, value: r } of planned.results) {
     if (r.status === 'fail') out[index] = { path: r.failure.path, error: r.failure.error };
     else if (r.status === 'noop') out[index] = { path: r.deleted, value: { deleted: true } };
-    else plans.push({ plan: r.plan, index });
+    else {
+      // A formerly pending directory may now be empty or a different type.
+      // Keep it in the sealed set so skip is honored and swaps are compared.
+      const state = ctx.requestState?.<PendingState>();
+      if (state?.op === 'delete' && state.paths.includes(r.plan.validPath)) r.plan.pending = true;
+      plans.push({ plan: r.plan, index });
+    }
   }
   for (const { index, error } of planned.errors) {
     out[index] = {
@@ -326,13 +337,19 @@ async function handleDelete(
     ...new Set(plans.filter((p) => p.plan.pending).map((p) => p.plan.validPath)),
   ].sort();
 
-  if (pendingSorted.length > 0) {
+  {
     // Round 1 returns input_required (atomic — R14: nothing deleted yet, not
     // even the non-pending items in the same call); a retry whose verified
     // state does not bind this pending set throws (R9) via `pendingRoundTrip`.
     const round = await pendingRoundTrip({
       op: 'delete',
       pending: pendingSorted,
+      identities: plans
+        .filter((p) => p.plan.pending)
+        .map(({ plan }) => ({
+          path: plan.validPath,
+          identity: entryIdentity(plan.firstStats.stats),
+        })),
       requestState: ctx.requestState,
       clientCapabilities: ctx.clientCapabilities,
       buildInputs: (ps) =>
