@@ -1,6 +1,6 @@
 # Приоритеты и интеграция
 
-Владелец: планирующий чат. Обновлено: 2026-10-28.
+Владелец: планирующий чат. Обновлено: 2026-10-29.
 Это единая доска интеграционного статуса. Coding-чаты записывают свою работу в
 карточках задач, а планирование обновляет эту таблицу после review/интеграции.
 
@@ -35,14 +35,14 @@
 
 ## Текущий следующий шаг
 
-[Первый этап реального опыта 014](../testing/014-live-storage-2026-10-28.md):
-R1 stable/tree exact parity PASS, ZIP tree меньше на 42.49%. R2 stable завершён:
-2843566 files / 1073.157 s / 35.74 MB ZIP; R2 tree failed по closed-ZIP cap 8 MiB
-при raw part 45 MiB. Все completed jobs complete=false из-за access skips.
-16 artifacts доставлены/проверены локально, CRC/CSV/search measurements сохранены;
-R3 пока не запускался. Пользователю дан сигнал уменьшить raw part до 16 MiB и
-перезапустить с прежним scratch; подтверждение перезапуска ожидается.
-015 фиксирует предложение независимых tree settings, реализация не начата.
+[Независимый live-прогон 014 на трёх корнях](../testing/014-independent-live-2026-10-29.md):
+R1/R3 stable-tree metadata parity PASS, ZIP tree меньше на 42.5% и 38.6%; все
+jobs `complete=false` из-за access skips. R2 stable сгенерирован за 1182.688 s
+(2,843,566 files, 11 parts), но part 2 не выдаётся (`NOT_FOUND`, при
+`resultExpired=false`). R2 tree завершился `TOO_LARGE` на effective closed-ZIP cap
+8 MiB без artifacts. Следующие шаги — отдельный tree raw-part limit (предложение
+015, реализация не начата) и исправление artifact lookup/lifecycle, затем повторный
+прогон затронутого R2.
 
 [014 review](../testing/014-review-2026-10-28.md) **PASS**, head
 `a9c7a7f8e9ba83916298fa302c831b1ec1d0211b`; блокирующих замечаний нет.
