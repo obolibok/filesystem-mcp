@@ -169,3 +169,17 @@ Acceptance 1–7 выполнен, независимый review завершё�
 Live R2 на новой сборке завершён: tree job `completed`, все 10 ZIP parts и manifest выданы; `complete=false` из-за 470 inaccessible skips и 8 tree error records. Stable/tree local SHA/CRC, extraction, exact path/metadata parity и scan/search сравнение записаны в [протоколе 015](../testing/015-local-r2-2026-10-29.md); live job детали — [здесь](../testing/015-live-r2-2026-10-29.md).
 
 Планирование не меняло установленный пользователем сервис, его config/scratch или туннель; прогон запущен на обновлённом комплекте через подключённый FileMCP. 015 закрыта. Предметный опыт 005 остаётся proposed до выбора данных, вопроса и критериев.
+
+
+### Follow-up: correction to local processing benchmark — 2026-10-29
+
+Review of the local harness found asymmetric work inside the original timers: tree
+performed per-file path reconstruction, duplicate tracking, cross-format metadata
+validation and extension parsing that stable did not. The original parse/search
+timings therefore do not compare equivalent consumer work and are superseded.
+A corrected same-task scan measured medians 6.924 s stable / 5.248 s tree over
+three passes; full path-to-metadata index medians were 8.272 s / 6.025 s over two
+passes, with matching query counts and file totals. The corrected method and
+limitations are documented in [the local R2 report](../testing/015-local-r2-2026-10-29.md).
+This local Python result does not measure ChatGPT processing; a separate live-chat
+A/B is being prepared.
