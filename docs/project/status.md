@@ -23,8 +23,9 @@
 | 011          | [Ограниченный поиск и пагинация](../tasks/011-bounded-search.md)                    | done     | 010, triage        | R1–R4 закрыты; PR #10 слит, CI/portable PASS; новый ChatGPT live ожидается                                                                                          |
 | 012          | [Память и TTL пагинации](../tasks/012-pagination-memory-study.md)                   | done     | 010, triage        | R1/R2 закрыты; PR #10 слит; исследование и post-011 проверки приняты, runtime budgets прежние                                                                       |
 | 013          | [Машина и тома источников](../tasks/013-source-provenance.md)                       | done     | 011, 012           | PR #11; review/CI/portable и пользовательский smoke/restart PASS                                                                                                    |
-| 014          | [Экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)                    | done     | 013                | PR #12 слит; review/CI/portable PASS; live R1 PASS, R2 tree упёрся в ZIP cap; продолжение после настройки                                                           |
-| 015 | [Отдельные настройки snapshot_tree](../tasks/015-snapshot-tree-settings.md) | done | 014 live | PR #13; R2 tree generation/delivery + локальные SHA/CRC и path/metadata parity PASS; [сравнение](../testing/015-local-r2-2026-10-29.md). `complete=false`: 470 inaccessible, 8 tree error records. |
+| 014          | [Экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)                    | done     | 013                | PR #12; tree-depth-v1 и общий job lifecycle; первая большая R2 часть выявила ZIP ceiling, продолжено в 015                                                          |
+| 015          | [Отдельные настройки snapshot_tree](../tasks/015-snapshot-tree-settings.md)          | done     | 014 live           | PR #13 слит; независимый tree raw-part cap, большой R2 delivery, local SHA/CRC и exact path/metadata parity PASS; `complete=false`: 470 inaccessible в обоих форматах |
+| 016          | [Tree как основной формат snapshot](../tasks/016-tree-default.md)                    | ready    | 014, 015, live A/B  | Подтверждённый ChatGPT и local consumer A/B: tree меньше и быстрее в проверенных сценариях; stable остаётся явным конфигурационным режимом                               |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                                                             |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -35,14 +36,13 @@
 
 ## Текущий следующий шаг
 
-[Независимый live-прогон 014 на трёх корнях](../testing/014-independent-live-2026-10-29.md) зафиксировал stable R2: 2,843,566 files, 11 ZIP parts, complete=false из-за 470 inaccessible skips. Первый tree live run в 014 остановился на `TOO_LARGE`.
+[Live ChatGPT stable/tree A/B](../testing/014-chatgpt-ab-2026-10-29.md) завершён на R2: tree уменьшил raw CSV на 65.7%, ZIP на 28.2%; в чате query scan был на 19.9% быстрее, построение полного path→metadata index — на 24.8% быстрее. Local parity report подтверждает все выданные пути и metadata; оба формата имеют 470 inaccessible skips.
 
-[015 live R2](../testing/015-live-r2-2026-10-29.md) завершился через 881.308 s: те же 2,843,566 files и 345,209 посещённых папок, 10 tree ZIP parts, raw 162,372,414 B, ZIP 25,664,531 B. Все manifest/ZIP artifacts получены. `maxRawPartBytes=16 MiB` применён; каждый ZIP меньше 8 MiB. Job `completed`, но `complete=false`: те же 470 inaccessible skips и 8 tree error records.
+[015 live R2](../testing/015-live-r2-2026-10-29.md) завершился через 881.308 s: 2,843,566 files и 345,209 посещённых папок, 10 tree ZIP parts, raw 162,372,414 B, ZIP 25,664,531 B. Каждый ZIP меньше 8 MiB; job `completed`, `complete=false`, с 470 inaccessible skips и 8 tree error records.
 
-[Локальное сравнение](../testing/015-local-r2-2026-10-29.md): SHA и CRC 21/21; все 2,843,566 точных relative paths, lengths и LastWriteTime совпали между stable/tree; path-only и metadata mismatches — 0. Tree уменьшил raw на 65.7% и ZIP на 28.2%; распаковка на этом host быстрее на 52.8%. Исправленный одинаковый local consumer benchmark показал tree быстрее примерно на 24% в query scan и на 27% при построении полного индекса (медианы повторов); прежние медленные tree timings исключены как несопоставимые из-за дополнительной parity-проверки внутри таймера.
+[Локальное сравнение](../testing/015-local-r2-2026-10-29.md): SHA/CRC 21/21; точные relative paths, lengths и LastWriteTime совпали между stable/tree, mismatches — 0. Исправленный local consumer benchmark показал tree быстрее примерно на 24% в query scan и на 27% при построении полного индекса. Предыдущие несопоставимые timings заменены.
 
-**015 завершена на генерации, доставке и исправленном локальном сравнении.** UX/Excel и обработка внутри ChatGPT отдельно не измерялись; сейчас готовится одинаковый live-chat A/B stable/tree. Следующее направление 005 остаётся proposed; перед его запуском выбрать набор данных, исходный вопрос и критерии.
-
+**Следующий шаг — 016:** сделать tree-depth-v1 форматом `snapshot` по умолчанию и оставить stable как явный конфигурационный режим. ChatGPT обработал tree без отдельного skill; правила D/F/C/U и глубины закрепить в tool description и документации. Materialization approval повторился на этапе manifest, а один длинный ответ показал “This response couldn’t load”; чат остался активен, итог восстановлен без повторных вызовов. Это отдельный UI вопрос, не отменяющий результат измерений. Направление 005 остаётся proposed.
 [014 review](../testing/014-review-2026-10-28.md) **PASS**, head
 `a9c7a7f8e9ba83916298fa302c831b1ec1d0211b`; блокирующих замечаний нет.
 Независимый full check 498/0/8 (506 tests), upgrade/reuse старого комплекта 013
@@ -56,7 +56,7 @@ Ubuntu 491/0/15; push CI merge PASS. Опытная папка/ZIP
 `out/Schwarzbeck-MCP-014-test-2026-10-28` собрана из проверенного PR head 4f864ca5,
 идентичного merge по Git tree. Tree включён, обычный snapshot сохранён;
 13 portable scenarios и 63 packaged MCP calls PASS, финальный Check — 14 tools.
-Следующий шаг — пользовательский A/B на настоящем хранилище по TEST-014.html.
+Пользовательский live A/B на настоящем хранилище завершён 29.10; актуальный отчёт — [ChatGPT stable/tree comparison](../testing/014-chatgpt-ab-2026-10-29.md).
 Установленный сервис, его config/scratch и туннель не менялись.
 
 **Подготовлен свежий стенд на три root для 29.10**: папка/ZIP
