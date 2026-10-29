@@ -151,15 +151,11 @@ export async function resolveAllowedDirectoriesState(
 // ---------------------------------------------------------------------------
 
 /**
- * Accepted risk: validation methods resolve/verify a path (symlinks, boundaries,
- * sensitivity) and then return a plain string; the actual fs operation happens
- * afterward as a separate syscall (classic TOCTOU). A symlink swapped in that
- * exact window could redirect the follow-up operation. This is mitigated by
- * re-validating the resolved real path (not just the requested path) and by
- * walking ancestors to catch escapes before the target exists, but it is not
- * eliminated — doing so would require fd-based operations (open with
- * O_NOFOLLOW / operate on the resolved fd) throughout core/fs.ts. Acceptable
- * tradeoff for a local, single-user filesystem server today.
+ * Validation returns a pathname, not an I/O capability. Source-byte readers and
+ * append must use guarded-open.ts before operating on a descriptor: Linux
+ * checks /proc/self/fd; other platforms have a documented trusted-ancestor
+ * boundary. Metadata and other pathname mutations still have TOCTOU windows;
+ * PathGuard alone cannot provide atomic containment for those operations.
  */
 export class PathGuard {
   private allowedDirectoriesState: string[] | undefined;

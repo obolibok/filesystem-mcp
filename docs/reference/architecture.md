@@ -12,7 +12,7 @@
 | Hosting        | `src/transport/`, `src/transport.ts`                                                      | stdio/HTTP и публичный facade export                  |
 | Composition    | `src/server.ts`                                                                           | PathGuard, stores, registrars, lifecycle              |
 | MCP tools      | `src/tools/index.ts`, `define.ts`, отдельные tools                                        | Inventory, read-only gate, schemas, dispatch/response |
-| Guarded I/O    | `src/core/path.ts`, `path-utils.ts`, `fs.ts`                                              | Root policy, resolution, файловые операции            |
+| Guarded I/O    | `src/core/path.ts`, `path-utils.ts`, `guarded-open.ts`, `fs.ts`                           | Root policy, resolution, файловые операции            |
 | Text/discovery | `src/core/read.ts`, `search.ts`, `mime.ts`, `glob.ts`, `list-walk.ts`, `source-ignore.ts` | Чтение, поиск, классификация, ignore                  |
 | Resources      | `src/resources.ts`, `src/core/file-uri.ts`                                                | URI, text/blob delivery, subscriptions                |
 | State          | `src/core/store.ts`, `page-store.ts`, `watcher-registry.ts`                               | Кэш результатов, страницы, уведомления                |
@@ -24,6 +24,58 @@
 внутренней перестановки.
 
 ## Возможности
+
+### Граница guarded file I/O
+
+`PathGuard` проверяет lexical/resolved roots и sensitive policy; возвращаемая
+строка сама по себе не является разрешением на последующий syscall. Общий
+[`guarded-open.ts`](../../src/core/guarded-open.ts) используется для source bytes:
+все режимы text read (включая cached batch/search), raw originals/resources,
+editable text, MIME sample, подсчёт строк, `open`, `openOriginal` и append.
+Размер и тип реально читаемого файла проверяются через descriptor; raw read
+ограничен также во время чтения. `openOriginal` сохраняет более строгий запрет
+symlink/junction selectors и scratch, обычные read/append разрешают заранее
+разрешённые in-root aliases.
+
+На Linux resolved leaf открывается с `O_NOFOLLOW|O_NONBLOCK`; перед bytes
+проверяются regular-file type, pre-open/fstat identity и настоящий pathname
+descriptor через `/proc/self/fd`. Он должен совпадать с validated canonical path
+и проходить текущую root/sensitive policy. Недоступный procfs приводит к отказу,
+а не к пропуску проверки. Подмена leaf на FIFO не блокирует open. Эти проверки
+закрепляют открытый объект; они не замораживают содержимое или namespace после
+проверки и не определяют происхождение hard links.
+
+На Windows Node не предоставляет `O_NOFOLLOW`, `O_NONBLOCK` и final path
+открытого HANDLE. Выполняются pre-open lstat, fstat identity и повторные
+realpath/policy/lstat до bytes: final-component swap и устойчивый ancestor
+junction swap отклоняются. Это **ограниченное hardening**, не доказательство
+containment против процесса, способного многократно менять ancestors и
+возвращать их между path probes (ABA). Для Windows и других платформ без
+descriptor-path verification ancestors должны оставаться доверенными; полный
+враждебный sandbox там требует отдельного native backend. Проверенная Windows
+junction ветка не подменяет Linux descriptor evidence или недоступные file-symlink
+tests. Враждебные mount/namespace изменения привилегированным процессом не входят
+в эту гарантию.
+
+Append существующего файла не использует `O_CREAT`, отсутствующего — использует
+exclusive create; даже созданный descriptor проверяется до записи. При EEXIST
+победивший файл открывается заново через тот же guard, без права cleanup.
+При abort/failure cleanup проверяет policy, regular-file type и identity нашей
+записи; при неоднозначности не удаляет чужое имя. Pathname cleanup не атомарен
+против дальнейших namespace swaps. После parent escape при exclusive open может
+остаться пустая запись: bytes не записываются, небезопасный unlink запрещён.
+Abort во время open/fstat освобождает поздний descriptor; append остаётся
+нетранзакционным и при abort во время записи может оставить prefix bytes.
+
+`create` без `overwrite: true` или принятого overwrite confirmation использует
+`O_CREAT|O_EXCL`, поэтому появившийся после planning файл не заменяется.
+Подтверждение применяется к согласованному canonical target: если перед atomic
+overwrite этот pathname разрешается уже в другую цель, запись отменяется.
+Явный/подтверждённый overwrite сохраняет temp+rename и mode.
+Identity содержимого между раундами подтверждения не связывается токеном;
+подтверждение по-прежнему разрешает overwrite pathname. Остальные pathname
+mutations, metadata, snapshot walk/jobs и undo/history этим изменением не
+перерабатываются. См. [018](../tasks/018-guarded-io-race-hardening.md).
 
 | Группа                      | Tools                                                            |
 | --------------------------- | ---------------------------------------------------------------- |

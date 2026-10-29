@@ -282,10 +282,16 @@ export async function searchContent(
       }
 
       try {
-        const { content } = await readFileWithStats(entry.path, entry.path, stats, {
-          kind: 'full',
-          ...(options.signal ? { signal: options.signal } : {}),
-        });
+        const { content } = await readFileWithStats(
+          entry.path,
+          entry.path,
+          stats,
+          {
+            kind: 'full',
+            ...(options.signal ? { signal: options.signal } : {}),
+          },
+          pathGuard,
+        );
         // Count every accessible file whose metadata or text classification was
         // examined, including files assigned one of the skip reasons below.
         // Read/access failures remain outside filesScanned.

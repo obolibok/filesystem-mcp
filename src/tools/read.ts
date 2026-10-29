@@ -372,7 +372,7 @@ async function readOnePath(
 
   const spec = buildReadSpec(args, ctx.signal);
   const result = known
-    ? await readFileWithStats(filePath, known.validPath, known.stats, spec)
+    ? await readFileWithStats(filePath, known.validPath, known.stats, spec, ctx.fs.pathGuard)
     : await ctx.fs.readFile(filePath, spec);
 
   return buildPerPathReadValue(result, {

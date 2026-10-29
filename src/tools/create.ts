@@ -12,7 +12,7 @@ import {
   buildWrittenFileMeta,
   type WrittenFileMeta,
 } from '../core/file-uri.js';
-import { countFileLines, destExists, type Stats } from '../core/fs.js';
+import { destExists, type Stats } from '../core/fs.js';
 import {
   choiceInput,
   confirmKey,
@@ -118,8 +118,8 @@ export const CREATE = defineTool({
     // right now? Those need the user's word before anything is written (R14).
     // append never destroys, and overwrite: true is that word given up front.
     // A path that fails validation here is left for runOverPaths to report.
-    // A file that appears between rounds needs no re-stat before the write:
-    // the retry re-plans, and the grown pending set fails the R9 check.
+    // A retry re-plans the pending set. Exclusive creation also closes the
+    // same-call gap between this plan and the eventual filesystem syscall.
     const { results: planned } = await processInParallel(
       args.files,
       async (entry) => {
@@ -222,7 +222,7 @@ export const CREATE = defineTool({
             const mimeInfo = detectMimeFromContent(appended.validPath, sample);
             mimeType = mimeInfo.mimeType;
             kind = mimeInfo.kind;
-            lineCount = await countFileLines(appended.validPath);
+            lineCount = await ctx.fs.countFileLines(appended.validPath);
           } catch (error) {
             ctx.log?.(
               'warning',
@@ -256,12 +256,14 @@ export const CREATE = defineTool({
           created = (stats?.birthtime ?? EPOCH).toISOString();
           modified = (stats?.mtime ?? EPOCH).toISOString();
         } else {
-          const written = await ctx.fs.writeFile(path, content, {
+          const written = await ctx.fs.writeFile(pendingPath ?? path, content, {
             encoding: 'utf-8',
             signal: ctx.signal,
+            exclusive: !override?.overwrite && pendingPath === undefined,
+            ...(pendingPath !== undefined ? { expectedPath: pendingPath } : {}),
           });
           validPath = written.validPath;
-          const fileStats = (await ctx.fs.stat(path, { signal: ctx.signal })).stats;
+          const fileStats = (await ctx.fs.stat(written.validPath, { signal: ctx.signal })).stats;
           created = fileStats.birthtime.toISOString();
           modified = fileStats.mtime.toISOString();
           meta = buildWrittenFileMeta(written.validPath, content, ctx.resourceStore);
