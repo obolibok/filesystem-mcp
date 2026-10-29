@@ -24,7 +24,7 @@
 | 012          | [Память и TTL пагинации](../tasks/012-pagination-memory-study.md)                   | done     | 010, triage        | R1/R2 закрыты; PR #10 слит; исследование и post-011 проверки приняты, runtime budgets прежние                                     |
 | 013          | [Машина и тома источников](../tasks/013-source-provenance.md)                       | done     | 011, 012           | PR #11; review/CI/portable и пользовательский smoke/restart PASS                                                                  |
 | 014          | [Экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)                    | done     | 013                | PR #12 слит; review/CI/portable PASS; live R1 PASS, R2 tree упёрся в ZIP cap; продолжение после настройки                         |
-| 015          | [Отдельные настройки snapshot_tree](../tasks/015-snapshot-tree-settings.md)         | ready    | 014 live           | Tree-only `limits.FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES`; 16 MiB для повтора R2, stable cap без изменений                          |
+| 015          | [Отдельные настройки snapshot_tree](../tasks/015-snapshot-tree-settings.md)         | active   | 014 live           | Чат `015 — отдельные настройки snapshot_tree`, thread `01a186c9-41df-7b73-8886-ec1a1f197180`; worktree `8733`, назначенная ветка `codex/015-snapshot-tree-settings` |
 | 005          | Контролируемое повторение предметного исследования                                  | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                           |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
