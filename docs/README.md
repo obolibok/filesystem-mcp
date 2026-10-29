@@ -76,7 +76,8 @@
   checksum, parity, поиск и построение индекса.
 - [016: tree по умолчанию](tasks/016-tree-default.md): переключение стандартного
   snapshot на tree-depth-v1 с явным stable-режимом;
-  [операторская проверка](../scripts/windows-portable/template/TEST-016.md).
+  [операторская проверка](../scripts/windows-portable/template/TEST-016.md),
+  [интеграция и portable-комплект](testing/016-integration-2026-10-29.md).
 - [Baseline от 19 сентября](testing/baseline-2026-09-19.md): проверенные наблюдения,
   отделённые от планируемых исправлений.
 - [Шаблон задачи](tasks/TEMPLATE.md): минимальный контракт для следующего чата.
