@@ -52,24 +52,34 @@ Production roots не нужны. Synthetic копии и отчёты оста�
 На новую VM доставлять чистый комплект; рабочие данные и локальную конфигурацию
 переносить отдельно по операторской инструкции.
 
-## Opt-in snapshot_tree (014)
+## Формат snapshot (016)
 
-Шаблон содержит optional boolean `experimentalSnapshotTree` (default false/absent).
-`serverEnvironment` после очистки inherited FS_* явно задаёт
-`FS_EXPERIMENTAL_SNAPSHOT_TREE=1` только при true; строковые значения отклоняются.
-Preflight ожидает 13 tools при выключенном и 14 при включённом эксперименте.
-Новый creation-tool не участвует в config/policy fingerprint jobs, поэтому
-выключение не блокирует status/fetch/cancel сохранённых tree результатов.
-Runtime формат, локальные проверки и границы: [014](../testing/014-snapshot-tree.md).
-Сборка и live-проверка нового комплекта выполняются планированием после review.
+Шаблон содержит `"snapshotFormat": "tree"`; отсутствие поля также выбирает tree.
+Явное `"snapshotFormat": "stable"` возвращает прежний file-only CSV/manifest.
+Оба режима публикуют один snapshot и 13 read-only tools. Любой иной тип/значение
+отклоняется до старта MCP. Launcher после очистки inherited FS_* явно задаёт
+FS_SNAPSHOT_FORMAT из config; inherited env не меняет выбор.
+
+Прежний optional boolean experimentalSnapshotTree принимается и валидируется,
+но игнорируется при выборе формата. Даже false/отсутствие не возвращает stable.
+FS_EXPERIMENTAL_SNAPSHOT_TREE больше не влияет на discovery; snapshot_tree убран.
+После изменения нужен restart; сохранённые stable/tree jobs и artifacts доступны
+через status/fetch/cancel по прежним policy/limits/TTL. Совместимая 014/015 tree
+job переиспользуется новым snapshot; cross-format reuse и replay запрещены.
+
+Verify проверяет default tree, явный stable, restart/reuse, оба manifests и bytes,
+ошибочные типы/значения и изоляцию от inherited FS_SNAPSHOT_FORMAT. Проверка
+работает только с synthetic данными; tunnel run не вызывается. Сборку для
+пользователя и live-проверку выполняет planning после независимого review.
+Формат и первоначальные измерения: [014](../testing/014-snapshot-tree.md).
 
 Настройка [015](../tasks/015-snapshot-tree-settings.md): optional
 `limits.FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES` задаёт только tree raw part cap.
 Шаблон содержит 16777216 (16 MiB) рядом с общим stable cap 47185920 (45 MiB);
 удаление tree ключа возвращает fallback на общий cap. Portable принимает только
 целое JSON-число в диапазоне 65536–536870912, отклоняет неверное значение до
-запуска MCP и очищает inherited FS_* перед применением config. Ключ не включает
-эксперимент. Tree manifest и automatic reuse используют effective cap;
+запуска MCP и очищает inherited FS_* перед применением config. Ключ не выбирает
+формат. Tree manifest и automatic reuse используют effective cap;
 stable fingerprint/reuse/bytes сохраняются. Общие ZIP/delivery/job/quota/TTL
 ограничения не меняются; меньший raw cap не гарантирует compression ratio.
 

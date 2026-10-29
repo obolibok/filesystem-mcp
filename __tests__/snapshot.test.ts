@@ -1051,7 +1051,9 @@ describe('snapshot jobs and artifacts', () => {
     }
   });
 
-  it('walks guarded files, reuses a key, and returns immutable manifest/ZIP bytes', async () => {
+  it('walks guarded files in explicit stable mode, reuses a key, and returns immutable manifest/ZIP bytes', async () => {
+    const priorFormat = process.env['FS_SNAPSHOT_FORMAT'];
+    process.env['FS_SNAPSHOT_FORMAT'] = 'stable';
     const root = await createTestRoot();
     const { client, close } = await createTestClientPair([root], { readOnly: true });
     try {
@@ -1122,6 +1124,8 @@ describe('snapshot jobs and artifacts', () => {
       );
       assert.deepEqual(repeatZip, zipBytes);
     } finally {
+      if (priorFormat === undefined) Reflect.deleteProperty(process.env, 'FS_SNAPSHOT_FORMAT');
+      else process.env['FS_SNAPSHOT_FORMAT'] = priorFormat;
       await close();
       await cleanupTestRoot(root);
     }

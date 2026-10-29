@@ -250,6 +250,7 @@ export async function runPrintConfig(options: {
         ? `http://${options.httpHost ?? '127.0.0.1'}:${String(options.port)}`
         : 'stdio',
     readOnly: options.readOnly,
+    snapshotFormat: snapshot.snapshotFormat,
     allowedRoots,
     tools,
     apiKey: options.apiKey ? '***' : null,
@@ -282,6 +283,7 @@ export async function runPrintConfig(options: {
     const key = (k: string) => padEndVisible(cliFmt.cyan(k), 14);
     write(`${key('transport:')}${config.transport}\n`);
     write(`${key('readOnly:')}${cliFmt.bool(config.readOnly)}\n`);
+    write(`${key('snapshotFormat:')}${config.snapshotFormat}\n`);
     write(`${key('apiKey:')}${cliFmt.dim(config.apiKey ?? 'none')}\n`);
     write(`${key('allowedRoots:')}${config.allowedRoots.join(', ') || cliFmt.dim('(none)')}\n`);
     write(`${key('tools:')}${cliFmt.dim(config.tools.join(', '))}\n`);

@@ -60,8 +60,12 @@ try {
   child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
   const tools = await request('tools/list', {});
   const names = tools.tools.map((tool) => tool.name);
-  assert.equal(names.includes('snapshot_tree'), config.experimentalSnapshotTree === true);
-  assert.equal(names.length, config.experimentalSnapshotTree === true ? 14 : 13);
+  assert.equal(names.includes('snapshot_tree'), false);
+  assert.equal(names.length, 13);
+  assert.match(
+    tools.tools.find((tool) => tool.name === 'snapshot').description,
+    config.snapshotFormat === 'tree' ? /tree-depth-v1 manifest/ : /stable manifest/,
+  );
   for (const name of ['list_roots', 'snapshot', 'bundle', 'get_artifact', 'get_file'])
     assert(names.includes(name), 'Missing tool: ' + name);
   for (const name of ['create', 'edit', 'delete', 'move', 'copy', 'patch', 'replace_text'])
@@ -83,6 +87,7 @@ try {
         roots: config.roots,
         scratch: config.scratchDirectory,
         tools: names,
+        snapshotFormat: config.snapshotFormat,
         rootResponse: roots,
         limits: config.limits,
         note: 'This checks local MCP only. Tunnel readiness and ChatGPT delivery are separate.',

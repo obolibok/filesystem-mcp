@@ -6,8 +6,8 @@ production-зависимости и полный tunnel-client с cloudflared �
 Версии, source commit и hashes записаны в BUILD.json и SHA256SUMS.json.
 
 Откройте этот файл или README.html. Все команды ниже выполняются из папки комплекта.
-Для сравнения экспериментального snapshot_tree с обычным snapshot используйте
-[TEST-014.md](TEST-014.md): включение, два снимка одного каталога и проверка файлов.
+Для проверки нового default tree и явного stable используйте
+[TEST-016.md](TEST-016.md). TEST-014.md сохраняет исторический протокол прежней сборки.
 Для проверки машины, томов и provenance в сборке 013 используйте
 [TEST-013.md](TEST-013.md): list_roots, новые manifest и чтение после перезапуска.
 Для проверки поиска в сборке 011 + 012 используйте [TEST-011-012.md](TEST-011-012.md):
@@ -30,8 +30,7 @@ Set-Location 'C:\SWB-MCP'
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Check.ps1
 ```
 
-Ожидается LOCAL_MCP_PASS и 13 read-only tools (14 при включённом
-experimentalSnapshotTree), включая snapshot, bundle,
+Ожидается LOCAL_MCP_PASS и 13 read-only tools, включая snapshot, bundle,
 job_status, cancel_job, get_artifact и get_file. По умолчанию открыт только
 маленький sample-source. Проверка не соединяется с OpenAI и использует отдельный
 временный scratch, не изменяя сохранённые jobs рабочего сервера.
@@ -73,16 +72,26 @@ Scratch не должен пересекаться с исходниками д�
 list_roots в новом чате. При нескольких roots передавайте явный path нужного корня
 в snapshot/search/list; для bundle выбирайте файлы в рамках его source path.
 
-Эксперимент 014 включается только полем `"experimentalSnapshotTree": true` в
-config.json. False или отсутствие поля сохраняет стандартные 13 tools; true
-добавляет read-only `snapshot_tree` (14 tools). Поле принимает только boolean.
-Inherited `FS_EXPERIMENTAL_SNAPSHOT_TREE` игнорируется, как и остальные FS_*;
-launcher явно задаёт `1`/`0` из config. После изменения нужен restart.
-Обычные inventory-запросы по-прежнему используют `snapshot`; `snapshot_tree`
-выбирают для явного опыта с деревом. Уже созданные tree jobs/artifacts доступны
-через status/fetch/cancel после выключения эксперимента, пока policy/TTL позволяют.
-Каждая ZIP-часть дерева содержит root, header, D/F объекты и служебные C/U записи;
-правила восстановления и счётчики указаны в отдельном tree manifest.
+Один инструмент snapshot создаёт дерево tree-depth-v1 по умолчанию. Поле
+`"snapshotFormat": "tree"` можно оставить или удалить. Для прежнего file-only CSV
+и прежнего manifest задайте `"snapshotFormat": "stable"`. Допустимы только эти
+строки; неверный тип или значение останавливает Check/Start до запуска MCP.
+После изменения нужен restart. Inherited FS_SNAPSHOT_FORMAT игнорируется.
+
+Прежнее boolean поле experimentalSnapshotTree ещё принимается, но не влияет
+на формат. False/отсутствие поля тоже выбирает tree, если snapshotFormat не задан.
+Отдельный snapshot_tree удалён; FS_EXPERIMENTAL_SNAPSHOT_TREE больше не включает
+его. Для возврата к stable нужна явная настройка выше. Совместимые прежние tree
+jobs могут переиспользоваться новым snapshot; completed/in-flight reuse и retry
+keys не пересекаются между форматами. Старые stable/tree jobs и bytes доступны
+через status/fetch/cancel после смены формата по прежним policy/limits/TTL.
+
+Tree manifest объявляет layout tree-depth-v1. Каждая ZIP-часть содержит одну
+CSV-запись source root, header Type,Depth,Name,Length,LastWriteTime и RFC 4180
+records с числовой глубиной. Depth 0 — дети root. D/F — каталоги/файлы; C в начале
+части задаёт предков; U помечает неполный каталог. C/U не дополнительные объекты.
+Имена точные: запятые, кавычки и CR/LF требуют CSV parser, а не split по строкам.
+Пустота означает отсутствие выданных детей в выбранной области; проверьте complete.
 
 В `limits` предусмотрен отдельный optional ключ для сырой части дерева:
 
@@ -94,7 +103,7 @@ launcher явно задаёт `1`/`0` из config. После изменени�
 Это фрагмент объекта `limits`: stable сохраняет 45 MiB, tree получает 16 MiB.
 Ключ принимает только целое число bytes от 65536 до 536870912. Если удалить его,
 tree использует общий `FS_SNAPSHOT_MAX_RAW_PART_BYTES`, как прежде. Сам ключ не
-включает эксперимент. Inherited tree cap очищается; применяется только config.
+выбирает формат. Inherited tree cap очищается; применяется только config.
 После изменения нужен restart. Меняется только tree partitioning/reuse;
 stable jobs и их bytes остаются совместимыми. Tree jobs прежнего effective cap
 не выдаются при новом cap; если вернуть прежнее значение, доступ возможен до TTL.
