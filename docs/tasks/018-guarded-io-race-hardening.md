@@ -152,3 +152,62 @@ GuardedFileSystem, не копируй upstream целые модули. Доб�
   **Ready for review**: результат сохраняется отдельным commit в ветке 018 и
   передаётся планированию для независимой приёмки; фактический SHA — в handoff
   сообщении. Общую доску исполнитель не обновляет; интеграция не объявлена.
+
+### R1: Windows CI и реальные 8.3 aliases (29.10.2026)
+
+- Вход: planning сообщил о двух Windows search failures на PR #18 merge head
+  `2299f4e5` / PR head `3be6074c`. Назначенный worktree был чистым; после fetch
+  только ветка 018 fast-forward обновлена до
+  `3be6074c84794e3210a9009e04f9506d22424657`.
+  PR/main metadata и общая доска исполнителем не меняются.
+- Причина подтверждена: `guardedEntries` вызывал
+  `validateExistingPathDetailed`, но отбрасывал `resolvedPath`. Затем
+  `searchContent` передавал исходное DOS short spelling как canonical `validPath`
+  в descriptor reader. Повторная Windows validation возвращала long spelling,
+  и строгая проверка path change давала отказ каждому чтению.
+- Исправление находится в caller: iterator сохраняет отдельно исходный `path`
+  для результатов и проверенный canonical `validPath` для stat/read. Нет новых
+  filesystem probes, изменений `guarded-open.ts`, ослабления roots/sensitive,
+  no-follow/identity/path-change проверок или прежней платформенной границы.
+- Добавлен Windows-only regression в `search-bounded.test.ts` с настоящим
+  COM ShortPath и проверкой `~n` basename/realpath parity. Он до исправления
+  дал **0 вместо 7 scanned**, после — PASS без skips: literal/regex discovery,
+  два matched text files/три lines, binary/UTF-16 skip counts, исходные paths в
+  matches, explicit file, разрешённый in-root junction и отказ для escape junction.
+- Существующий cancellation hook сравнивал absolute path raw string equality;
+  canonical `c:` вместо fixture `C:` не включал injection. Он переведён на
+  принятый в репозитории `isSamePath`; контроль отмены снова PASS, в том числе
+  под настоящим 8.3 TEMP. Production cancellation не менялась.
+- До исправления existing `windows-short-temp.mjs check` воспроизвёл оба CI
+  search failures. Его длинный checkout-based TEMP также изменил ожидаемый
+  error precedence одного существующего snapshot budget fixture; snapshot код
+  и тест не менялись. Финальный Windows профиль использует настоящий 8.3 parent
+  с девятисимвольным long basename непосредственно под OS temp, с TEMP/TMP только
+  в дочернем процессе и cleanup проверенного synthetic каталога. Отдельный
+  snapshot budget control в этом профиле PASS; это соответствует короткому temp CI.
+- Первый одновременный Linux/Windows full run на исправленном search прошёл
+  affected search cases, но Linux получил transient failure `STDIO-014`:
+  ожидание overflow log не успело за 3 секунды. Stdio не использует изменённый
+  search pipeline и не менялся; финальные full checks выполняются последовательно.
+  Windows run, загрузивший старый cancellation hook, имел один описанный выше
+  instrumentation failure; targeted повтор с `isSamePath` — 4/4 PASS вместе с
+  обоими исходными CI failures и новым 8.3 regression.
+- Следующий полный compact-8.3 Windows run прошёл все search cases, но выявил
+  flaky delay в собственной 018 cleanup regression: 20 ms не гарантировали
+  завершение detached cleanup на загруженном host. Тест теперь ждёт фактический
+  owned `unlink` (bounded timeout 10 s), без изменения production cleanup;
+  targeted repeat PASS. Финальный tree включает эту синхронизацию.
+- Финальный Windows Node 24.15.0 `npm run check` с реальным compact-8.3 TEMP/TMP:
+  **545 tests / 532 pass / 0 fail / 13 skips**; оба CI failures, новый native
+  8.3 regression, cancellation и cleanup controls PASS. Skips те же, что выше,
+  новый Windows regression не skipped.
+- Финальный последовательный Linux Node 24.22.2 / non-root Debian bookworm
+  `npm run check`: **545 tests / 529 pass / 0 fail / 16 skips**. Новое skip —
+  Windows-only 8.3 regression; остальные 15 описаны выше. `STDIO-014` PASS
+  без изменения stdio и его timeout. Docker profile и отдельные dependencies
+  те же, что в основном work record.
+- Код и tests после этих двух полных checks не менялись; финализировались только
+  результаты в Work record, проверенные Prettier и `git diff --check`.
+  **Ready for repeat review**: отдельный checkpoint R1 публикуется fast-forward
+  в существующую ветку 018; фактические commit SHA и GitHub PR head проверяются
+  после push и передаются планированию. PR title/body/state и main не меняются.

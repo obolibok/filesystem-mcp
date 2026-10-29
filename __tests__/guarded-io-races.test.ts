@@ -384,30 +384,41 @@ describe('guarded I/O races (synthetic roots)', () => {
     assert.equal(await fsPromises.readFile(path, 'utf8'), 'winner');
   });
 
-  it('aborting after exclusive open removes only the owned new file', async (t) => {
-    const path = join(root, 'append.txt');
-    const controller = new AbortController();
-    const open = fsPromises.open;
-    t.mock.method(
-      fsPromises,
-      'open',
-      async (...args: Parameters<typeof open>) => {
-        const handle = await open(...args);
-        controller.abort(new Error('stop after creation'));
-        return handle;
-      },
-      { times: 1 },
-    );
-    syncBuiltinESMExports();
-    t.after(() => {
-      t.mock.restoreAll();
+  it(
+    'aborting after exclusive open removes only the owned new file',
+    { timeout: 10000 },
+    async (t) => {
+      const path = join(root, 'append.txt');
+      const controller = new AbortController();
+      const removed = Promise.withResolvers<undefined>();
+      const unlink = fsPromises.unlink;
+      t.mock.method(fsPromises, 'unlink', async (...args: Parameters<typeof unlink>) => {
+        await unlink(...args);
+        if (typeof args[0] === 'string' && isSamePath(args[0], path)) removed.resolve(undefined);
+      });
+      const open = fsPromises.open;
+      t.mock.method(
+        fsPromises,
+        'open',
+        async (...args: Parameters<typeof open>) => {
+          const handle = await open(...args);
+          controller.abort(new Error('stop after creation'));
+          return handle;
+        },
+        { times: 1 },
+      );
       syncBuiltinESMExports();
-    });
-    await assert.rejects(fs.appendFile(path, 'no bytes', { signal: controller.signal }));
-    // Cleanup may finish after an aborted fstat has settled.
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    await assert.rejects(fsPromises.stat(path), { code: 'ENOENT' });
-  });
+      t.after(() => {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+      });
+      await assert.rejects(fs.appendFile(path, 'no bytes', { signal: controller.signal }));
+      // Cleanup finishes after the aborted fstat settles; wait for its actual
+      // unlink rather than assuming that a loaded Windows host needs only 20 ms.
+      await removed.promise;
+      await assert.rejects(fsPromises.stat(path), { code: 'ENOENT' });
+    },
+  );
 
   it('failed append cleanup preserves an entry replaced by another writer', async (t) => {
     const path = join(root, 'new.txt');

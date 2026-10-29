@@ -264,7 +264,7 @@ export async function searchContent(
       let stats: Stats;
       try {
         options.signal?.throwIfAborted();
-        stats = await fsStat(entry.path);
+        stats = await fsStat(entry.validPath);
         options.signal?.throwIfAborted();
       } catch {
         if (options.signal?.aborted) {
@@ -284,7 +284,7 @@ export async function searchContent(
       try {
         const { content } = await readFileWithStats(
           entry.path,
-          entry.path,
+          entry.validPath,
           stats,
           {
             kind: 'full',
@@ -397,7 +397,7 @@ async function* guardedEntries(
   pathGuard: PathGuard,
   signal: AbortSignal | undefined,
   counters: { skippedInaccessible: number; stoppedByAbort: boolean },
-): AsyncGenerator<SearchEntry> {
+): AsyncGenerator<SearchEntry & { validPath: string }> {
   // The signal carries both client cancellation and the tool's search timeout,
   // so an abort means "return what we have, marked incomplete" rather than
   // throw — but it must never be reported as a finished scan.
@@ -405,15 +405,19 @@ async function* guardedEntries(
     signal?.throwIfAborted();
     for await (const entry of entries) {
       signal?.throwIfAborted();
+      let validPath: string;
       try {
-        await pathGuard.validateExistingPathDetailed(entry.path, signal);
+        const details = await pathGuard.validateExistingPathDetailed(entry.path, signal);
+        validPath = details.resolvedPath;
         signal?.throwIfAborted();
       } catch {
         signal?.throwIfAborted();
         counters.skippedInaccessible++;
         continue;
       }
-      yield entry;
+      // Keep the caller's spelling for results, but carry the canonical target
+      // into guarded I/O. A validated Windows 8.3 alias is not itself canonical.
+      yield { ...entry, validPath };
     }
     signal?.throwIfAborted();
   } catch (error) {

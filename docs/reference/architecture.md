@@ -37,6 +37,11 @@ editable text, MIME sample, подсчёт строк, `open`, `openOriginal` и
 symlink/junction selectors и scratch, обычные read/append разрешают заранее
 разрешённые in-root aliases.
 
+Search сохраняет исходное имя в matches, а для stat/read передаёт canonical
+`resolvedPath`, возвращённый той же проверкой `PathGuard`. В частности, реальное
+Windows 8.3 имя не сравнивается с long spelling как с другим target; проверки
+guarded open на смену пути и identity при этом сохраняются.
+
 На Linux resolved leaf открывается с `O_NOFOLLOW|O_NONBLOCK`; перед bytes
 проверяются regular-file type, pre-open/fstat identity и настоящий pathname
 descriptor через `/proc/self/fd`. Он должен совпадать с validated canonical path
