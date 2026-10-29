@@ -166,4 +166,6 @@ Acceptance 1–7 выполнен, независимый review завершё�
 
 Обе CI-платформы зелёные: Windows и Ubuntu, workflow run 102. Локальный full check — 511 tests, 503 pass, 0 fail, 8 ожидаемых skips. Portable Verify — 17/17; ZIP и полный SHA/CRC readback прошли. Детали, hash и параметры установки записаны в [протоколе интеграции](../testing/015-integration-2026-10-29.md).
 
-Пользовательский live R2 на новой сборке ещё не выполнялся. Установленный `C:\FileMCP`, его config/scratch, сервис и туннель не менялись. Следующий шаг — пользователь устанавливает комплект и повторяет R2 tree с отдельным raw cap 16 MiB; общие ZIP/delivery лимиты остаются прежними.
+Live R2 на новой сборке завершён: tree job `completed`, все 10 ZIP parts и manifest выданы; `complete=false` из-за 470 inaccessible skips и 8 tree error records. Stable/tree local SHA/CRC, extraction, exact path/metadata parity и scan/search сравнение записаны в [протоколе 015](../testing/015-local-r2-2026-10-29.md); live job детали — [здесь](../testing/015-live-r2-2026-10-29.md).
+
+Планирование не меняло установленный пользователем сервис, его config/scratch или туннель; прогон запущен на обновлённом комплекте через подключённый FileMCP. 015 закрыта. Предметный опыт 005 остаётся proposed до выбора данных, вопроса и критериев.
