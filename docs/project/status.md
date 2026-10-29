@@ -26,8 +26,8 @@
 | 014          | [Экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)                       | done     | 013                | PR #12; tree-depth-v1 и общий job lifecycle; первая большая R2 часть выявила ZIP ceiling, продолжено в 015                                                            |
 | 015          | [Отдельные настройки snapshot_tree](../tasks/015-snapshot-tree-settings.md)            | done     | 014 live           | PR #13 слит; независимый tree raw-part cap, большой R2 delivery, local SHA/CRC и exact path/metadata parity PASS; `complete=false`: 470 inaccessible в обоих форматах |
 | 016          | [Tree как основной формат snapshot](../tasks/016-tree-default.md)                      | done     | 014, 015, live A/B | Слита через [PR #15](https://github.com/obolibok/filesystem-mcp/pull/15), merge `77a9e71`; CI 516 tests (8 platform skips), portable Verify 24 scenarios PASS         |
-| 017          | [Production dependency remediation](../tasks/017-production-dependency-remediation.md) | active   | 016                | Чат `017 — production dependencies` (`01a187dc-249a-79c2-81a1-7a4ee02c964b`), worktree `16df`, branch `codex/017-production-dependency-remediation`; base `82e7357b`  |
-| 018          | [Guarded I/O race hardening](../tasks/018-guarded-io-race-hardening.md)                | ready    | 017                | Закрыть path-validation/open race; запуск после интеграции 017                                                                                                        |
+| 017          | [Production dependency remediation](../tasks/017-production-dependency-remediation.md) | done     | 016                | Принята через [PR #17](https://github.com/obolibok/filesystem-mcp/pull/17); merge `a87ad6b`; production dependency update; CI Windows/Ubuntu PASS, npm run check PASS. |
+| 018          | [Guarded I/O race hardening](../tasks/018-guarded-io-race-hardening.md)                | active   | 017                | Чат `018 — guarded I/O race hardening` (`01a187fa-bc69-79b1-a089-cfd522095d17`), worktree `e45e`, branch `codex/018-guarded-io-race-hardening`; начальная база была до 017, исправляется до кода. |
 | 005          | Контролируемое повторение предметного исследования                                     | proposed | 004, 006, 007, 008 | Планирование + пользователь; выбрать данные, исходный вопрос и критерии                                                                                               |
 
 `proposed` — направление без разрешения на реализацию; `ready` — scope и acceptance
@@ -46,7 +46,9 @@
 
 **016 принята и интегрирована через [PR #15](https://github.com/obolibok/filesystem-mcp/pull/15), merge `77a9e71ba6242afce39cc025ac63f2c86aa885c9`.** Tree-depth-v1 теперь основной snapshot формат; stable остаётся явной конфигурацией. Независимое review и `npm run check` PASS (516 tests, 8 platform skips), portable Verify PASS (24 сценария).
 
-**Активная задача — 017:** исполнитель обновляет production dependencies и lockfile, устраняет известные advisories и проверяет portable dependency graph. После review и интеграции запускаем **018** для адаптации точечных upstream защит от symlink/path TOCTOU и гонки overwrite в `create`.
+**017 принята и интегрирована через [PR #17](https://github.com/obolibok/filesystem-mcp/pull/17)**, merge `a87ad6bbe24e44c3a340ff91e89f779679f4f642`. Production-зависимости обновлены; независимое review без блокирующих замечаний, полный `npm run check` и CI на Windows/Ubuntu PASS. Девять уязвимостей dev-зависимостей оставлены отдельному триажу.
+
+**Активная задача — 018:** исполнитель назначен на `gpt-6.1-sol / xhigh` в чате `018 — guarded I/O race hardening`, thread `01a187fa-bc69-79b1-a089-cfd522095d17`, worktree `e45e`, ветка `codex/018-guarded-io-race-hardening`. Я заметил, что новый worktree стартовал с pre-017 HEAD `ec7ebfb`; исполнителю отправлено указание сначала подтвердить чистоту и синхронизировать только свою ветку с актуальным `main`, содержащим merge 017. Код до проверки базы не менять.
 [014 review](../testing/014-review-2026-10-28.md) **PASS**, head
 `a9c7a7f8e9ba83916298fa302c831b1ec1d0211b`; блокирующих замечаний нет.
 Независимый full check 498/0/8 (506 tests), upgrade/reuse старого комплекта 013
