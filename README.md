@@ -358,14 +358,24 @@ bounded code/message and, when known and safe, path, native error code and
 operation. Cancellation and interruption use their existing state and
 `stopReason`; a timeout failure reports `fatalError.code: "TIMEOUT"`.
 
-#### Experimental tree snapshot
+#### Snapshot formats
 
-Set `FS_EXPERIMENTAL_SNAPSHOT_TREE=1` to publish `snapshot_tree` alongside
-`snapshot` (20 tools, or 14 with `--read-only`). It is off by default; ordinary
-inventories still use `snapshot`. The inputs and shared job/artifact lifecycle
-are the same, but reuse is isolated by format. Sharing an idempotency key between
-formats is an error. Turning the flag off still permits status, cancellation and
-fetch of existing tree jobs under the same access policy and limits.
+The canonical `snapshot` tool creates `tree-depth-v1` by default (19 tools,
+13 with `--read-only`). Set `FS_SNAPSHOT_FORMAT=stable` to select the previous
+file-only CSV and `filesystem-mcp.snapshot-manifest` schema, version 1; its columns
+remain `RootId,RelativePath,Name,Extension,Length,LastWriteTime`. Only `tree` and
+`stable` are accepted; other values stop startup. Portable kits use
+`"snapshotFormat": "tree"` or `"stable"` in config.json and ignore inherited FS_*.
+
+`snapshot_tree` is no longer published. `FS_EXPERIMENTAL_SNAPSHOT_TREE` is ignored;
+the legacy portable boolean `experimentalSnapshotTree` is accepted but has no effect.
+An absent format selects tree even with a false legacy flag. To restore the old
+creation format, explicitly select stable and restart. Inputs and job lifecycle
+are shared, while completed/in-flight reuse, retries and forceRefresh remain
+isolated by persisted layout. Compatible jobs created by the former snapshot_tree
+remain reusable in tree mode. A retry key bound to another format is an error.
+Changing only the creation format leaves status, cancellation and fetch of both
+formats available under their original access policy, limits and TTL.
 
 `FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES` optionally overrides the raw CSV part cap
 for tree only (65536–536870912 bytes). When absent, tree uses
@@ -592,10 +602,11 @@ Flags take precedence when both are set.
 | `FS_MAX_INLINE_MATCHES`               | Deprecated and ignored; `pageSize` sets the `search_text` page size; `limit` caps collected matching lines. Logs a warning when set; removed in the next major.                                             |
 | `FS_MAX_READ_MANY_BYTES`              | Max total bytes across a batched `read` (default 524288, 10240–104857600).                                                                                                                                  |
 | `FS_SEARCH_TIMEOUT_MS`                | Search timeout in ms (default 5000, 100–60000).                                                                                                                                                             |
+| `FS_SNAPSHOT_FORMAT`                  | Snapshot creation format: `tree` (default, tree-depth-v1) or `stable` (file-only CSV). Invalid values stop startup.                                                                                         |
 | `FS_SNAPSHOT_DIR`                     | Durable job/artifact scratch directory; default is `filesystem-mcp-snapshot-v1` under the system temp directory. Keep separate from source roots and assign only one server process to a scratch directory. |
 | `FS_SNAPSHOT_MAX_RECORD_BYTES`        | Maximum encoded CSV record bytes (default 1048576).                                                                                                                                                         |
 | `FS_SNAPSHOT_MAX_RAW_PART_BYTES`      | Maximum raw CSV bytes per part including header/newlines (default 47185920 = 45 MiB).                                                                                                                       |
-| `FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES` | Optional raw CSV part cap for snapshot_tree only, including root/header/C/U bytes (65536–536870912); falls back to FS_SNAPSHOT_MAX_RAW_PART_BYTES. Shared ZIP/delivery ceilings still apply.                |
+| `FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES` | Optional raw CSV part cap for tree-format snapshot only, including root/header/C/U bytes (65536–536870912); falls back to FS_SNAPSHOT_MAX_RAW_PART_BYTES. Shared ZIP/delivery ceilings still apply.         |
 | `FS_SNAPSHOT_MAX_ZIP_BYTES`           | Maximum closed ZIP bytes per part (default 8388608 = 8 MiB).                                                                                                                                                |
 | `FS_SNAPSHOT_MAX_DELIVERY_BYTES`      | Maximum raw artifact bytes buffered into one MCP embedded resource (default 8388608); `FS_MAX_FILE_SIZE` also applies.                                                                                      |
 | `FS_SNAPSHOT_MAX_JOB_RAW_BYTES`       | Maximum raw CSV bytes across a job (default 536870912 = 512 MiB).                                                                                                                                           |

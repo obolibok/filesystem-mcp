@@ -50,6 +50,9 @@ export async function configuration() {
   const config = JSON.parse(
     (await readFile(join(kit, 'config.json'), 'utf8')).replace(/^\uFEFF/, ''),
   );
+  const snapshotFormat = config.snapshotFormat ?? 'tree';
+  if (config.snapshotFormat !== undefined && !['tree', 'stable'].includes(config.snapshotFormat))
+    throw new Error('snapshotFormat must be tree or stable.');
   if (
     config.experimentalSnapshotTree !== undefined &&
     typeof config.experimentalSnapshotTree !== 'boolean'
@@ -90,7 +93,7 @@ export async function configuration() {
     if (!range || !Number.isSafeInteger(value) || value < range[0] || value > range[1])
       throw new Error('Unsupported or out-of-range limit: ' + key);
   }
-  return { ...config, roots: [...new Set(roots)], scratchDirectory: scratch };
+  return { ...config, snapshotFormat, roots: [...new Set(roots)], scratchDirectory: scratch };
 }
 
 export function serverEnvironment(config) {
@@ -104,7 +107,7 @@ export function serverEnvironment(config) {
   }
   process.env.FS_ROOT_BOUNDARY = config.roots.join(delimiter);
   process.env.FS_SNAPSHOT_DIR = config.scratchDirectory;
-  process.env.FS_EXPERIMENTAL_SNAPSHOT_TREE = config.experimentalSnapshotTree === true ? '1' : '0';
+  process.env.FS_SNAPSHOT_FORMAT = config.snapshotFormat;
   for (const [key, value] of Object.entries(config.limits)) process.env[key] = String(value);
   delete process.env.CONTROL_PLANE_API_KEY;
   delete process.env.OPENAI_API_KEY;

@@ -208,13 +208,15 @@ blob SDK-клиентом само по себе не доказывает ма�
 аналитической среде; проверенный ChatGPT-маршрут записан в
 [tool delivery protocol](../testing/tool-originals-delivery.md).
 
-## Экспериментальный tree snapshot (014)
+## Формат snapshot: tree по умолчанию (016)
 
-`FS_EXPERIMENTAL_SNAPSHOT_TREE=1` добавляет `snapshot_tree` к стандартным 19/13
-tools (20/14 с экспериментом). Tool имеет те же inputs и доступен в read-only;
-обычная инструкция продолжает направлять inventory в `snapshot`. В portable
-управляет optional boolean `config.experimentalSnapshotTree`, default false;
-inherited environment не включает эксперимент вопреки config.
+Канонический `snapshot` создаёт tree-depth-v1. Runtime `FS_SNAPSHOT_FORMAT` и
+portable `snapshotFormat` принимают только tree (default) или stable; неверные
+значения останавливают запуск. В обоих режимах 19/13 tools, отдельного
+snapshot_tree в discovery нет. Обычные inventory instructions ведут в snapshot.
+Portable очищает inherited FS_*; старый boolean experimentalSnapshotTree
+валидируется для совместимости, но не выбирает формат. Для прежнего CSV нужно
+явно задать `"snapshotFormat": "stable"`; FS_EXPERIMENTAL_SNAPSHOT_TREE игнорируется.
 
 Общий `snapshot-pipeline.ts` выдаёт в tree-режиме D/F/U события из прежнего
 guarded depth-first walker. Источник не читается вторично, stat каталога не
@@ -222,8 +224,10 @@ guarded depth-first walker. Источник не читается вторич�
 TTL и delivery остаются общими. Stable CSV/manifest и его normalized identity
 не изменены. Для tree discriminator `layout: tree-depth-v1` добавлен в normalized
 input и все три fingerprints (ordinary/reuse/request). Job kind остаётся snapshot.
-Один idempotency key между форматами конфликтует. Flag не входит в captured
-config/policy identity: legacy и tree status/fetch/cancel работают при flag off.
+Один idempotency key между форматами конфликтует. Выбор creation-формата не входит в captured
+config/policy identity: stable/tree status/fetch/cancel работают после смены
+режима и restart по прежним правилам TTL/authorization. Сохранённые 014/015
+tree jobs имеют тот же layout/fingerprint и остаются кандидатами для reuse.
 
 Каждая часть: одна CSV-запись absolute sourceRoot, header
 `Type,Depth,Name,Length,LastWriteTime`, затем basename/depth записи. UTF-8 без BOM,

@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import type { ArtifactJobManager } from '../core/job-manager.js';
 import type { PageSnapshotStore } from '../core/page-store.js';
 import type { PathGuard } from '../core/path.js';
+import { getSnapshotFormat, type SnapshotFormat } from '../core/snapshot-config.js';
 import type { ResourceStore } from '../core/store.js';
 import { BUNDLE } from './bundle.js';
 import { CANCEL_JOB } from './cancel-job.js';
@@ -22,7 +23,7 @@ import { PATCH } from './patch.js';
 import { READ } from './read.js';
 import { REPLACE_TEXT } from './replace-text.js';
 import { SEARCH_TEXT } from './search-text.js';
-import { SNAPSHOT, SNAPSHOT_TREE } from './snapshot.js';
+import { SNAPSHOT, STABLE_SNAPSHOT } from './snapshot.js';
 import { STAT } from './stat.js';
 
 export const ALL_TOOLS = [
@@ -53,9 +54,14 @@ export const MUTATING_TOOL_NAMES = new Set(
 );
 
 /** The tools a server registers at this setting — the one owner of the `--read-only` gate. */
-export function registeredTools(readOnly: boolean): readonly DefinedTool[] {
+export function registeredTools(
+  readOnly: boolean,
+  snapshotFormat: SnapshotFormat = getSnapshotFormat(),
+): readonly DefinedTool[] {
   const tools = readOnly ? ALL_TOOLS.filter((t) => !MUTATING_TOOL_NAMES.has(t.name)) : ALL_TOOLS;
-  return process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'] === '1' ? [...tools, SNAPSHOT_TREE] : tools;
+  return tools.map((tool) =>
+    tool === SNAPSHOT && snapshotFormat === 'stable' ? STABLE_SNAPSHOT : tool,
+  );
 }
 
 // Re-exported so documentation surfaces quote `.name` off the definition rather
@@ -97,7 +103,10 @@ export function registerTools(deps: ToolRegistrarDeps): void {
     jobManager: deps.jobManager,
     ...(deps.era ? { era: deps.era } : {}),
   };
-  for (const tool of registeredTools(deps.readOnly ?? false)) {
+  for (const tool of registeredTools(
+    deps.readOnly ?? false,
+    deps.jobManager.config.snapshotFormat,
+  )) {
     tool.register(toolDeps);
   }
 }

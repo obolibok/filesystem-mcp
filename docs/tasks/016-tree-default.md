@@ -1,6 +1,6 @@
 # 016: tree-depth-v1 по умолчанию
 
-Статус: готова к реализации. Зависимости: задачи 014 и 015 интегрированы.
+Статус реализации: review прошла; check PASS, ожидает интеграции. Зависимости: задачи 014 и 015 интегрированы.
 Планирующий чат ведёт центральную доску и принимает результат после ревью.
 
 ## Зачем
@@ -59,26 +59,26 @@ lifecycle jobs, общие ZIP/delivery limits, отдельный tree raw cap 
 
 ## Приёмка
 
-- [ ] В стандартной portable и runtime конфигурации доступен один канонический
+- [x] В стандартной portable и runtime конфигурации доступен один канонический
       tool snapshot, который по умолчанию создаёт tree-depth-v1 без opt-in.
-- [ ] snapshotFormat: "stable" / FS_SNAPSHOT_FORMAT=stable выбирают прежний CSV
+- [x] snapshotFormat: "stable" / FS_SNAPSHOT_FORMAT=stable выбирают прежний CSV
       и manifest без изменения контракта. Неверные настройки останавливают запуск;
       inherited environment не переопределяет portable config.
-- [ ] Default и stable modes остаются в пределах tool discovery budgets.
+- [x] Default и stable modes остаются в пределах tool discovery budgets.
       Обычные инструкции направляют модель в настроенный snapshot tool.
-- [ ] Completed reuse, in-flight reuse, idempotency и force refresh разделены
+- [x] Completed reuse, in-flight reuse, idempotency и force refresh разделены
       по формату. Совместимая tree job из 014/015 переиспользуется после
       обновления; stable jobs и artifacts остаются доступны при смене режима.
-- [ ] Restart и format-switch regressions подтверждают доступность старых jobs
+- [x] Restart и format-switch regressions подтверждают доступность старых jobs
       через status/fetch/cancel по прежним правилам авторизации и TTL.
-- [ ] Независимая synthetic проверка подтверждает одинаковые file paths, length и
+- [x] Независимая synthetic проверка подтверждает одинаковые file paths, length и
       timestamps в обоих форматах; покрыты пустые/неполные каталоги, multipart C,
       Unicode, запятые, кавычки и CR/LF.
-- [ ] Portable Verify покрывает default tree, явный stable, отказ на неверной
+- [x] Portable Verify покрывает default tree, явный stable, отказ на неверной
       настройке и изоляцию от inherited env без production данных.
-- [ ] Обновлены README, architecture, portable/operator docs и карта docs.
+- [x] Обновлены README, architecture, portable/operator docs и карта docs.
       tree-depth-v1 описан как поддерживаемый default, а не эксперимент.
-- [ ] npm run check, targeted regressions и portable verification проходят.
+- [x] npm run check, targeted regressions и portable verification проходят.
       В Work record записаны команды, среда, результаты и skips. Версия пакета
       не меняется, release workflow не запускается.
 
@@ -99,10 +99,81 @@ Planning интегрирует результат после независим
 
 ## Work record
 
-До начала реализации: не начато.
+Дата: 2026-10-29. Реализация готова к независимому review. Центральная доска
+не менялась; приёмку и пользовательскую portable-сборку выполняет planning.
 
-- Base / branch:
-- Изменения и выбранные решения:
-- Команды, environment, результаты и skips:
-- Приёмка:
-- Остаточные риски / handoff:
+- Base: `14d74bfd41bbcc48d4a2c55f3999242dad5ef392`; ветка
+  `codex/016-tree-default`, отдельный managed worktree приложения. Исходный diff
+  пуст. Commit результата сообщается в handoff; собственный SHA сюда не включён.
+- Runtime `FS_SNAPSHOT_FORMAT` строго принимает tree/stable, default tree;
+  `--print-config` показывает выбранный формат. Manager захватывает настройку
+  при старте; composition регистрирует ровно один snapshot нужного формата.
+- Stable normalized input, tree layout discriminator и fingerprints сохранены
+  без изменений. Формат создания намеренно не добавлен в authorization/config
+  fingerprint: совместимые 014/015 tree jobs переиспользуются новым snapshot,
+  чтение/cancel старых jobs не зависит от режима создания. Между форматами
+  отсутствуют completed/in-flight reuse и replay одного ключа; forceRefresh
+  остаётся retry-safe в своём формате. Walker, serializers, manifests, tree
+  raw cap, общий lifecycle/limits, версии пакетов не менялись.
+- Portable `snapshotFormat` принимает только строки tree/stable, отсутствие
+  означает tree; false/null/числа/объекты/неизвестные строки отклоняются до MCP.
+  Legacy experimentalSnapshotTree ещё валидируется как boolean, но игнорируется
+  при выборе; inherited FS_* очищается. Retired FS_EXPERIMENTAL_SNAPSHOT_TREE
+  не влияет на discovery. README, architecture, portable/operator instructions,
+  docs map и tool/internal instructions описывают поддерживаемый default и migration;
+  TEST-014 помечен историческим, добавлен TEST-016. Отдельный skill не добавлен.
+- Synthetic regressions проверяют обе последовательности format-switch,
+  completed/in-flight/retry/force, restart, status/fetch/cancel обеих jobs,
+  отказы authorization и TTL в обоих creation modes, pre-016 stored identity,
+  exact path/Length/LastWriteTime parity. Независимый ZIP/CSV readback покрывает
+  Unicode, запятые, кавычки, CR/LF, multipart C, U и пустые каталоги.
+- Среда: Windows 10 x64 (10.0.19045), Node 24.15.0, npm 11.12.1,
+  Windows PowerShell 5.1.19041.6456. `npm ci` — PASS.
+- `node --test --import tsx __tests__/snapshot-tree.test.ts __tests__/snapshot.test.ts __tests__/tool-selection.test.ts __tests__/source-provenance.test.ts`:
+  67 PASS, 0 failures/skips. После дополнительной authorization/TTL regression:
+  `node --test --import tsx __tests__/snapshot-tree.test.ts` — 18 PASS,
+  0 failures/skips. Общие tests запущены отдельно (итог ниже).
+- Финальный `npm test` после всех regressions: 516 tests, 508 PASS,
+  0 failures/cancelled, 8 skips, 70 suites. Skips: POSIX FIFO, inode/mode,
+  0222 append target (3); Windows file symlink privilege отсутствует для
+  append in-root/out-of-root/sensitive target, PathGuard sensitive target и
+  stat own symlink (5). Junction/настоящий 8.3 и native provenance smoke прошли.
+- Discovery: tree full/read-only 27 180 / 17 100 chars; stable
+  27 030 / 16 950, budgets 27 200 / 17 100. В обоих режимах 19/13 tools,
+  snapshot_tree не публикуется даже при старом flag=1.
+- `npm run check` фактически запущен: build, production/test types и полный
+  ESLint прошли; Prettier остановил цепочку на шести неизменённых файлах базы:
+  `docs/project/status.md`, `docs/tasks/015-snapshot-tree-settings.md`,
+  `docs/testing/014-chatgpt-ab-2026-10-29.md`,
+  `docs/testing/015-integration-2026-10-29.md`,
+  `docs/testing/015-live-r2-2026-10-29.md`,
+  `docs/testing/015-local-r2-2026-10-29.md`. Их diff относительно base пуст;
+  чужая карточка и центральная доска не редактировались. Поэтому последний
+  acceptance checkbox оставлен открытым. Planning нужно нормализовать эти docs
+  в своём scope и повторить полный check перед integration.
+- Отдельно пройдены `npm run type-check:test`, ESLint изменённых TS/MJS,
+  `knip`, Prettier всех файлов текущего diff и `git diff --check`.
+- Portable: `Build.ps1` собрал отдельный локальный test kit в
+  `.tmp/016-portable-test` из рабочего diff, с pinned Node/tunnel archives
+  и проверкой SHA-256. Это test kit, не итоговая поставка пользователя;
+  BUILD sourceCommit в нём указывает base, исходные bytes включают реализацию.
+  `node scripts/windows-portable/Verify.mjs .tmp/016-portable-test` —
+  PORTABLE_ACCEPTANCE_PASS, 24 scenarios, 0 skips. Проверены relocation/Unicode,
+  default/omitted format + legacy false, явный stable, inherited env с обратным
+  форматом, оба manifests, multipart caps, tree-only cap change/reuse, restart,
+  byte-identical fetch обеих layouts из обоих modes, invalid format/type/null,
+  existing path/limit negatives, PowerShell doctor и отказ чужому PID.
+- Ограничения среды: sandbox запуск tsx падал до tests на
+  `uv_os_get_passwd / ENOMEM`; успешные tests выполнены вне sandbox. Первый
+  sandbox Verify дошёл до Stop negative control и получил Get-CimInstance
+  Access denied; полный повтор вне sandbox прошёл. Проверки не ослаблялись.
+- Production источники, установленный сервис и tunnel не трогались. В Git только
+  code/docs/synthetic tests. Live ChatGPT/SMB и итоговая portable поставка —
+  следующая ответственность planning после review. Функциональных failures нет;
+  остаётся унаследованный repository-wide formatting blocker выше.
+- Planning review/integration follow-up (2026-10-29): independent code review found
+  no correctness issues. The six inherited Markdown formatting blockers listed
+  above were normalized in the isolated integration worktree. On the combined
+  task/main head, `npm run check` passed: build, production/test types, ESLint,
+  Prettier, Knip, and 516 tests (508 passed, 8 platform skips, 0 failures).
+  No service, tunnel, or production sources were touched.

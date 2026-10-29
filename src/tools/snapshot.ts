@@ -42,16 +42,16 @@ const SnapshotOutputSchema = z.strictObject({
 
 function snapshotTool(tree: boolean) {
   return defineTool({
-    name: tree ? 'snapshot_tree' : 'snapshot',
-    title: tree ? 'Start Experimental Tree Snapshot' : 'Start Metadata Snapshot',
-    description: tree
-      ? 'Experimental opt-in tree-depth-v1 metadata CSV/ZIP, including empty directories. Use only when the user requests the tree experiment. ' +
-        'Each part starts with sourceRoot/header and ancestor context; D/F are objects, C/U are service records. ' +
-        'Same scope, reuse and job_status/get_artifact lifecycle as snapshot; independent format identity. Sources are read only.'
-      : 'Create/reuse a recursive metadata index (CSV/ZIP) for inventories, whole-tree exploration and file totals. ' +
-        'A known list_roots root needs no broad find_files first. Reads sources; writes scratch under policy/quota/deadline limits. ' +
-        'Reuse matching complete results within maxAgeMs or join queued/running jobs; source changes are not detected. ' +
-        'Use forceRefresh/idempotencyKey for new scans/safe retries. job_status gives counters; get_artifact delivers the index.',
+    name: 'snapshot',
+    title: 'Start Metadata Snapshot',
+    description:
+      'Create/reuse a recursive CSV/ZIP metadata index for inventories and file totals. ' +
+      (tree
+        ? 'Returns a tree-depth-v1 manifest. Each part has a root record, then RFC 4180 records with numeric depth and exact names; D/F are directory/file objects, C is ancestor context, U marks incomplete directories. ' +
+          'Parse records, not lines; check completeness. '
+        : 'Returns the stable manifest and file-only CSV: RootId,RelativePath,Name,Extension,Length,LastWriteTime. ') +
+      'Reads sources; writes separate bounded scratch. Reuses complete results within maxAgeMs or joins running jobs of the same format; source changes are not detected. ' +
+      'Use forceRefresh/idempotencyKey for new scans/safe retries. Poll job_status; get_artifact delivers manifest/ZIP parts.',
     input: SnapshotInputSchema,
     output: SnapshotOutputSchema,
     annotations: {
@@ -136,5 +136,5 @@ function snapshotTool(tree: boolean) {
   });
 }
 
-export const SNAPSHOT = snapshotTool(false);
-export const SNAPSHOT_TREE = snapshotTool(true);
+export const SNAPSHOT = snapshotTool(true);
+export const STABLE_SNAPSHOT = snapshotTool(false);

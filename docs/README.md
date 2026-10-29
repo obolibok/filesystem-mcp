@@ -60,7 +60,7 @@
   [пользовательский smoke/restart PASS](testing/013-live-2026-10-26.md).
 - [Архитектура, форматы и лимиты](reference/architecture.md): карта владельцев кода
   и текущие возможности и ограничения.
-- [Эксперимент snapshot_tree 014](testing/014-snapshot-tree.md): tree-depth-v1,
+- [Формат tree-depth-v1 и исходный эксперимент 014](testing/014-snapshot-tree.md): tree-depth-v1,
   совместимость, independent readback и synthetic A/B raw/ZIP/time/memory.
 - [Сборка 014](testing/014-integration-2026-10-28.md): review/CI, portable,
   контрольная сумма ZIP и инструкция A/B на настоящем хранилище.
@@ -75,7 +75,8 @@
 - [Локальная обработка R2 (015)](testing/015-local-r2-2026-10-29.md): распаковка,
   checksum, parity, поиск и построение индекса.
 - [016: tree по умолчанию](tasks/016-tree-default.md): переключение стандартного
-  snapshot на tree-depth-v1 с явным stable-режимом.
+  snapshot на tree-depth-v1 с явным stable-режимом;
+  [операторская проверка](../scripts/windows-portable/template/TEST-016.md).
 - [Baseline от 19 сентября](testing/baseline-2026-09-19.md): проверенные наблюдения,
   отделённые от планируемых исправлений.
 - [Шаблон задачи](tasks/TEMPLATE.md): минимальный контракт для следующего чата.

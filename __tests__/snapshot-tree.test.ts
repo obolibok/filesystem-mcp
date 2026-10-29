@@ -19,6 +19,9 @@ import { join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
+import { inflateRawSync } from 'node:zlib';
+
+import { parse } from 'csv-parse/sync';
 
 import {
   mergeTrees,
@@ -176,7 +179,12 @@ async function* records(nodes: readonly SnapshotTreeRecord[]) {
   yield* nodes;
 }
 
-async function pairFor(f: Awaited<ReturnType<typeof fixture>>, readOnly: boolean) {
+async function pairFor(
+  f: Awaited<ReturnType<typeof fixture>>,
+  readOnly: boolean,
+  format = f.manager.config.snapshotFormat,
+) {
+  Object.assign(f.manager.config, { snapshotFormat: format });
   const server = await createServer(
     { cliAllowedDirs: [f.root], readOnly },
     { jobManager: f.manager },
@@ -195,7 +203,20 @@ async function pairFor(f: Awaited<ReturnType<typeof fixture>>, readOnly: boolean
   };
 }
 
-describe('experimental snapshot_tree', () => {
+async function pairsFor(f: Awaited<ReturnType<typeof fixture>>) {
+  const stable = await pairFor(f, true, 'stable');
+  const tree = await pairFor(f, true, 'tree');
+  return {
+    stable,
+    tree,
+    close: async () => {
+      await stable.close();
+      await tree.close();
+    },
+  };
+}
+
+describe('snapshot tree-depth-v1', () => {
   it('publishes closed-ZIP failure only after partial cleanup and preserves cancellation during cleanup', async () => {
     for (const cancel of [false, true]) {
       let release = () => {};
@@ -389,11 +410,9 @@ describe('experimental snapshot_tree', () => {
     }
   });
 
-  it('separates tree cap reuse while preserving stable completed/inflight/retry and restart/flag-off access', async () => {
+  it('separates tree cap reuse while preserving stable completed/inflight/retry and restart/format-switch access', async () => {
     const f = await fixture({ maxRawPartBytes: 1200, maxRunningJobs: 2 });
-    const previous = process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'];
-    process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'] = '1';
-    let pair = await pairFor(f, true);
+    let pair = await pairsFor(f);
     // eslint-disable-next-line @typescript-eslint/unbound-method -- restored below; original is called with this.
     const original = GuardedFileSystem.prototype.opendir;
     let release = () => {};
@@ -404,8 +423,11 @@ describe('experimental snapshot_tree', () => {
       if (path === f.root) await gate;
       return original.call(this, path, options);
     };
-    const call = async (name: string, args: Record<string, unknown> = {}) => {
-      const response = await pair.client.callTool({ name, arguments: { path: f.root, ...args } });
+    const call = async (name: 'tree' | 'stable', args: Record<string, unknown> = {}) => {
+      const response = await pair[name].client.callTool({
+        name: 'snapshot',
+        arguments: { path: f.root, ...args },
+      });
       assert(!response.isError, firstTextBlock(response).text);
       return (response.structuredContent ?? response._meta) as {
         reason: string;
@@ -429,24 +451,24 @@ describe('experimental snapshot_tree', () => {
       });
       assert.equal(f.manager.snapshotConfigFingerprint(), legacyFingerprint);
       assert.equal(f.manager.snapshotConfigFingerprint(true), legacyFingerprint);
-      const stable = await call('snapshot', { idempotencyKey: 'stable-settings-key' });
-      const tree = await call('snapshot_tree', { idempotencyKey: 'tree-settings-key' });
+      const stable = await call('stable', { idempotencyKey: 'stable-settings-key' });
+      const tree = await call('tree', { idempotencyKey: 'tree-settings-key' });
       // No producer has passed the gate: compare in-flight identity at different effective caps.
       Object.assign(f.config, { maxTreeRawPartBytes: 1200 });
-      assert.equal((await call('snapshot_tree')).job.jobId, tree.job.jobId);
+      assert.equal((await call('tree')).job.jobId, tree.job.jobId);
       Object.assign(f.config, { maxTreeRawPartBytes: 330 });
-      assert.equal((await call('snapshot')).reason, 'inflight_reuse');
-      assert.equal((await call('snapshot')).job.jobId, stable.job.jobId);
+      assert.equal((await call('stable')).reason, 'inflight_reuse');
+      assert.equal((await call('stable')).job.jobId, stable.job.jobId);
       assert.equal(
-        (await call('snapshot', { idempotencyKey: 'stable-settings-key' })).reason,
+        (await call('stable', { idempotencyKey: 'stable-settings-key' })).reason,
         'idempotent_replay',
       );
-      const changed = await call('snapshot_tree');
+      const changed = await call('tree');
       assert.equal(changed.reason, 'created');
       assert.notEqual(changed.job.jobId, tree.job.jobId);
-      assert.equal((await call('snapshot_tree')).job.jobId, changed.job.jobId);
-      const denied = await pair.client.callTool({
-        name: 'snapshot_tree',
+      assert.equal((await call('tree')).job.jobId, changed.job.jobId);
+      const denied = await pair.tree.client.callTool({
+        name: 'snapshot',
         arguments: { path: f.root, idempotencyKey: 'tree-settings-key' },
       });
       assert(denied.isError);
@@ -454,7 +476,7 @@ describe('experimental snapshot_tree', () => {
       await f.manager.cancel(changed.job.jobId, f.guard);
       // Restore the legacy effective cap before allowing those producers to execute.
       Reflect.deleteProperty(f.config, 'maxTreeRawPartBytes');
-      assert.equal((await call('snapshot_tree')).job.jobId, tree.job.jobId);
+      assert.equal((await call('tree')).job.jobId, tree.job.jobId);
       release();
       const stableDone = await terminal(f.manager, stable.job.jobId, f.guard);
       const treeDone = await terminal(f.manager, tree.job.jobId, f.guard);
@@ -468,11 +490,11 @@ describe('experimental snapshot_tree', () => {
       );
       await pair.close();
       const restarted = new ArtifactJobManager({ ...f.config, maxTreeRawPartBytes: 330 });
-      pair = await pairFor({ ...f, manager: restarted }, true);
-      assert.equal((await call('snapshot')).reason, 'completed_reuse');
-      assert.equal((await call('snapshot')).job.jobId, stable.job.jobId);
+      pair = await pairsFor({ ...f, manager: restarted });
+      assert.equal((await call('stable')).reason, 'completed_reuse');
+      assert.equal((await call('stable')).job.jobId, stable.job.jobId);
       assert.equal(
-        (await call('snapshot', { idempotencyKey: 'stable-settings-key' })).reason,
+        (await call('stable', { idempotencyKey: 'stable-settings-key' })).reason,
         'idempotent_replay',
       );
       for (const { a, bytes } of stableBytes)
@@ -482,23 +504,22 @@ describe('experimental snapshot_tree', () => {
         restarted.getArtifact(required(treeDone.manifestArtifactId), f.guard),
         /reuse policy has changed/u,
       );
-      const fresh = await call('snapshot_tree');
+      const fresh = await call('tree');
       assert.notEqual(fresh.job.jobId, tree.job.jobId);
       const freshDone = await terminal(restarted, fresh.job.jobId, f.guard);
-      assert.equal((await call('snapshot_tree')).job.jobId, fresh.job.jobId);
+      assert.equal((await call('tree')).job.jobId, fresh.job.jobId);
       await pair.close();
-      process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'] = '0';
       const off = new ArtifactJobManager({ ...f.config, maxTreeRawPartBytes: 330 });
-      pair = await pairFor({ ...f, manager: off }, true);
-      assert.equal((await pair.client.listTools()).tools.length, 13);
+      pair = await pairsFor({ ...f, manager: off });
+      assert.equal((await pair.stable.client.listTools()).tools.length, 13);
       for (const job of [stableDone, freshDone]) {
-        const status = await pair.client.callTool({
+        const status = await pair.stable.client.callTool({
           name: 'job_status',
           arguments: { jobId: job.jobId },
         });
         assert(!status.isError, firstTextBlock(status).text);
         for (const artifact of job.artifacts) {
-          const response = await pair.client.callTool({
+          const response = await pair.stable.client.callTool({
             name: 'get_artifact',
             arguments: { artifactId: artifact.artifactId },
           });
@@ -509,9 +530,6 @@ describe('experimental snapshot_tree', () => {
       release();
       GuardedFileSystem.prototype.opendir = original;
       await pair.close();
-      if (previous === undefined)
-        Reflect.deleteProperty(process.env, 'FS_EXPERIMENTAL_SNAPSHOT_TREE');
-      else process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'] = previous;
       await f.close();
     }
   });
@@ -832,7 +850,7 @@ describe('experimental snapshot_tree', () => {
     }
   });
 
-  it('shares cancellation/TTL and preserves tree and legacy stable bytes across restart with the flag off', async () => {
+  it('shares cancellation/TTL and preserves tree and legacy stable bytes across restart in either creation format', async () => {
     const f = await fixture({ resultTtlMs: 100_000 });
     try {
       await writeFile(join(f.root, 'probe.txt'), 'synthetic');
@@ -918,146 +936,151 @@ describe('experimental snapshot_tree', () => {
     }
   });
 
-  it('gates discovery/calls, keeps default budgets and isolates completed/inflight/retry identities in both directions', async (t) => {
-    const f = await fixture();
+  it('publishes one snapshot in both modes within discovery budgets, ignoring the retired flag', async (t) => {
     const previous = process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'];
-    const scratchPrevious = process.env['FS_SNAPSHOT_DIR'];
     try {
-      await writeFile(join(f.root, 'probe.txt'), 'synthetic');
-      for (const enabled of [false, true]) {
-        process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'] = enabled ? '1' : '0';
-        for (const readOnly of [false, true]) {
-          const own = await fixture();
-          const pair = await pairFor(own, readOnly);
-          try {
-            const { tools } = await pair.client.listTools();
-            assert.equal(tools.length, (readOnly ? 13 : 19) + Number(enabled));
-            assert.equal(
-              tools.some((t) => t.name === 'snapshot_tree'),
-              enabled,
-            );
-            const size = JSON.stringify(tools).length;
-            t.diagnostic(
-              `enabled=${enabled} readOnly=${readOnly} tools=${tools.length} chars=${size}`,
-            );
-            assert(
-              size <= (readOnly ? 17_100 : 27_200) + (enabled ? 3400 : 0),
-              `toolset size ${size}`,
-            );
-            if (enabled) {
-              const tool = required(tools.find((t) => t.name === 'snapshot_tree'));
-              assert.match(tool.description ?? '', /Experimental/u);
-              assert.deepEqual(
-                tool.inputSchema,
-                required(tools.find((t) => t.name === 'snapshot')).inputSchema,
+      for (const format of ['tree', 'stable'] as const) {
+        for (const flag of ['0', '1']) {
+          process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'] = flag;
+          for (const readOnly of [false, true]) {
+            const f = await fixture({ snapshotFormat: format });
+            const pair = await pairFor(f, readOnly);
+            try {
+              const { tools } = await pair.client.listTools();
+              assert.equal(tools.length, readOnly ? 13 : 19);
+              assert.equal(tools.filter((tool) => tool.name === 'snapshot').length, 1);
+              assert(!tools.some((tool) => tool.name === 'snapshot_tree'));
+              const size = JSON.stringify(tools).length;
+              t.diagnostic(format + ' readOnly=' + String(readOnly) + ' chars=' + String(size));
+              assert(size <= (readOnly ? 17_100 : 27_200));
+              const tool = required(tools.find((tool) => tool.name === 'snapshot'));
+              assert.match(
+                tool.description ?? '',
+                format === 'tree' ? /tree-depth-v1 manifest/u : /stable manifest/u,
+              );
+              await assert.rejects(
+                pair.client.callTool({ name: 'snapshot_tree', arguments: { path: f.root } }),
               );
               const response = await pair.client.callTool({
-                name: 'snapshot_tree',
-                arguments: { path: own.root },
+                name: 'snapshot',
+                arguments: { path: f.root },
               });
               assert(!response.isError, firstTextBlock(response).text);
-            } else
-              await assert.rejects(
-                pair.client.callTool({ name: 'snapshot_tree', arguments: { path: own.root } }),
+              const { job } = (response.structuredContent ?? response._meta) as {
+                job: { jobId: string };
+              };
+              const done = await terminal(f.manager, job.jobId, f.guard);
+              const manifest = JSON.parse(
+                (
+                  await f.manager.getArtifact(required(done.manifestArtifactId), f.guard)
+                ).bytes.toString(),
+              ) as { schema: string };
+              assert.equal(
+                manifest.schema,
+                format === 'tree'
+                  ? 'filesystem-mcp.snapshot-tree-manifest'
+                  : 'filesystem-mcp.snapshot-manifest',
               );
-          } finally {
-            await pair.close();
-            await own.close();
+            } finally {
+              await pair.close();
+              await f.close();
+            }
           }
         }
       }
-      process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'] = '1';
-      for (const order of [
-        ['snapshot', 'snapshot_tree'],
-        ['snapshot_tree', 'snapshot'],
-      ]) {
-        // A dedicated scratch per order; hold source open to deterministically test joining.
-        const own = await fixture();
-        const pair = await pairFor(own, true);
-        // eslint-disable-next-line @typescript-eslint/unbound-method -- restored below; invoked with original.call(this).
-        const original = GuardedFileSystem.prototype.opendir;
-        let release = () => {};
-        const gate = new Promise<void>((r) => {
-          release = r;
+    } finally {
+      if (previous === undefined)
+        Reflect.deleteProperty(process.env, 'FS_EXPERIMENTAL_SNAPSHOT_TREE');
+      else process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'] = previous;
+    }
+  });
+
+  it('isolates completed/inflight/retry/forced identities in both directions and restores both formats after restart', async () => {
+    for (const order of [
+      ['stable', 'tree'],
+      ['tree', 'stable'],
+    ] as const) {
+      const f = await fixture({ maxRunningJobs: 2 });
+      let pairs = await pairsFor(f);
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- restored below.
+      const original = GuardedFileSystem.prototype.opendir;
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      GuardedFileSystem.prototype.opendir = async function (path, options) {
+        if (path === f.root) await gate;
+        return original.call(this, path, options);
+      };
+      const call = async (format: 'tree' | 'stable', args: Record<string, unknown> = {}) => {
+        const r = await pairs[format].client.callTool({
+          name: 'snapshot',
+          arguments: { path: f.root, ...args },
         });
-        GuardedFileSystem.prototype.opendir = async function (path, options) {
-          if (path === own.root) await gate;
-          return original.call(this, path, options);
-        };
-        const call = async (name: string, args: Record<string, unknown> = {}) => {
-          const response = await pair.client.callTool({
-            name,
-            arguments: { path: own.root, ...args },
+        assert(!r.isError, firstTextBlock(r).text);
+        return (r.structuredContent ?? r._meta) as { reason: string; job: { jobId: string } };
+      };
+      try {
+        await writeFile(join(f.root, 'probe.txt'), 'synthetic');
+        const saved: StoredJob[] = [];
+        const ids: string[] = [];
+        for (const format of order) {
+          const first = await call(format, { idempotencyKey: 'key-' + format });
+          ids.push(first.job.jobId);
+          const joined = await call(format);
+          assert.equal(joined.reason, 'inflight_reuse');
+          assert.equal(joined.job.jobId, first.job.jobId);
+          const conflict = await pairs[format === 'tree' ? 'stable' : 'tree'].client.callTool({
+            name: 'snapshot',
+            arguments: { path: f.root, idempotencyKey: 'key-' + format },
           });
-          assert(!response.isError, firstTextBlock(response).text);
-          return (response.structuredContent ?? response._meta) as {
-            reason: string;
-            job: { jobId: string; layout?: string };
-          };
-        };
-        const wait = async (id: string) => {
-          for (let n = 0; n < 1000; n++) {
-            const r = await pair.client.callTool({ name: 'job_status', arguments: { jobId: id } });
-            const job = (r.structuredContent ?? r._meta) as { state: string; complete: boolean };
-            if (job.state === 'completed') {
-              assert(job.complete);
-              return;
-            }
-            assert(['queued', 'running'].includes(job.state), JSON.stringify(job));
-            await delay(10);
-          }
-          assert.fail('tool job timeout');
-        };
-        try {
-          const ids: string[] = [];
-          for (const name of order) {
-            const first = await call(name, { idempotencyKey: `key-${name}` });
-            ids.push(first.job.jobId);
-            const joined = await call(name);
-            assert.equal(joined.reason, 'inflight_reuse');
-            assert.equal(joined.job.jobId, first.job.jobId);
-            const other = required(order.find((n) => n !== name));
-            const conflict = await pair.client.callTool({
-              name: other,
-              arguments: { path: own.root, idempotencyKey: `key-${name}` },
-            });
-            assert.equal(conflict.isError, true);
-            assert.match(firstTextBlock(conflict).text ?? '', /different normalized/u);
-          }
-          assert.notEqual(ids[0], ids[1]);
-          release();
-          for (const id of ids) await wait(id);
-          for (const [i, name] of order.entries()) {
-            const reused = await call(name);
-            assert.equal(reused.reason, 'completed_reuse');
-            assert.equal(reused.job.jobId, ids[i]);
-            const forced = await call(name, {
-              forceRefresh: true,
-              idempotencyKey: `forced-${name}`,
-            });
-            assert.notEqual(forced.job.jobId, ids[i]);
-            assert.equal(
-              (await call(name, { forceRefresh: true, idempotencyKey: `forced-${name}` })).reason,
-              'idempotent_replay',
+          assert(conflict.isError);
+          assert.match(firstTextBlock(conflict).text ?? '', /different normalized/u);
+        }
+        assert.notEqual(ids[0], ids[1]);
+        release();
+        for (const id of ids) saved.push(await terminal(f.manager, id, f.guard));
+        for (const [i, format] of order.entries()) {
+          const reused = await call(format);
+          assert.equal(reused.reason, 'completed_reuse');
+          assert.equal(reused.job.jobId, ids[i]);
+          const forced = await call(format, {
+            forceRefresh: true,
+            idempotencyKey: 'forced-' + format,
+          });
+          assert.notEqual(forced.job.jobId, ids[i]);
+          assert.equal(
+            (await call(format, { forceRefresh: true, idempotencyKey: 'forced-' + format })).reason,
+            'idempotent_replay',
+          );
+          saved.push(await terminal(f.manager, forced.job.jobId, f.guard));
+        }
+        const savedBytes = new Map<string, Buffer>();
+        for (const job of saved)
+          for (const a of job.artifacts)
+            savedBytes.set(
+              a.artifactId,
+              (await f.manager.getArtifact(a.artifactId, f.guard)).bytes,
             );
-            await wait(forced.job.jobId);
-          }
-          process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'] = '0';
-          const off = await pairFor(own, true);
-          try {
-            const treeId = required(ids[order.indexOf('snapshot_tree')]);
-            const response = await off.client.callTool({
+        await pairs.close();
+        const manager = new ArtifactJobManager(f.config);
+        pairs = await pairsFor({ ...f, manager });
+        for (const mode of order) {
+          // A creation mode cannot restrict access to previously saved work.
+          for (const job of saved) {
+            const client = pairs[mode].client;
+            const status = await client.callTool({
               name: 'job_status',
-              arguments: { jobId: treeId },
+              arguments: { jobId: job.jobId },
             });
-            assert(!response.isError);
-            const status = (response.structuredContent ?? response._meta) as {
-              layout: string;
-              artifacts: { artifactId: string }[];
-            };
-            assert.equal(status.layout, 'tree-depth-v1');
-            for (const artifact of status.artifacts) {
-              const fetched = await off.client.callTool({
+            assert(!status.isError, firstTextBlock(status).text);
+            const cancelled = await client.callTool({
+              name: 'cancel_job',
+              arguments: { jobId: job.jobId },
+            });
+            assert(!cancelled.isError);
+            for (const artifact of job.artifacts) {
+              const fetched = await client.callTool({
                 name: 'get_artifact',
                 arguments: { artifactId: artifact.artifactId },
               });
@@ -1066,53 +1089,300 @@ describe('experimental snapshot_tree', () => {
               assert(block?.type === 'resource' && 'blob' in block.resource);
               assert.deepEqual(
                 Buffer.from(block.resource.blob, 'base64'),
-                (await own.manager.getArtifact(artifact.artifactId, own.guard)).bytes,
+                savedBytes.get(artifact.artifactId),
               );
             }
-            // Existing work remains cancellable when the creation tool is absent.
-            const pending = await own.manager.submit({
-              kind: 'snapshot',
-              idempotencyKey: randomUUID(),
-              fingerprint: 'flag-off-cancel',
-              sourceRoot: own.root,
-              sourceRootId: 'root-test',
-              input: { layout: 'tree-depth-v1' },
-              run: async (ctx) => {
-                await new Promise<void>((r) => {
-                  if (ctx.signal.aborted) r();
-                  else ctx.signal.addEventListener('abort', () => r(), { once: true });
-                });
-                ctx.signal.throwIfAborted();
-                return '';
-              },
+          }
+          assert.equal(
+            (await call(mode, { idempotencyKey: 'key-' + mode })).job.jobId,
+            ids[order.indexOf(mode)],
+          );
+          assert.equal((await call(mode)).reason, 'completed_reuse');
+          const pending = await call(mode, { forceRefresh: true });
+          const cancelled = await pairs[mode === 'tree' ? 'stable' : 'tree'].client.callTool({
+            name: 'cancel_job',
+            arguments: { jobId: pending.job.jobId },
+          });
+          assert(!cancelled.isError);
+        }
+      } finally {
+        release();
+        GuardedFileSystem.prototype.opendir = original;
+        await pairs.close();
+        await f.close();
+      }
+    }
+  });
+
+  it('keeps authorization and expiry for both saved layouts after restart in either creation mode', async () => {
+    const f = await fixture({ resultTtlMs: 100_000 });
+    try {
+      await writeFile(join(f.root, 'probe.txt'), 'synthetic');
+      const child = join(f.root, 'narrow');
+      await mkdir(child);
+      const jobs: StoredJob[] = [];
+      for (const tree of [false, true])
+        jobs.push(
+          await submit(
+            f,
+            (ctx) =>
+              runSnapshotPipeline(
+                new GuardedFileSystem(f.guard),
+                f.root,
+                {
+                  includeHidden: false,
+                  includeIgnored: false,
+                  ...(tree ? { layout: 'tree-depth-v1' as const } : {}),
+                },
+                ctx,
+              ),
+            tree,
+          ),
+        );
+      await f.manager.close();
+      for (const snapshotFormat of ['tree', 'stable'] as const) {
+        const manager = new ArtifactJobManager({ ...f.config, snapshotFormat });
+        const denied = await pairFor({ ...f, root: child, manager }, true);
+        try {
+          for (const job of jobs)
+            for (const [name, args] of [
+              ['job_status', { jobId: job.jobId }],
+              ['cancel_job', { jobId: job.jobId }],
+              ['get_artifact', { artifactId: required(job.manifestArtifactId) }],
+            ] as const) {
+              const response = await denied.client.callTool({ name, arguments: args });
+              assert(response.isError, name + ' must reauthorize the original source');
+            }
+        } finally {
+          await denied.close();
+        }
+      }
+      const future = Date.now() + 200_000;
+      for (const snapshotFormat of ['tree', 'stable'] as const) {
+        const manager = new ArtifactJobManager(
+          { ...f.config, snapshotFormat },
+          { now: () => future },
+        );
+        const expired = await pairFor({ ...f, manager }, true);
+        try {
+          for (const job of jobs) {
+            const status = await expired.client.callTool({
+              name: 'job_status',
+              arguments: { jobId: job.jobId },
             });
-            const cancelled = await off.client.callTool({
+            assert(!status.isError);
+            assert.equal(
+              ((status.structuredContent ?? status._meta) as { resultExpired: boolean })
+                .resultExpired,
+              true,
+            );
+            const fetched = await expired.client.callTool({
+              name: 'get_artifact',
+              arguments: { artifactId: required(job.manifestArtifactId) },
+            });
+            assert(fetched.isError, 'Format switch must not revive expired bytes');
+            const cancelled = await expired.client.callTool({
               name: 'cancel_job',
-              arguments: { jobId: pending.job.jobId },
+              arguments: { jobId: job.jobId },
             });
             assert(!cancelled.isError);
             assert.equal(
-              ((cancelled.structuredContent ?? cancelled._meta) as { state: string }).state,
-              'cancelled',
+              ((cancelled.structuredContent ?? cancelled._meta) as { resultExpired: boolean })
+                .resultExpired,
+              true,
             );
-          } finally {
-            await off.close();
-            process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'] = '1';
           }
         } finally {
-          release();
-          GuardedFileSystem.prototype.opendir = original;
-          await pair.close();
-          await own.close();
+          await expired.close();
         }
       }
     } finally {
-      if (previous === undefined)
-        Reflect.deleteProperty(process.env, 'FS_EXPERIMENTAL_SNAPSHOT_TREE');
-      else process.env['FS_EXPERIMENTAL_SNAPSHOT_TREE'] = previous;
-      if (scratchPrevious === undefined) Reflect.deleteProperty(process.env, 'FS_SNAPSHOT_DIR');
-      else process.env['FS_SNAPSHOT_DIR'] = scratchPrevious;
       await f.close();
+    }
+  });
+
+  it('reuses a persisted 014/015 snapshot_tree identity through canonical snapshot after upgrade', async () => {
+    const f = await fixture();
+    let pair: Awaited<ReturnType<typeof pairFor>> | undefined;
+    let manager = f.manager;
+    try {
+      await writeFile(join(f.root, 'legacy.txt'), 'synthetic');
+      await manager.initialize();
+      // Frozen pre-016 input shape: snapshot_tree used kind snapshot plus layout,
+      // without the public tool name or any creation-format setting in identity.
+      const sourceRoot = await f.guard.validateExistingDirectory(f.root);
+      const normalized = {
+        kind: 'snapshot',
+        sourceRoot,
+        includeHidden: false,
+        includeIgnored: false,
+        layout: 'tree-depth-v1',
+      };
+      const policyFingerprint = await f.guard.snapshotPolicyFingerprint();
+      const configFingerprint = manager.snapshotConfigFingerprint(true);
+      const old = await manager.submit({
+        kind: 'snapshot',
+        idempotencyKey: 'pre-016-tree-key',
+        fingerprint: fingerprintJobInput(normalized),
+        sourceRoot: f.root,
+        sourceRootId: 'root-legacy',
+        input: { includeHidden: false, includeIgnored: false, layout: 'tree-depth-v1' },
+        reuseGuard: f.guard,
+        automaticReuse: {
+          fingerprint: fingerprintJobInput({
+            version: 2,
+            ...normalized,
+            policyFingerprint,
+            configFingerprint,
+          }),
+          policyFingerprint,
+          configFingerprint,
+          requestFingerprint: fingerprintJobInput({
+            ...normalized,
+            maxAgeMs: 3600000,
+            forceRefresh: false,
+          }),
+          maxAgeMs: 3600000,
+          forceRefresh: false,
+        },
+        run: (ctx) =>
+          runSnapshotPipeline(new GuardedFileSystem(f.guard), sourceRoot, treeOptions, ctx),
+      });
+      const done = await terminal(manager, old.job.jobId, f.guard);
+      const bytes = (await manager.getArtifact(required(done.manifestArtifactId), f.guard)).bytes;
+      await manager.close();
+      manager = new ArtifactJobManager(f.config);
+      pair = await pairFor({ ...f, manager }, true, 'tree');
+      for (const args of [{}, { idempotencyKey: 'pre-016-tree-key' }]) {
+        const response = await pair.client.callTool({
+          name: 'snapshot',
+          arguments: { path: f.root, ...args },
+        });
+        assert(!response.isError, firstTextBlock(response).text);
+        const result = (response.structuredContent ?? response._meta) as {
+          reason: string;
+          job: { jobId: string };
+        };
+        assert.equal(
+          result.reason,
+          'idempotencyKey' in args ? 'idempotent_replay' : 'completed_reuse',
+        );
+        assert.equal(result.job.jobId, old.job.jobId);
+      }
+      assert.deepEqual(
+        (await manager.getArtifact(required(done.manifestArtifactId), f.guard)).bytes,
+        bytes,
+      );
+    } finally {
+      await pair?.close();
+      await manager.close();
+      await f.close();
+    }
+  });
+
+  it('independently compares exact stable/tree file metadata with quoted CR/LF names and multipart C/U/empty directories', async () => {
+    const f = await fixture({ maxRawPartBytes: 330 });
+    const parent = 'parent,"\r\n大小';
+    const files = Array.from({ length: 20 }, (_, i) => ({
+      name: 'file,"' + String(i) + '\r\n.txt',
+      length: i,
+      lastWriteTime: timestamp,
+    }));
+    const expected = new Map(
+      files.map((file) => [parent + '/' + file.name, [String(file.length), file.lastWriteTime]]),
+    );
+    try {
+      const tree = await submit(f, (ctx) =>
+        writeSnapshotFromRecords(
+          records([
+            { type: 'D', depth: 0, name: parent },
+            ...files.map((file) => ({ ...file, type: 'F' as const, depth: 1 })),
+            { type: 'D', depth: 1, name: 'empty' },
+            { type: 'U', depth: 0, name: parent },
+          ]),
+          ctx,
+          treeOptions,
+        ),
+      );
+      const treeParts = await readTree(f, tree);
+      assert(treeParts.length > 1);
+      assert(treeParts.some((part) => part.contextRecords > 0));
+      assert(treeParts.some((part) => part.errorRecords > 0));
+      const treeFiles = new Map(
+        [...mergeTrees(treeParts)]
+          .filter(([, node]) => node.type === 'F')
+          .map(([path, node]) => [
+            (JSON.parse(path) as string[]).join('/'),
+            [node.length, node.lastWriteTime],
+          ]),
+      );
+      assert.deepEqual(treeFiles, expected);
+      const stable = await submit(
+        f,
+        (ctx) =>
+          writeSnapshotFromRecords(
+            (async function* () {
+              for (const file of files)
+                yield {
+                  rootId: 'root-test',
+                  relativePath: parent + '/' + file.name,
+                  name: file.name,
+                  extension: '.txt',
+                  length: file.length,
+                  lastWriteTime: file.lastWriteTime,
+                };
+            })(),
+            ctx,
+            { includeHidden: false, includeIgnored: false },
+          ),
+        false,
+      );
+      const observed = new Map<string, string[]>();
+      for (const artifact of stable.artifacts.filter((a) => a.kind === 'snapshot-part')) {
+        const { bytes } = await f.manager.getArtifact(artifact.artifactId, f.guard);
+        await verifySnapshotZip(bytes, true); // Independent CRC and strict CSV validation.
+        const end = bytes.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+        const central = bytes.readUInt32LE(end + 16);
+        const local = bytes.readUInt32LE(central + 42);
+        const offset = local + 30 + bytes.readUInt16LE(local + 26) + bytes.readUInt16LE(local + 28);
+        const compressed = bytes.subarray(offset, offset + bytes.readUInt32LE(central + 20));
+        const csv =
+          bytes.readUInt16LE(central + 10) === 8
+            ? inflateRawSync(compressed, { maxOutputLength: 1048576 })
+            : compressed;
+        for (const row of parse<{
+          RelativePath: string;
+          Length: string;
+          LastWriteTime: string;
+        }>(csv, { columns: true })) {
+          assert(!observed.has(row.RelativePath));
+          observed.set(row.RelativePath, [row.Length, row.LastWriteTime]);
+        }
+      }
+      assert.deepEqual(observed, expected);
+      assert.deepEqual(observed, treeFiles);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it('defaults runtime creation to tree and rejects invalid format before server startup', async () => {
+    const previous = process.env['FS_SNAPSHOT_FORMAT'];
+    try {
+      Reflect.deleteProperty(process.env, 'FS_SNAPSHOT_FORMAT');
+      assert.equal(getSnapshotConfig().snapshotFormat, 'tree');
+      for (const setting of ['tree', 'stable', '', 'TREE', 'csv', 'false']) {
+        process.env['FS_SNAPSHOT_FORMAT'] = setting;
+        if (setting === 'tree' || setting === 'stable')
+          assert.equal(getSnapshotConfig().snapshotFormat, setting);
+        else {
+          assert.throws(() => getSnapshotConfig(), /FS_SNAPSHOT_FORMAT must be tree or stable/u);
+          await assert.rejects(createServer(), /FS_SNAPSHOT_FORMAT must be tree or stable/u);
+        }
+      }
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, 'FS_SNAPSHOT_FORMAT');
+      else process.env['FS_SNAPSHOT_FORMAT'] = previous;
     }
   });
 
@@ -1128,7 +1398,7 @@ describe('experimental snapshot_tree', () => {
           configPath,
           JSON.stringify({ ...initial, experimentalSnapshotTree: setting }),
         );
-        const code = `const m = await import(${JSON.stringify(url)}); const c = await m.configuration(); m.serverEnvironment(c); process.stdout.write(process.env.FS_EXPERIMENTAL_SNAPSHOT_TREE);`;
+        const code = `const m = await import(${JSON.stringify(url)}); const c = await m.configuration(); m.serverEnvironment(c); process.stdout.write(process.env.FS_SNAPSHOT_FORMAT);`;
         const run = () =>
           execFileSync(process.execPath, ['--input-type=module', '-e', code], {
             env: { ...process.env, FS_EXPERIMENTAL_SNAPSHOT_TREE: '1' },
@@ -1137,7 +1407,40 @@ describe('experimental snapshot_tree', () => {
             stdio: 'pipe',
           });
         if (setting === '1') assert.throws(run, /must be a boolean/u);
-        else assert.equal(run(), setting === true ? '1' : '0');
+        else assert.equal(run(), 'tree');
+      }
+      for (const setting of [
+        undefined,
+        'tree',
+        'stable',
+        '',
+        'TREE',
+        'csv',
+        null,
+        false,
+        1,
+        {},
+        [],
+      ]) {
+        await writeFile(
+          configPath,
+          JSON.stringify({ ...initial, snapshotFormat: setting, experimentalSnapshotTree: false }),
+        );
+        const code = `const m = await import(${JSON.stringify(url)}); const c = await m.configuration(); m.serverEnvironment(c); process.stdout.write(process.env.FS_SNAPSHOT_FORMAT);`;
+        const run = () =>
+          execFileSync(process.execPath, ['--input-type=module', '-e', code], {
+            env: {
+              ...process.env,
+              FS_SNAPSHOT_FORMAT: 'stable',
+              FS_EXPERIMENTAL_SNAPSHOT_TREE: '1',
+            },
+            encoding: 'utf8',
+            windowsHide: true,
+            stdio: 'pipe',
+          });
+        if (setting === undefined || setting === 'tree' || setting === 'stable')
+          assert.equal(run(), setting ?? 'tree');
+        else assert.throws(run, /snapshotFormat must be tree or stable/u);
       }
       const limits = initial['limits'] as Record<string, number>;
       for (const cap of [
@@ -1171,7 +1474,8 @@ describe('experimental snapshot_tree', () => {
             process.stdout.write(JSON.stringify({
               tree: process.env.FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES,
               stable: process.env.FS_SNAPSHOT_MAX_RAW_PART_BYTES,
-              enabled: process.env.FS_EXPERIMENTAL_SNAPSHOT_TREE,
+              format: process.env.FS_SNAPSHOT_FORMAT,
+              retired: process.env.FS_EXPERIMENTAL_SNAPSHOT_TREE,
               inherited: process.env.FS_SNAPSHOT_TREE_MAX_ZIP_BYTES,
             }));
           } catch (error) {
@@ -1199,7 +1503,7 @@ describe('experimental snapshot_tree', () => {
           assert.deepEqual(JSON.parse(run()), {
             ...(cap === undefined ? {} : { tree: String(cap) }),
             stable: String(limits['FS_SNAPSHOT_MAX_RAW_PART_BYTES']),
-            enabled: '0',
+            format: 'tree',
           });
         } else assert.throws(run, /out-of-range limit: FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES/u);
       }

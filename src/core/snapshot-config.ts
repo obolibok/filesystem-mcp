@@ -6,7 +6,18 @@ import { getMaxTextFileSize, MIB, parseEnvInt } from './util.js';
 
 export const BUNDLE_SCHEMA_MAX_FILES = 10_000;
 
+export type SnapshotFormat = 'tree' | 'stable';
+
+export function getSnapshotFormat(): SnapshotFormat {
+  const format = process.env['FS_SNAPSHOT_FORMAT'] ?? 'tree';
+  if (format !== 'tree' && format !== 'stable') {
+    throw new Error('FS_SNAPSHOT_FORMAT must be tree or stable.');
+  }
+  return format;
+}
+
 export interface SnapshotConfig {
+  readonly snapshotFormat: SnapshotFormat;
   readonly scratchDirectory: string;
   readonly maxRecordBytes: number;
   readonly maxRawPartBytes: number;
@@ -52,6 +63,7 @@ export function getSnapshotConfig(): SnapshotConfig {
     512 * MIB,
   );
   return {
+    snapshotFormat: getSnapshotFormat(),
     scratchDirectory: resolve(process.env['FS_SNAPSHOT_DIR'] ?? defaultScratch),
     maxRecordBytes: parseEnvInt('FS_SNAPSHOT_MAX_RECORD_BYTES', MIB, 1024, 16 * MIB),
     maxRawPartBytes,
