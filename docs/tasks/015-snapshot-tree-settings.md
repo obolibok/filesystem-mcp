@@ -1,6 +1,6 @@
 # 015: отдельные настройки экспериментального snapshot_tree
 
-Статус: ready for implementation. Планирование ведёт
+Статус: done; принята и интегрирована через PR #13 (merge `6c89ab5833f5283df17898a9f01425ec3d36e9bd`). Планирование ведёт
 [центральную доску](../project/status.md). Основание — пожелание пользователя
 28.10.2026, [реальный опыт 014](../testing/014-independent-live-2026-10-29.md) и
 ошибка запуска комплекта от 29.10.2026: portable config validator отклонил
@@ -162,10 +162,8 @@ node scripts/windows-portable/Verify.mjs out/Schwarzbeck-MCP-015-test-2026-10-29
   `.tmp/015-portable-verify-final.log`, `.tmp/015-kit-audit.json` и
   `.tmp/015-zip-audit.json`. Бинарники/архивы/evidence не коммитятся.
 
-Acceptance 1–7 выполнен локально. Результат готов к независимому review и
-интеграции планированием; центральная доска исполнителем не менялась. Известные
-границы: shared cap и `TOO_LARGE` остаются; 16 MiB не гарантирует compression
-ratio для настоящего R2. Полный check содержит описанные выше штатные skips;
-неустойчивый unrelated directoryBytes helper не менялся. Реальная установка,
-её config/scratch, tunnel/service и live R2 job не затрагивались. Следующий шаг:
-review этой ветки, затем планирование настраивает новый стенд и решает запуск R2.
+Acceptance 1–7 выполнен, независимый review завершён, изменения приняты через [PR #13](https://github.com/obolibok/filesystem-mcp/pull/13). Merge commit: `6c89ab5833f5283df17898a9f01425ec3d36e9bd`.
+
+Обе CI-платформы зелёные: Windows и Ubuntu, workflow run 102. Локальный full check — 511 tests, 503 pass, 0 fail, 8 ожидаемых skips. Portable Verify — 17/17; ZIP и полный SHA/CRC readback прошли. Детали, hash и параметры установки записаны в [протоколе интеграции](../testing/015-integration-2026-10-29.md).
+
+Пользовательский live R2 на новой сборке ещё не выполнялся. Установленный `C:\FileMCP`, его config/scratch, сервис и туннель не менялись. Следующий шаг — пользователь устанавливает комплект и повторяет R2 tree с отдельным raw cap 16 MiB; общие ZIP/delivery лимиты остаются прежними.
