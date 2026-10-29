@@ -4,14 +4,14 @@
 
 ## Итоги генерации
 
-| Корень | Формат | Итог | elapsedMs | Файлы | Папки | CSV raw | ZIP | Parts | Пропуски / полнота |
-| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| R1 | stable | completed | 38.463 s | 109,775 | 8,965 visited | 20,888,315 B | 1,924,167 B | 1 | 29 inaccessible; `complete=false` |
-| R1 | tree | completed | 30.927 s | 109,775 | 8,964 written | 5,958,318 B | 1,106,658 B | 1 | 29 inaccessible; `complete=false` |
-| R2 | stable | completed | 1,182.688 s | 2,843,566 | 345,209 visited | 473,957,770 B | 35,742,108 B | 11 | 470 inaccessible; `complete=false` |
-| R2 | tree | failed | 267.099 s | 918,879 at failure | 112,844 visited | 47,185,893 B | 0 B | 0 | closed ZIP part exceeds 8 MiB; `TOO_LARGE` |
-| R3 | stable | completed | 219.068 s | 607,952 | 42,857 visited | 112,692,978 B | 9,059,930 B | 3 | 40 inaccessible; `complete=false` |
-| R3 | tree | completed | 159.571 s | 607,952 | 42,866 written | 34,523,375 B | 5,560,488 B | 1 | 40 inaccessible, 10 tree error records; `complete=false` |
+| Корень | Формат | Итог      |   elapsedMs |              Файлы |           Папки |       CSV raw |          ZIP | Parts | Пропуски / полнота                                       |
+| ------ | ------ | --------- | ----------: | -----------------: | --------------: | ------------: | -----------: | ----: | -------------------------------------------------------- |
+| R1     | stable | completed |    38.463 s |            109,775 |   8,965 visited |  20,888,315 B |  1,924,167 B |     1 | 29 inaccessible; `complete=false`                        |
+| R1     | tree   | completed |    30.927 s |            109,775 |   8,964 written |   5,958,318 B |  1,106,658 B |     1 | 29 inaccessible; `complete=false`                        |
+| R2     | stable | completed | 1,182.688 s |          2,843,566 | 345,209 visited | 473,957,770 B | 35,742,108 B |    11 | 470 inaccessible; `complete=false`                       |
+| R2     | tree   | failed    |   267.099 s | 918,879 at failure | 112,844 visited |  47,185,893 B |          0 B |     0 | closed ZIP part exceeds 8 MiB; `TOO_LARGE`               |
+| R3     | stable | completed |   219.068 s |            607,952 |  42,857 visited | 112,692,978 B |  9,059,930 B |     3 | 40 inaccessible; `complete=false`                        |
+| R3     | tree   | completed |   159.571 s |            607,952 |  42,866 written |  34,523,375 B |  5,560,488 B |     1 | 40 inaccessible, 10 tree error records; `complete=false` |
 
 Все времена — `elapsedMs` job на сервере, а не полное клиентское ожидание. Все результаты неполные из-за access errors; это не полный индекс всех файлов в корне.
 
