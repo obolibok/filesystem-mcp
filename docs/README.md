@@ -80,6 +80,9 @@
   snapshot на tree-depth-v1 с явным stable-режимом;
   [операторская проверка](../scripts/windows-portable/template/TEST-016.md),
   [интеграция и portable-комплект](testing/016-integration-2026-10-29.md).
+- [Portable с исправлениями 017–019 (30.10)](testing/017-019-portable-2026-10-30.md):
+  принятый main, Verify 24/24, production audit, ZIP parity и контрольная сумма;
+  пользовательский smoke ожидается.
 - [Baseline от 19 сентября](testing/baseline-2026-09-19.md): проверенные наблюдения,
   отделённые от планируемых исправлений.
 - [Шаблон задачи](tasks/TEMPLATE.md): минимальный контракт для следующего чата.
