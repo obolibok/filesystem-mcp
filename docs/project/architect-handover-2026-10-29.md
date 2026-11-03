@@ -4,6 +4,10 @@
 [архитектуру](../reference/architecture.md) и [parallel-work](../development/parallel-work.md).
 История большого чата для старта не нужна.
 
+Уточнено 03.11.2026: комплект с 017–019 уже собран и проверен 30.10;
+см. раздел поставки ниже. Текущие приоритеты и статус пользовательского smoke
+остаются в [доске](status.md).
+
 ## Цель и роль
 
 Fork obolibok/filesystem-mcp от j0hanz/filesystem-mcp даёт ассистенту доступ к
@@ -82,16 +86,17 @@ ZIP 25,664,531 B, каждый ZIP <8 MiB. complete=false, 470 inaccessible skip
 raw -65.7%, ZIP -28.2%, query scan быстрее 19.9%, path-index быстрее 24.8%.
 Это результаты данной выборки, не универсальная гарантия.
 
-Последний пользовательский portable — **016**:
-[протокол/хеши](../testing/016-integration-2026-10-29.md).
-Review build 017 проверял production dependencies и Verify 24, но не 018/019.
-Комплекта со всеми исправлениями 017–019 пока нет. Runtime pins существующего
-builder: Node 24.15.0 Windows x64, tunnel-client 0.0.14; не обновлять их попутно.
+30.10 собран пользовательский portable со всеми исправлениями **017–019** из
+`main` `282464ca`: [протокол/хеши](../testing/017-019-portable-2026-10-30.md).
+Verify 24/24 PASS, packaged production audit — 0, ZIP parity SHA/CRC — PASS.
+Поставка 016 и review build 017 предшествуют этому комплекту. Runtime pins
+сохранены: Node 24.15.0 Windows x64, tunnel-client 0.0.14; не обновлять их попутно.
 
 ## Ближайшие решения
 
-1. Current-main portable, synthetic Verify 24 scenarios и пользовательский smoke:
-   [runbook](../development/windows-portable.md). Live deployment — отдельно.
+1. Пользовательский smoke portable 017–019 по
+   [runbook](../development/windows-portable.md). Сборка и synthetic Verify выполнены
+   30.10; live deployment и smoke не зафиксированы.
 2. Dev dependency triage: audit 29.10 даёт 3 package findings (2 high, 1 moderate):
    @modelcontextprotocol/client, brace-expansion, smol-toml. Production --omit=dev — 0.
    Исторические 9 в старых docs не являются актуальным счётчиком.

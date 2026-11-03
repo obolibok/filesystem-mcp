@@ -381,6 +381,15 @@ Unreferenced final после crash между rename и metadata commit уда�
 удаления остаётся учтённой в scratch quota до успешного cleanup/restart. Expiry,
 artifact removal и terminal directory cleanup сериализованы для каждой job.
 
+`FS_SNAPSHOT_RESULT_TTL_MS` общий для snapshot и bundle, независимо от размера
+выгрузки: default 24 часа от завершения job, максимум 30 суток. Раздельных TTL
+по kind нет. `resultExpiresAt` записывается в job при completed; изменение config
+после restart не пересчитывает срок существующих результатов. До expiry
+`get_artifact` повторно выдаёт сохранённые bytes после authorization и delivery
+checks; получение не продлевает TTL. После expiry вызов отклоняется и не создаёт
+новую job. Очистка проверяется по отдельному interval, поэтому наличие ZIP на
+диске после срока не означает доступность через tool.
+
 Новые snapshot/bundle jobs перед чтением source фиксируют `provenance: { host, root }`
 и сохраняют checkpoint в `job.json`; `root` повторяет форму элемента rootDetails
 с фактическим guarded sourceRoot, в том числе выбранным подкаталогом. Оба manifest
@@ -418,6 +427,10 @@ code/message/path/native diagnostics. Это поле только в памят
 Обычный snapshot сначала проверяет текущий доступ и явный ключ, затем выбирает самый
 новый совместимый `completed` с `complete=true`, живыми artifacts, TTL и возрастом
 от `startedAt` не более `maxAgeMs` (default 3600000 ms, допустимо 0–30 суток).
+`maxAgeMs` и `forceRefresh` задаются caller в каждом вызове snapshot; модель может
+выбирать допустимый возраст по задаче и указаниям пользователя. Default maxAgeMs
+задан в tool schema: отдельной env/portable config настройки сейчас нет.
+Этот выбор не меняет retention TTL и не доказывает неизменность source files.
 `maxAgeMs=0` запрещает ready hit, но допускает присоединение к queued/running.
 Если ready hit нет, присоединяется к самой ранней совместимой queued/running job;
 иначе создаёт новую. `forceRefresh=true` обходит оба вида автоматического reuse;
