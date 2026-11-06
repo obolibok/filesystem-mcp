@@ -110,3 +110,18 @@ Production service/tunnel, реальные roots/ключи и настройк
 [CI #156](https://github.com/obolibok/filesystem-mcp/actions/runs/42203049178):
 полный check Windows/Ubuntu PASS. Центральный статус — done.
 Пользовательское воспроизведение с Avast остаётся отдельным следующим шагом.
+
+### Пользовательский фрагмент запуска 06.11
+
+Пользователь сообщил повторное срабатывание Avast и передал 199 строк startup log.
+Фрагмент начинается с RESULT ok после локального preflight: LOCAL_MCP_PASS и его
+JSON отсутствуют. В присланной части нет source-provenance warnings и WARN/ERROR
+events. Видны stdio MCP startup, read-only mode, control-plane poller и успешное
+получение tunnel metadata. Это подтверждает указанные этапы запуска, но не readiness,
+целевой ChatGPT tool call или причину Avast. Наличие установленной 021 по фрагменту
+не подтверждается: BUILD sourceCommit в нём отсутствует.
+
+Следующая узкая проверка: BUILD sourceCommit и отдельный bundled Node
+scripts/check.mjs в папке комплекта, без перезапуска рабочего туннеля; нужны
+source-provenance строки и факт повторения Avast. Исходный лог с production paths,
+tunnel ID и профилем оператора в Git не включён.
