@@ -10,12 +10,22 @@ $healthFile = Join-Path $state 'health-url.txt'
 $previousPath = $env:PATH
 $previousNodeOptions = $env:NODE_OPTIONS
 $secureKey = $null
+$configuredRuntimeKey = $null
 $runLock = $null
 $tunnelExit = 0
 Push-Location -LiteralPath $PSScriptRoot
 try {
   $env:NODE_OPTIONS = ''
-  $config = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'config.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+  try {
+    $config = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'config.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+  }
+  catch { throw 'Cannot read config.json: expected valid JSON.' }
+  if ($null -eq $config -or $config -isnot [pscustomobject]) { throw 'config.json must contain an object.' }
+  $keyProperty = $config.PSObject.Properties['runtimeApiKey']
+  if ($null -ne $keyProperty -and $null -ne $keyProperty.Value) {
+    if ($keyProperty.Value -isnot [string]) { throw 'runtimeApiKey must be a string or null.' }
+    $configuredRuntimeKey = $keyProperty.Value.Trim()
+  }
   $tunnelId = [string]$config.tunnelId
   if ($tunnelId -notmatch '^tunnel_[A-Za-z0-9]+$') {
     throw 'Set tunnelId in config.json first. See README.html.'
@@ -34,8 +44,11 @@ try {
   New-Item -ItemType Directory -Force -Path $profileDirectory | Out-Null
   $runLock = [IO.File]::Open((Join-Path $state 'run.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
   $env:PATH = (Join-Path $PSScriptRoot 'runtime') + ';' + $env:PATH
-  $secureKey = Read-Host 'Runtime API key (hidden; not saved)' -AsSecureString
-  $env:CONTROL_PLANE_API_KEY = (New-Object System.Net.NetworkCredential('', $secureKey)).Password
+  if ([string]::IsNullOrWhiteSpace($configuredRuntimeKey)) {
+    $secureKey = Read-Host 'Runtime API key (hidden; not saved)' -AsSecureString
+    $env:CONTROL_PLANE_API_KEY = (New-Object System.Net.NetworkCredential('', $secureKey)).Password
+  }
+  else { $env:CONTROL_PLANE_API_KEY = $configuredRuntimeKey }
   if ([string]::IsNullOrWhiteSpace($env:CONTROL_PLANE_API_KEY)) { throw 'Empty runtime API key.' }
   # Relative command + explicit working directory avoids Windows nested quoting.
   & $tunnel init --sample sample_mcp_stdio_local --profile portable --profile-dir $profileDirectory --tunnel-id $tunnelId --mcp-command 'node scripts/serve.mjs' --health-listen-addr '127.0.0.1:0' --force
@@ -55,6 +68,7 @@ try {
 }
 finally {
   Remove-Item Env:CONTROL_PLANE_API_KEY -ErrorAction SilentlyContinue
+  $configuredRuntimeKey = $null
   if ($null -ne $secureKey) { $secureKey.Dispose() }
   if ($null -ne $runLock) { $runLock.Dispose() }
   $env:PATH = $previousPath
