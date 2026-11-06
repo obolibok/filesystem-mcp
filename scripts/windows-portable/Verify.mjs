@@ -347,16 +347,16 @@ for (const [label, config] of cases) {
 function runDoctor(promptExpected) {
   const ps = [
     "$ErrorActionPreference = 'Stop'",
-    '$script:promptCalls = 0',
+    '$global:portablePromptCalls = 0',
     promptExpected
-      ? 'function Read-Host { param([string]$Prompt,[switch]$AsSecureString) $script:promptCalls++; $value = New-Object System.Security.SecureString; foreach ($c in "' +
+      ? 'function Read-Host { param([string]$Prompt,[switch]$AsSecureString) $global:portablePromptCalls++; $value = New-Object System.Security.SecureString; foreach ($c in "' +
         promptKey +
         '".ToCharArray()) { $value.AppendChar($c) }; return $value }'
       : "function Read-Host { throw 'Unexpected runtime key prompt.' }",
     'try {',
     "& '" + join(kit, 'Start.ps1').replaceAll("'", "''") + "' -DoctorOnly",
     '} finally { if (Test-Path Env:CONTROL_PLANE_API_KEY) { throw "Runtime key environment was not cleared." } }',
-    'if ($script:promptCalls -ne ' +
+    'if ($global:portablePromptCalls -ne ' +
       (promptExpected ? 1 : 0) +
       ') { throw "Unexpected prompt count." }',
     'Write-Output "RUNTIME_KEY_CLEANUP_PASS"',
