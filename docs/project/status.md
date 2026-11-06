@@ -1,8 +1,8 @@
 # Приоритеты и интеграция
 
-Владелец — архитекторский/планирующий чат. Обновлено: 2026-11-03.
+Владелец — архитекторский/планирующий чат. Обновлено: 2026-11-06.
 Начать с [handover архитектору](architect-handover-2026-10-29.md).
-Все назначенные coding-задачи приняты, активных исполнителей сейчас нет.
+017–019 приняты. Текущий planning-чат выполняет 020 в отдельном worktree.
 Предыдущая хроника сохранена в [архиве](history/status-2026-10-29.md).
 
 | ID           | Работа                                                                                 | Статус   | Зависит от         |
@@ -30,6 +30,7 @@
 | 017          | [Production dependency remediation](../tasks/017-production-dependency-remediation.md) | done     | 016                |
 | 018          | [Guarded I/O race hardening](../tasks/018-guarded-io-race-hardening.md)                | done     | 017                |
 | 019          | [Identity-bound destructive confirmations](../tasks/019-confirmation-identity.md)      | done     | 018                |
+| 020          | [Runtime key в portable config](../tasks/020-portable-runtime-key.md)                  | active   | 017–019            |
 | 005          | Контролируемое повторение предметного исследования                                     | proposed | 004, 006, 007, 008 |
 
 proposed — направление без назначения; ready — согласованная карточка;
