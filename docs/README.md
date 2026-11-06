@@ -85,6 +85,9 @@
   пользовательский smoke ожидается.
 - [020: optional runtime key и portable от 06.11](tasks/020-portable-runtime-key.md):
   config/prompt fallback, Verify 35/35, Windows/Ubuntu CI, комплект и SHA-256.
+- [021: диагностика provenance и portable от 06.11](tasks/021-provenance-diagnostics.md):
+  warnings metadata query/preflight, Verify 36/36, CI, комплект и SHA-256;
+  запуск helper сохранён, причина срабатывания Avast требует проверки на целевой машине.
 - [Baseline от 19 сентября](testing/baseline-2026-09-19.md): проверенные наблюдения,
   отделённые от планируемых исправлений.
 - [Шаблон задачи](tasks/TEMPLATE.md): минимальный контракт для следующего чата.

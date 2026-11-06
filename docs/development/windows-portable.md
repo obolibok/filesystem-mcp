@@ -84,8 +84,10 @@ whitespace-only строка сохраняют скрытый prompt без з�
 
 Обновление текста template само по себе не меняет уже собранный ZIP. Поставка
 [017–019 от 30.10](../testing/017-019-portable-2026-10-30.md) и её hashes сохраняются.
-Новая поставка [020 от 06.11](../tasks/020-portable-runtime-key.md) содержит optional
+Поставка [020 от 06.11](../tasks/020-portable-runtime-key.md) содержит optional
 runtime key и уточнения инструкции от 03.11 в README.md/README.html.
+Поставка [021 от 06.11](../tasks/021-provenance-diagnostics.md) включает 020 и
+безопасные warnings Windows provenance/preflight; формат запуска helper сохранён.
 
 ## Формат snapshot (016)
 

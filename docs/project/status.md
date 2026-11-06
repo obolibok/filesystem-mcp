@@ -2,7 +2,7 @@
 
 Владелец — архитекторский/планирующий чат. Обновлено: 2026-11-06.
 Начать с [handover архитектору](architect-handover-2026-10-29.md).
-020 принята; текущий planning-чат выполняет 021 в собственном worktree.
+Все назначенные coding-задачи приняты, активных исполнителей сейчас нет.
 Предыдущая хроника сохранена в [архиве](history/status-2026-10-29.md).
 
 | ID           | Работа                                                                                 | Статус   | Зависит от         |
@@ -31,7 +31,7 @@
 | 018          | [Guarded I/O race hardening](../tasks/018-guarded-io-race-hardening.md)                | done     | 017                |
 | 019          | [Identity-bound destructive confirmations](../tasks/019-confirmation-identity.md)      | done     | 018                |
 | 020          | [Runtime key в portable config](../tasks/020-portable-runtime-key.md)                  | done     | 017–019            |
-| 021          | [Диагностика provenance](../tasks/021-provenance-diagnostics.md)                       | active   | 020                |
+| 021          | [Диагностика provenance](../tasks/021-provenance-diagnostics.md)                       | done     | 020                |
 | 005          | Контролируемое повторение предметного исследования                                     | proposed | 004, 006, 007, 008 |
 
 proposed — направление без назначения; ready — согласованная карточка;
@@ -41,6 +41,14 @@ active — назначен исполнитель; review — проверяе�
 
 ## Последняя приёмка
 
+- **021 (06.11)**: безопасные warnings отказов Windows provenance и показ при
+  успешном preflight. Запуск helper, PowerShell scripts/flags, timeout и null
+  fallback сохранены. [PR #21](https://github.com/obolibok/filesystem-mcp/pull/21),
+  merge `ebeec548`, head/build source `adc74d52`.
+  [CI #156](https://github.com/obolibok/filesystem-mcp/actions/runs/42203049178)
+  Windows/Ubuntu PASS; targeted 15/15, full check 590/0/13, portable **36/36 PASS**.
+  Новый ZIP проверен по SHA-256/CRC всех 2,833 файлов.
+  [Контракт, ограничения, комплект и SHA-256](../tasks/021-provenance-diagnostics.md).
 - **020 (06.11)**: optional `runtimeApiKey` в portable config; непустой ключ
   используется без prompt, пустое/отсутствующее/null поле сохраняет скрытый ввод
   без записи. [PR #20](https://github.com/obolibok/filesystem-mcp/pull/20), merge
@@ -69,9 +77,10 @@ active — назначен исполнитель; review — проверяе�
 
 ## Следующие решения
 
-1. Провести пользовательский smoke portable 020 от 06.11, включая выбранный режим
-   runtimeApiKey. Synthetic Verify 35/35 и ZIP parity PASS; production deployment
-   и живая авторизация сохранённого ключа в этой приёмке не выполнялись.
+1. Провести пользовательский smoke portable 021 от 06.11 (включает 020), включая
+   runtimeApiKey и диагностику запуска на машине с Avast. Synthetic Verify 36/36
+   и ZIP parity PASS; production deployment и воспроизведение Avast не выполнялись.
+   Warning нужно сопоставить с событием защиты по времени/PID, причина пока не доказана.
 2. Dev dependency triage: npm ci 06.11 сообщил 14 full-graph findings (12 moderate,
    2 high); source и packaged production audit --omit=dev — 0. Нужен отдельный
    подробный full audit/triage. Счётчики 3 от 29.10 и 9 до remediation 017 — история.
