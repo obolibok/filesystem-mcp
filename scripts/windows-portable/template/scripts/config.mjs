@@ -47,9 +47,17 @@ function resolvePath(value) {
 }
 
 export async function configuration() {
-  const config = JSON.parse(
-    (await readFile(join(kit, 'config.json'), 'utf8')).replace(/^\uFEFF/, ''),
-  );
+  const text = (await readFile(join(kit, 'config.json'), 'utf8')).replace(/^\uFEFF/, '');
+  let config;
+  try {
+    config = JSON.parse(text);
+  } catch {
+    throw new Error('Cannot read config.json: expected valid JSON.');
+  }
+  if (!config || typeof config !== 'object' || Array.isArray(config))
+    throw new Error('config.json must contain an object.');
+  if (config.runtimeApiKey != null && typeof config.runtimeApiKey !== 'string')
+    throw new Error('runtimeApiKey must be a string or null.');
   const snapshotFormat = config.snapshotFormat ?? 'tree';
   if (config.snapshotFormat !== undefined && !['tree', 'stable'].includes(config.snapshotFormat))
     throw new Error('snapshotFormat must be tree or stable.');
@@ -93,7 +101,8 @@ export async function configuration() {
     if (!range || !Number.isSafeInteger(value) || value < range[0] || value > range[1])
       throw new Error('Unsupported or out-of-range limit: ' + key);
   }
-  return { ...config, snapshotFormat, roots: [...new Set(roots)], scratchDirectory: scratch };
+  const { runtimeApiKey: _runtimeApiKey, ...serverConfig } = config;
+  return { ...serverConfig, snapshotFormat, roots: [...new Set(roots)], scratchDirectory: scratch };
 }
 
 export function serverEnvironment(config) {

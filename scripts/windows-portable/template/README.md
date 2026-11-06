@@ -126,8 +126,21 @@ Manifest `policy.maxRawPartBytes` показывает фактически ис
    Read + Use. Для создания/изменения туннеля нужны Read + Manage.
    Названия элементов интерфейса могут меняться; при отсутствии доступа проверьте
    organization и роль у её администратора.
-5. Ключ вводится скрыто при каждом запуске Start.ps1. В config.json, YAML, команду,
-   скриншот или переписку его не вставляйте. Admin API key для запуска не нужен.
+5. По умолчанию ключ вводится скрыто при запуске Start.ps1 и не сохраняется.
+   Для запуска без prompt можно заполнить optional `runtimeApiKey` в config.json.
+   Admin API key для запуска не нужен.
+
+В чистом комплекте поле `"runtimeApiKey": ""` пустое. Если указать непустую строку,
+Start.ps1 использует её после удаления пробелов по краям без запроса ключа.
+При отсутствии поля, null, пустой или whitespace-only строке остаётся прежний
+скрытый ввод без записи в config. Другие JSON-типы отклоняются. Неверный сохранённый
+ключ даёт обычную ошибку авторизации; автоматического второго prompt или изменения
+config после неё нет.
+
+Заполненный `runtimeApiKey` хранится в config обычным текстом: доступ к этому файлу
+даёт доступ к ключу. В Git и передаваемый чистый комплект реальные ключи не включать.
+Launcher передаёт ключ tunnel-client через environment; профиль содержит только
+`env:CONTROL_PLANE_API_KEY`. В argv, diagnostics и MCP configuration ключ не выводится.
 
 Правильный tunnel_id не заменяет runtime key. Это также не FS_API_KEY: наш MCP
 запущен через stdio, локального публичного HTTP endpoint и отдельного MCP API key нет.
@@ -142,7 +155,8 @@ Manifest `policy.maxRawPartBytes` показывает фактически ис
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Start.ps1
 ```
 
-Введите runtime key в скрытый prompt. Скрипт проверит локальный MCP, создаст профиль,
+Если runtimeApiKey не заполнен, введите runtime key в скрытый prompt.
+Скрипт проверит локальный MCP, создаст профиль,
 выполнит tunnel-client doctor и оставит tunnel-client работать в текущем окне.
 Туннель сам запускает наш сервер через stdio. Отдельно запускать node не нужно.
 Не закрывайте окно во время работы с ChatGPT.
@@ -316,8 +330,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Stop.ps1 -Force
 Для новой VM лучше взять исходный чистый ZIP комплекта. Для переноса текущей
 установки сначала остановите её; при необходимости скопируйте всю папку вместе
 с data/jobs. Не копируйте работающий scratch и не запускайте две копии на нём.
-В config.json поправьте roots/scratch для новой машины. Ключ в архиве отсутствует,
-его снова вводите при старте. Профиль пересоздаётся из config.json автоматически.
+В config.json поправьте roots/scratch для новой машины. В исходном чистом ZIP
+ключа нет; заполните runtimeApiKey локально или введите ключ при старте.
+Перенос собственной config переносит и указанный в ней ключ.
+Профиль пересоздаётся из config.json автоматически.
 На новой VM нужны реальные доступы к source/SMB и исходящий интернет.
 
 Не запускайте одновременно старую машину и VM на одном tunnel_id: это могут быть
@@ -329,7 +345,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Stop.ps1 -Force
 
 ## Состав и обслуживание
 
-- config.json — ваш tunnel_id, roots, scratch и лимиты.
+- config.json — ваш tunnel_id, roots, scratch, лимиты и optional runtimeApiKey.
 - Check.ps1 / Start.ps1 / Status.ps1 / Stop.ps1 — операторские команды.
 - runtime — собственный Node, без зависимости от системного PATH.
 - server — собранный принятый fork и production dependencies.

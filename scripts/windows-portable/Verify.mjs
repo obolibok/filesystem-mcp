@@ -3,7 +3,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   cp,
@@ -12,6 +12,8 @@ import {
   readdir,
   readFile,
   realpath,
+  rename,
+  rmdir,
   symlink,
   writeFile,
 } from 'node:fs/promises';
@@ -285,6 +287,9 @@ for (const phase of ['initial', 'changed', 'format-switch']) {
     }
   }
 }
+const configuredKey = 'sk-local-configured-placeholder-not-a-real-key';
+const promptKey = 'sk-local-doctor-placeholder-not-a-real-key';
+const keyTypes = [false, 42, [], { secret: configuredKey }];
 const cases = [
   ['invalid-format', { ...multi, snapshotFormat: 'csv' }],
   ['invalid-format-type', { ...multi, snapshotFormat: false }],
@@ -300,6 +305,8 @@ const cases = [
     { ...multi, limits: { ...multi.limits, FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES: '16777216' } },
   ],
 ];
+for (const [index, runtimeApiKey] of keyTypes.entries())
+  cases.push(['invalid-runtime-key-' + index, { ...multi, runtimeApiKey }]);
 const alias = join(stage, 'source-alias');
 await symlink(rootA, alias, 'junction');
 cases.push([
@@ -320,6 +327,12 @@ for (const [label, config] of cases) {
     'unknown-limit': /out-of-range limit: FS_ALLOW_SENSITIVE/,
     'invalid-tree-limit': /out-of-range limit: FS_SNAPSHOT_TREE_MAX_RAW_PART_BYTES/,
     'junction-missing-scratch': /Scratch and source roots must not overlap/,
+    ...Object.fromEntries(
+      keyTypes.map((_, index) => [
+        'invalid-runtime-key-' + index,
+        /runtimeApiKey must be a string or null/,
+      ]),
+    ),
   };
   assert.throws(
     () => runCheck(),
@@ -330,24 +343,119 @@ for (const [label, config] of cases) {
   assert.equal(await readFile(join(rootA, 'sample.txt'), 'utf8'), 'synthetic A');
   reports.push(label + ': PASS');
 }
-await save({ ...multi, tunnelId: 'tunnel_0123456789abcdef0123456789abcdef' });
-// A dummy key is sufficient for local doctor; no tunnel run or cloud requests.
-const ps = [
-  "$ErrorActionPreference = 'Stop'",
-  'function Read-Host { param([string]$Prompt,[switch]$AsSecureString) $value = New-Object System.Security.SecureString; foreach ($c in "sk-local-doctor-placeholder-not-a-real-key".ToCharArray()) { $value.AppendChar($c) }; return $value }',
-  "& '" + join(kit, 'Start.ps1').replaceAll("'", "''") + "' -DoctorOnly",
+// Only local doctor with synthetic keys; no tunnel run or cloud requests.
+function runDoctor(promptExpected) {
+  const ps = [
+    "$ErrorActionPreference = 'Stop'",
+    '$script:promptCalls = 0',
+    promptExpected
+      ? 'function Read-Host { param([string]$Prompt,[switch]$AsSecureString) $script:promptCalls++; $value = New-Object System.Security.SecureString; foreach ($c in "' +
+        promptKey +
+        '".ToCharArray()) { $value.AppendChar($c) }; return $value }'
+      : "function Read-Host { throw 'Unexpected runtime key prompt.' }",
+    'try {',
+    "& '" + join(kit, 'Start.ps1').replaceAll("'", "''") + "' -DoctorOnly",
+    '} finally { if (Test-Path Env:CONTROL_PLANE_API_KEY) { throw "Runtime key environment was not cleared." } }',
+    'if ($script:promptCalls -ne ' +
+      (promptExpected ? 1 : 0) +
+      ') { throw "Unexpected prompt count." }',
+    'Write-Output "RUNTIME_KEY_CLEANUP_PASS"',
+  ].join('\n');
+  const result = spawnSync(
+    'powershell.exe',
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps],
+    {
+      cwd: stage,
+      encoding: 'utf8',
+      timeout: 60000,
+      windowsHide: true,
+      env: { ...process.env, NODE_OPTIONS: '' },
+    },
+  );
+  if (result.error) throw result.error;
+  noKeys(result.stderr);
+  if (result.status !== 0) {
+    const error = new Error('Local doctor failed.');
+    error.stderr = result.stderr;
+    throw error;
+  }
+  return result.stdout;
+}
+function noKeys(text) {
+  for (const key of [configuredKey, promptKey]) assert(!String(text).includes(key));
+}
+const { runtimeApiKey: _key, ...withoutKey } = multi;
+const doctorCases = [
+  ['omitted-runtime-key', withoutKey, true],
+  ['empty-runtime-key', { ...multi, runtimeApiKey: '' }, true],
+  ['null-runtime-key', { ...multi, runtimeApiKey: null }, true],
+  ['whitespace-runtime-key', { ...multi, runtimeApiKey: ' \t ' }, true],
+  ['configured-runtime-key', { ...multi, runtimeApiKey: ' ' + configuredKey + ' ' }, false],
+];
+for (const [label, config, promptExpected] of doctorCases) {
+  await save({ ...config, tunnelId: 'tunnel_0123456789abcdef0123456789abcdef' });
+  const before = await readFile(join(kit, 'config.json'), 'utf8');
+  const output = runDoctor(promptExpected);
+  assert(output.includes('RUNTIME_KEY_CLEANUP_PASS'));
+  noKeys(output);
+  const profile = await readFile(join(kit, 'data/tunnel/profile/portable.yaml'), 'utf8');
+  assert(profile.includes('env:CONTROL_PLANE_API_KEY'));
+  noKeys(profile);
+  assert.equal(await readFile(join(kit, 'config.json'), 'utf8'), before);
+  reports.push('PowerShell-5.1-DoctorOnly-' + label + '-no-secret-output-or-writeback: PASS');
+}
+const configModule = join(kit, 'scripts/config.mjs');
+const redactionProbe = [
+  "import { pathToFileURL } from 'node:url';",
+  'const { configuration } = await import(pathToFileURL(' +
+    JSON.stringify(configModule) +
+    ').href);',
+  "const config = await configuration(); if ('runtimeApiKey' in config) throw new Error('Runtime key escaped configuration.');",
+  "console.log('CONFIG_RUNTIME_KEY_REDACTION_PASS');",
 ].join('\n');
-execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], {
-  cwd: stage,
-  encoding: 'utf8',
-  timeout: 60000,
-  windowsHide: true,
-  env: { ...process.env, NODE_OPTIONS: '' },
-});
-const profile = await readFile(join(kit, 'data/tunnel/profile/portable.yaml'), 'utf8');
-assert(profile.includes('env:CONTROL_PLANE_API_KEY'));
-assert(!profile.includes('sk-local-doctor-placeholder'));
-reports.push('PowerShell-5.1-Start-DoctorOnly-relative-stdio-and-secret-reference: PASS');
+assert(
+  execFileSync(node, ['--input-type=module', '-e', redactionProbe], {
+    encoding: 'utf8',
+    windowsHide: true,
+  }).includes('CONFIG_RUNTIME_KEY_REDACTION_PASS'),
+);
+noKeys(JSON.stringify(runCheck()));
+reports.push('configured-runtime-key-redacted-from-MCP-configuration: PASS');
+// Force a local profile write failure after the key and lock have been acquired.
+const profilePath = join(kit, 'data/tunnel/profile/portable.yaml');
+const savedProfilePath = profilePath + '.saved';
+await rename(profilePath, savedProfilePath);
+await mkdir(profilePath);
+try {
+  assert.throws(
+    () => runDoctor(false),
+    (error) => /Local doctor failed/.test(error.message),
+  );
+} finally {
+  await rmdir(profilePath);
+  await rename(savedProfilePath, profilePath);
+}
+assert(runDoctor(false).includes('RUNTIME_KEY_CLEANUP_PASS'));
+reports.push('configured-runtime-key-failure-clears-environment-and-releases-lock: PASS');
+for (const runtimeApiKey of keyTypes) {
+  await save({ ...multi, runtimeApiKey });
+  assert.throws(
+    () => runDoctor(false),
+    (error) => {
+      noKeys(error.stderr);
+      return /runtimeApiKey must be a string or null/.test(error.stderr);
+    },
+  );
+}
+await writeFile(join(kit, 'config.json'), '{"runtimeApiKey":"' + configuredKey + '\n');
+for (const run of [() => runCheck(), () => runDoctor(false)]) {
+  assert.throws(run, (error) => {
+    noKeys(error.stderr);
+    return /Cannot read config.json: expected valid JSON/.test(error.stderr);
+  });
+}
+reports.push('malformed-config-diagnostics-do-not-echo-runtime-key: PASS');
+await save({ ...multi, tunnelId: 'tunnel_0123456789abcdef0123456789abcdef' });
 // Protect against stale PID reuse: this verifier is not the recorded tunnel.
 await writeFile(join(kit, 'data/tunnel/tunnel.pid'), String(process.pid));
 await writeFile(join(kit, 'data/tunnel/started-at.txt'), new Date().toISOString());

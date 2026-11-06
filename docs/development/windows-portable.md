@@ -54,6 +54,14 @@ Production roots не нужны. Synthetic копии и отчёты оста�
 
 ## Эксплуатация и сроки
 
+Optional `runtimeApiKey` в config.json (020) позволяет стартовать без повторного
+ввода ключа. Непустая строка используется после trim; отсутствие, null, пустая или
+whitespace-only строка сохраняют скрытый prompt без записи введённого ключа.
+Иные типы отклоняются. Это хранение ключа обычным текстом в пользовательском config;
+чистый template содержит пустую строку. Launcher оставляет профиль с env-reference,
+не публикует ключ в MCP configuration и очищает runtime environment после работы.
+Условия и пример — в [разделе 3 инструкции](../../scripts/windows-portable/template/README.md#3-создание-туннеля-и-runtime-api-key).
+
 Свежесть snapshot задаётся в каждом tool call через `maxAgeMs` (default 1 час
 от начала обхода) и `forceRefresh`. Модель выбирает их по задаче и указаниям
 пользователя; отдельной настройки default freshness в config.json/env нет.

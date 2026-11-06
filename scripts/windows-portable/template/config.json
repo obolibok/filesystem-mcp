@@ -1,5 +1,6 @@
 {
   "tunnelId": "",
+  "runtimeApiKey": "",
   "roots": ["./sample-source"],
   "scratchDirectory": "./data/jobs",
   "snapshotFormat": "tree",
