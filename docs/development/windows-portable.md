@@ -54,6 +54,12 @@ Production roots не нужны. Synthetic копии и отчёты оста�
 
 ## Эксплуатация и сроки
 
+Ошибки Windows metadata query (021) видны как `[warning] [source-provenance]` на
+stderr MCP и успешного portable preflight. Safe поля позволяют сопоставить время,
+PID и код с журналом защитного ПО; причина антивирусом не объявляется автоматически.
+Подробности — в [диагностике комплекта](../../scripts/windows-portable/template/README.md#диагностика-метаданных-windows).
+Получение metadata остаётся best-effort, launch scripts/flags и source policy сохранены.
+
 Optional `runtimeApiKey` в config.json (020) позволяет стартовать без повторного
 ввода ключа. Непустая строка используется после trim; отсутствие, null, пустая или
 whitespace-only строка сохраняют скрытый prompt без записи введённого ключа.

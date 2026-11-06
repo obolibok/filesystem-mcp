@@ -178,6 +178,31 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Status.ps1
 Порт выбирается автоматически, admin UI доступен только с 127.0.0.1.
 Сообщения диагностик видны в окне запуска; постоянный log-файл по умолчанию не создаётся.
 
+### Диагностика метаданных Windows
+
+Если UUID компьютера или сведения о томе недоступны из-за ошибки helper, в окне
+появляется warning `[source-provenance]` с JSON. Он виден также при успешном
+Check.ps1/локальном preflight. Чтение источников и jobs продолжаются с null вместо
+недоступных metadata; команда запуска и способ получения метаданных сохранены.
+
+| Поле                     | Что показывает                                                          |
+| ------------------------ | ----------------------------------------------------------------------- |
+| query                    | machine — UUID компьютера; volume — сведения о томе                     |
+| rootIndex                | Номер root с 1 в данном запросе volume; capture одной job имеет номер 1 |
+| at / elapsedMs           | Время UTC и длительность lookup                                         |
+| serverPid / helperPid    | PID MCP и дочернего PowerShell, если он известен при ошибке             |
+| reason                   | process_error, invalid_json или timeout                                 |
+| code / exitCode / signal | Доступный код ошибки запуска, код завершения или сигнал                 |
+| timeoutMs                | Предел ожидания, обычно 3000 ms, при timeout                            |
+
+Например, ENOENT указывает на недоступный executable, EPERM/EACCES — на отказ
+запуска/доступа, nonzero exitCode — на завершившийся ошибкой helper. Это факты
+процесса, не доказательство вмешательства Avast. Для проверки сопоставьте время
+и PID с событием Avast/Windows. Raw PowerShell stderr/команда, полные source paths,
+UUID/serial и environment в warning не выводятся. Достаточно скопировать сами
+строки `[source-provenance]`; ключ не нужен. Успешные query и обычные отсутствующие
+значения metadata не создают warnings. Постоянный log-файл автоматически не создаётся.
+
 ## 5. Подключение плагина в ChatGPT
 
 Используйте тот же workspace, который связан с туннелем. Включите Developer mode

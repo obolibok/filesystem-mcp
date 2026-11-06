@@ -146,6 +146,18 @@ PowerShell 5.1 helper получает path как environment data, возвр�
 Timeout/error одного запроса сохраняет остальные поля и не ломает tool/job.
 Кэша metadata нет. На других ОС UUID/volume fields — null, hostname при наличии.
 
+При ошибке Windows query Logger пишет одну bounded warning `[source-provenance]`
+на stderr: UTC time, machine/volume, 1-based rootIndex внутри запроса, elapsedMs,
+serverPid, доступные helperPid/code/exitCode/signal и reason
+`process_error` / `invalid_json` / `timeout`. Для timeout указан timeoutMs; поздний
+reject после abort не даёт вторую запись. Raw Error/cmd/PowerShell output, paths,
+environment и идентификаторы источников в diagnostics не включаются. Logging
+failure сохраняет best-effort результат. Обычные null/невалидные metadata,
+полученные без ошибки query, не являются диагностикой антивируса. Сам warning
+тоже не устанавливает причину блокировки: нужна корреляция с журналом защитного ПО.
+Portable preflight показывает только эти warnings даже при успешной проверке,
+сохраняя JSON stdout и exit code. Скрипты/flags helper и формат tool output сохранены.
+
 ## Выбор инструментов и трактовка инвентаризации
 
 Краткая серверная инструкция, `get-help`/instructions resource и опубликованные

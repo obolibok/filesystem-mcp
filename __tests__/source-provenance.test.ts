@@ -7,11 +7,12 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import { it } from 'node:test';
+import { it, type TestContext } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { ArtifactJobManager } from '../src/core/job-manager.js';
 import type { JobCounters, StoredJob } from '../src/core/job-types.js';
+import { Logger } from '../src/core/observability.js';
 import { normalizePath } from '../src/core/path-utils.js';
 import { getSnapshotConfig } from '../src/core/snapshot-config.js';
 import type { SourceProvenance } from '../src/core/source-provenance.js';
@@ -21,6 +22,156 @@ import { cleanupTestRoot, createTestRoot, makeGuard } from './helpers.js';
 
 const MACHINE_ID = '12345678-1234-5678-9ABC-123456789ABC';
 const VOLUME = { label: 'Daten Größe Антенна', serialNumber: 'ABCD-0123' };
+
+function diagnosticLines(t: TestContext): string[] {
+  const lines: string[] = [];
+  t.mock.method(Logger, 'warn', (line: string) => {
+    lines.push(line);
+  });
+  return lines;
+}
+
+type Diagnostic = Partial<
+  Record<
+    | 'query'
+    | 'code'
+    | 'rootIndex'
+    | 'exitCode'
+    | 'signal'
+    | 'reason'
+    | 'helper'
+    | 'serverPid'
+    | 'helperPid'
+    | 'elapsedMs'
+    | 'at'
+    | 'timeoutMs',
+    unknown
+  >
+>;
+
+function diagnostic(line: string): Diagnostic {
+  const prefix = '[source-provenance] ';
+  assert(line.startsWith(prefix));
+  assert(!line.includes('\n'));
+  assert(line.length < 1024);
+  return JSON.parse(line.slice(prefix.length)) as Diagnostic;
+}
+
+it('logs query failure codes and root index without raw errors, paths or secrets', async (t) => {
+  const lines = diagnosticLines(t);
+  const secret = 'private-secret-\n-forged-log-line';
+  const provider = new SourceProvenanceProvider({
+    platform: 'win32',
+    hostname: () => 'synthetic-host',
+    queryWindows: async (kind, path) => {
+      if (kind === 'machine')
+        throw Object.assign(new Error(secret), {
+          code: 'ENOENT',
+          cmd: secret,
+          stdout: secret,
+          stderr: secret,
+        });
+      if (path === 'good') return VOLUME;
+      throw Object.assign(new Error(secret), { code: 5, signal: 'SIGTERM', path: secret });
+    },
+  });
+  const result = await provider.describeRoots(['good', secret]);
+  assert.equal(result.host.machineId, null);
+  assert.deepEqual(result.rootDetails[0]?.volume, VOLUME);
+  assert.deepEqual(result.rootDetails[1]?.volume, { label: null, serialNumber: null });
+  assert.equal(lines.length, 2);
+  assert(!lines.join('').includes('private-secret'));
+  const records = lines.map(diagnostic);
+  assert.deepEqual(
+    records.map((record) => record.query),
+    ['machine', 'volume'],
+  );
+  assert.equal(records[0]?.code, 'ENOENT');
+  assert.equal(records[0]?.rootIndex, undefined);
+  assert.equal(records[1]?.rootIndex, 2);
+  assert.equal(records[1]?.exitCode, 5);
+  assert.equal(records[1]?.signal, 'SIGTERM');
+  for (const record of records) {
+    assert.equal(record.reason, 'process_error');
+    assert.equal(record.helper, 'powershell.exe');
+    assert.equal(record.serverPid, process.pid);
+    assert.equal(record.helperPid, undefined);
+    assert.equal(typeof record.elapsedMs, 'number');
+    assert.equal(typeof record.at, 'string');
+  }
+});
+
+it('reports timeouts once even when abort triggers a late rejection', async (t) => {
+  const lines = diagnosticLines(t);
+  const provider = new SourceProvenanceProvider({
+    platform: 'win32',
+    timeoutMs: 20,
+    queryWindows: async (_kind, _path, signal) =>
+      new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () =>
+          reject(Object.assign(new Error('late-secret'), { code: 'ABORT_ERR' })),
+        );
+      }),
+  });
+  const result = await provider.capture('synthetic-root');
+  await delay(10);
+  assert.equal(result.host.machineId, null);
+  assert.equal(lines.length, 2);
+  for (const record of lines.map(diagnostic)) {
+    assert.equal(record.reason, 'timeout');
+    assert.equal(record.timeoutMs, 20);
+    assert.equal(record.code, undefined);
+  }
+  assert(!lines.join('').includes('late-secret'));
+});
+
+it('distinguishes invalid JSON and rejects arbitrary code/signal text in diagnostics', async (t) => {
+  const lines = diagnosticLines(t);
+  const secret = 'sensitive-output-\n-injection';
+  const provider = new SourceProvenanceProvider({
+    platform: 'win32',
+    queryWindows: async (kind) => {
+      if (kind === 'machine') throw new SyntaxError(secret);
+      throw Object.assign(new Error(secret), { code: secret, signal: secret });
+    },
+  });
+  await provider.capture('synthetic-root');
+  const records = lines.map(diagnostic);
+  assert.equal(records[0]?.reason, 'invalid_json');
+  assert.equal(records[1]?.reason, 'process_error');
+  assert.equal(records[1]?.code, undefined);
+  assert.equal(records[1]?.signal, undefined);
+  assert(!lines.join('').includes('sensitive-output'));
+});
+
+it('keeps metadata failures nonfatal when the warning sink throws', async (t) => {
+  t.mock.method(Logger, 'warn', () => {
+    throw new Error('broken logger');
+  });
+  const provider = new SourceProvenanceProvider({
+    platform: 'win32',
+    timeoutMs: 20,
+    queryWindows: async (kind) => {
+      if (kind === 'machine') throw new Error('query failure');
+      return new Promise(() => {});
+    },
+  });
+  const result = await provider.capture('synthetic-root');
+  assert.equal(result.host.machineId, null);
+  assert.deepEqual(result.root.volume, { label: null, serialNumber: null });
+});
+
+it('keeps successful and non-Windows lookups quiet', async (t) => {
+  const lines = diagnosticLines(t);
+  for (const platform of ['win32', 'linux', 'darwin'] as const) {
+    const provider = new SourceProvenanceProvider({
+      platform,
+      queryWindows: async (kind) => (kind === 'machine' ? MACHINE_ID : VOLUME),
+    });
+    await provider.capture('synthetic-root');
+  }
+  assert.equal(lines.length, 0);
+});
 
 interface ToolData {
   roots: string[];
