@@ -1,8 +1,10 @@
 import { execFile } from 'node:child_process';
-import { hostname } from 'node:os';
+import { constants, hostname } from 'node:os';
 import { promisify } from 'node:util';
 
 import * as z from 'zod/v4';
+
+import { Logger } from './observability.js';
 
 export const HostSchema = z.strictObject({
   name: z.string().nullable().describe('OS hostname of the machine running the MCP process.'),
@@ -81,9 +83,18 @@ $result | ConvertTo-Json -Compress`;
 
 const execFileAsync = promisify(execFile);
 
+class WindowsQueryError extends Error {
+  readonly helperPid: number | undefined;
+
+  constructor(cause: unknown, helperPid: number | undefined) {
+    super('Windows metadata query failed', { cause });
+    this.helperPid = helperPid;
+  }
+}
+
 const queryWindows: WindowsQuery = async (kind, path, signal) => {
   const script = `$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);\n${kind === 'machine' ? MACHINE_SCRIPT : VOLUME_SCRIPT}`;
-  const { stdout } = await execFileAsync(
+  const request = execFileAsync(
     'powershell.exe',
     [
       '-NoLogo',
@@ -101,8 +112,22 @@ const queryWindows: WindowsQuery = async (kind, path, signal) => {
       env: { ...process.env, FSMCP_PROVENANCE_PATH: path ?? '' },
     },
   );
-  return JSON.parse(stdout) as unknown;
+  try {
+    const { stdout } = await request;
+    return JSON.parse(stdout) as unknown;
+  } catch (error) {
+    throw new WindowsQueryError(error, request.child.pid);
+  }
 };
+
+const DIAGNOSTIC_CODES = new Set([
+  'ENOENT',
+  'EACCES',
+  'EPERM',
+  'ETIMEDOUT',
+  'ABORT_ERR',
+  'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+]);
 
 function textOrNull(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -132,17 +157,73 @@ export class SourceProvenanceProvider {
     this.#timeoutMs = deps.timeoutMs ?? 3_000;
   }
 
-  async #query(kind: 'machine' | 'volume', path?: string): Promise<unknown> {
+  #warn(
+    kind: 'machine' | 'volume',
+    started: number,
+    rootIndex: number | undefined,
+    timeout: boolean,
+    error?: unknown,
+  ): void {
+    try {
+      const cause = error instanceof WindowsQueryError ? error.cause : error;
+      const detail =
+        cause && typeof cause === 'object' ? (cause as { code?: unknown; signal?: unknown }) : {};
+      const code = detail.code;
+      const signal = detail.signal;
+      Logger.warn(
+        `[source-provenance] ${JSON.stringify({
+          at: new Date().toISOString(),
+          query: kind,
+          ...(rootIndex !== undefined ? { rootIndex } : {}),
+          helper: 'powershell.exe',
+          serverPid: process.pid,
+          ...(error instanceof WindowsQueryError && error.helperPid !== undefined
+            ? { helperPid: error.helperPid }
+            : {}),
+          elapsedMs: Math.max(0, Date.now() - started),
+          reason: timeout
+            ? 'timeout'
+            : cause instanceof SyntaxError
+              ? 'invalid_json'
+              : 'process_error',
+          ...(typeof code === 'string' && DIAGNOSTIC_CODES.has(code) ? { code } : {}),
+          ...(typeof code === 'number' && Number.isSafeInteger(code) ? { exitCode: code } : {}),
+          ...(typeof signal === 'string' && Object.hasOwn(constants.signals, signal)
+            ? { signal }
+            : {}),
+          ...(timeout ? { timeoutMs: this.#timeoutMs } : {}),
+        })}`,
+      );
+    } catch {
+      // Diagnostics must not turn optional metadata into a failed tool/job.
+    }
+  }
+
+  async #query(kind: 'machine' | 'volume', path?: string, rootIndex?: number): Promise<unknown> {
     if (this.#platform !== 'win32') return null;
     const controller = new AbortController();
+    const started = Date.now();
+    let finished = false;
     let timer: NodeJS.Timeout | undefined;
     try {
       return await Promise.race([
         Promise.resolve()
           .then(() => this.#queryWindows(kind, path, controller.signal))
-          .catch(() => null),
+          .then(
+            (result) => {
+              finished = true;
+              return result;
+            },
+            (error: unknown) => {
+              if (!finished) this.#warn(kind, started, rootIndex, false, error);
+              finished = true;
+              return null;
+            },
+          ),
         new Promise<null>((resolve) => {
           timer = setTimeout(() => {
+            finished = true;
+            this.#warn(kind, started, rootIndex, true);
             resolve(null);
             controller.abort();
           }, this.#timeoutMs);
@@ -166,8 +247,8 @@ export class SourceProvenanceProvider {
     const [machineId, rootDetails] = await Promise.all([
       this.#query('machine').then(uuidOrNull),
       Promise.all(
-        paths.map(async (path) => {
-          const result = await this.#query('volume', path);
+        paths.map(async (path, index) => {
+          const result = await this.#query('volume', path, index + 1);
           const data =
             result && typeof result === 'object' ? (result as Record<string, unknown>) : {};
           const serial = textOrNull(data['serialNumber'])?.toUpperCase();

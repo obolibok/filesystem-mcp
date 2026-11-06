@@ -80,6 +80,11 @@ try {
     [...config.roots].sort(),
     'Published roots differ from config.json',
   );
+  // Preserve successful JSON stdout while surfacing only safe provider warnings.
+  for (const line of stderr.split(/\r?\n/u)) {
+    if (line.startsWith('[warning] [source-provenance] '))
+      process.stderr.write(line.slice(0, 2048) + '\n');
+  }
   process.stdout.write(
     JSON.stringify(
       {

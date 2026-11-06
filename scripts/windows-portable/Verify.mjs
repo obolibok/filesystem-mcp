@@ -421,6 +421,34 @@ assert(
 );
 noKeys(JSON.stringify(runCheck()));
 reports.push('configured-runtime-key-redacted-from-MCP-configuration: PASS');
+const servePath = join(kit, 'scripts/serve.mjs');
+const originalServe = await readFile(servePath, 'utf8');
+const warning =
+  '[warning] [source-provenance] {"query":"machine","reason":"process_error","code":"EPERM"}';
+try {
+  await writeFile(
+    servePath,
+    'process.stderr.write(' +
+      JSON.stringify(warning + '\nprivate-stderr-sentinel\n') +
+      ');\n' +
+      originalServe,
+  );
+  const checked = spawnSync(node, [check], {
+    cwd: stage,
+    encoding: 'utf8',
+    timeout: 30000,
+    windowsHide: true,
+    env: { ...process.env, NODE_OPTIONS: '' },
+  });
+  assert.equal(checked.status, 0, checked.stderr);
+  assert.equal(JSON.parse(checked.stdout).result, 'LOCAL_MCP_PASS');
+  assert(checked.stderr.includes(warning));
+  assert(!checked.stderr.includes('private-stderr-sentinel'));
+  assert(runDoctor(false).includes('RUNTIME_KEY_CLEANUP_PASS'));
+} finally {
+  await writeFile(servePath, originalServe);
+}
+reports.push('provenance-warning-visible-with-successful-JSON-and-PowerShell-5.1-doctor: PASS');
 // Force a local profile write failure after the key and lock have been acquired.
 const profilePath = join(kit, 'data/tunnel/profile/portable.yaml');
 const savedProfilePath = profilePath + '.saved';
