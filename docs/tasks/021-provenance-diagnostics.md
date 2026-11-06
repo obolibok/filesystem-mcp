@@ -98,9 +98,10 @@ Feature/build source: `adc74d5224d49b9dfcc425d57b49af450e43b6f1`.
 
 Сборка добавляет диагностику и не исправляет предполагаемое срабатывание Avast.
 Production service/tunnel, реальные roots/ключи и настройки защиты не менялись.
-Нужно повторить запуск на целевой машине и сопоставить новый warning по времени/PID
-с событием Avast/Windows. Общая причина `process_error` сама по себе не доказывает
-вмешательство антивируса. Итоговый PR CI и приёмка фиксируются ниже после integration.
+Целевой preflight позднее подтверждён ниже: metadata получены, warning отсутствует,
+пользователь наблюдает задержанные уведомления Avast. Для идентификации конкретного
+детекта нужны его command line/parent/PID из Avast/Windows. Сам `process_error`,
+если появится, тоже не доказывает вмешательство антивируса.
 
 ## Интеграция 06.11.2026
 
@@ -109,7 +110,8 @@ Production service/tunnel, реальные roots/ключи и настройк
 Проверенный head и BUILD source — `adc74d5224d49b9dfcc425d57b49af450e43b6f1`.
 [CI #156](https://github.com/obolibok/filesystem-mcp/actions/runs/42203049178):
 полный check Windows/Ubuntu PASS. Центральный статус — done.
-Пользовательское воспроизведение с Avast остаётся отдельным следующим шагом.
+Последующие пользовательские наблюдения зафиксированы ниже; полноценный новый
+ChatGPT delivery smoke этим не подменяется.
 
 ### Пользовательский фрагмент запуска 06.11
 
@@ -125,3 +127,23 @@ events. Видны stdio MCP startup, read-only mode, control-plane poller и у
 scripts/check.mjs в папке комплекта, без перезапуска рабочего туннеля; нужны
 source-provenance строки и факт повторения Avast. Исходный лог с production paths,
 tunnel ID и профилем оператора в Git не включён.
+
+### Отдельный preflight на целевой машине 06.11
+
+Пользователь выполнил bundled Node scripts/check.mjs отдельно и сообщил, что Avast
+реагирует с задержкой и показывает два окна. BUILD sourceCommit точно совпал с
+проверенным `adc74d5224d49b9dfcc425d57b49af450e43b6f1`: установлена 021.
+Результат — LOCAL_MCP_PASS, 13 read-only tools, tree, три roots. Host UUID и label/
+serial для всех трёх roots заполнены; сведения тома одинаковы. Warnings provenance
+и наблюдаемого отказа metadata query в присланном выводе нет.
+
+Для этого прогона гипотеза «Avast прервал helper, поэтому metadata стали null»
+не подтверждается: нужные значения получены. Уведомления о детекте и успешный
+результат lookup могут наблюдаться вместе; точное действие защиты и затронутый
+процесс по этому выводу неизвестны. Два окна не дают число запросов: текущий
+describeRoots для трёх roots запускает один machine и три volume queries без
+дедупликации одинакового тома. Изменения запуска или антивируса не назначались.
+
+Имена хоста, UUID, serial, source/scratch paths и полный пользовательский JSON
+в Git не включены. Подтверждён локальный целевой preflight; readiness, новый
+ChatGPT round-trip и получение bundle/artifacts требуют отдельных свидетельств.

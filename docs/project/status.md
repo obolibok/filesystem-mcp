@@ -77,10 +77,13 @@ active — назначен исполнитель; review — проверяе�
 
 ## Следующие решения
 
-1. Провести пользовательский smoke portable 021 от 06.11 (включает 020), включая
-   runtimeApiKey и диагностику запуска на машине с Avast. Synthetic Verify 36/36
-   и ZIP parity PASS; production deployment и воспроизведение Avast не выполнялись.
-   Warning нужно сопоставить с событием защиты по времени/PID, причина пока не доказана.
+1. Продолжить пользовательский smoke portable 021 (включает 020): readiness,
+   ChatGPT round-trip и delivery originals/artifacts. На целевой машине уже
+   подтверждены BUILD sourceCommit, LOCAL_MCP_PASS, 13 tools/tree и заполненные
+   UUID/volume metadata для трёх roots. Пользователь наблюдает два задержанных
+   окна Avast, warnings provenance нет; отказ helper в этом прогоне не выявлен.
+   [Наблюдения и границы](../tasks/021-provenance-diagnostics.md#отдельный-preflight-на-целевой-машине-0611).
+   Для определения детекта остаются command line/parent/PID; переделка запуска не назначена.
 2. Dev dependency triage: npm ci 06.11 сообщил 14 full-graph findings (12 moderate,
    2 high); source и packaged production audit --omit=dev — 0. Нужен отдельный
    подробный full audit/triage. Счётчики 3 от 29.10 и 9 до remediation 017 — история.
