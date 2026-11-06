@@ -83,6 +83,8 @@
 - [Portable с исправлениями 017–019 (30.10)](testing/017-019-portable-2026-10-30.md):
   принятый main, Verify 24/24, production audit, ZIP parity и контрольная сумма;
   пользовательский smoke ожидается.
+- [020: optional runtime key и portable от 06.11](tasks/020-portable-runtime-key.md):
+  config/prompt fallback, Verify 35/35, Windows/Ubuntu CI, комплект и SHA-256.
 - [Baseline от 19 сентября](testing/baseline-2026-09-19.md): проверенные наблюдения,
   отделённые от планируемых исправлений.
 - [Шаблон задачи](tasks/TEMPLATE.md): минимальный контракт для следующего чата.

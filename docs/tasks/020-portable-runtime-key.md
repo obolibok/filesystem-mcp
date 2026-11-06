@@ -66,8 +66,7 @@ worktree, branch `codex/020-portable-runtime-key`, base с committed карто�
   Windows file-symlink privileges. После уточнения только Verify harness отдельно
   повторены targeted ESLint/Prettier; production-код не менялся.
 - Candidate [PR #20 CI #151](https://github.com/obolibok/filesystem-mcp/actions/runs/42197711272):
-  Windows и Ubuntu PASS на feature checkpoint. Итоговый head с уточнением harness
-  проверяется отдельно при интеграции.
+  Windows и Ubuntu PASS на feature checkpoint. Итоговый head и приёмка — ниже.
 - `Build.ps1`: **PORTABLE_BUILD_PASS**, production install (85 packages) и
   packaged stdio preflight PASS. SourceCommit в BUILD.json — feature checkpoint.
 - Расширенный `Verify.mjs`: **35/35 PASS**, 0 failures/skips. Прежние delivery,
@@ -101,3 +100,18 @@ worktree, branch `codex/020-portable-runtime-key`, base с committed карто�
 service/tunnel не менялись; real keys и cloud requests в проверках не использовались.
 Фактическая авторизация сохранённого ключа в живом туннеле остаётся пользовательским
 smoke. Центральную приёмку и итоговый CI фиксирует planning после review.
+
+## Интеграция 06.11.2026
+
+**Принято** planning после review diff и локальных проверок.
+[PR #20](https://github.com/obolibok/filesystem-mcp/pull/20) слит в main:
+`a3af994bdef7651a14792fac35035f318d24e379`, итоговый head
+`32e452ed1363b5eeb0f9e3f610bdc0d4b2894171`.
+[CI #152](https://github.com/obolibok/filesystem-mcp/actions/runs/42198319160):
+полный check на Windows и Ubuntu — PASS. Центральный статус — done.
+
+Review проследил оба способа выбора ключа и finally cleanup, PowerShell 5.1
+missing-property поведение, исключение ключа из JS config и diagnostics.
+Расширенный Verify 35/35 и ZIP checks относятся к поставке с sourceCommit
+`dabb61b1`; последующий diff содержит только harness scope fix и Work record.
+Новый пользовательский smoke остаётся отдельным следующим шагом.

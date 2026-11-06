@@ -2,7 +2,7 @@
 
 Владелец — архитекторский/планирующий чат. Обновлено: 2026-11-06.
 Начать с [handover архитектору](architect-handover-2026-10-29.md).
-017–019 приняты. Текущий planning-чат выполняет 020 в отдельном worktree.
+Все назначенные coding-задачи приняты, активных исполнителей сейчас нет.
 Предыдущая хроника сохранена в [архиве](history/status-2026-10-29.md).
 
 | ID           | Работа                                                                                 | Статус   | Зависит от         |
@@ -30,7 +30,7 @@
 | 017          | [Production dependency remediation](../tasks/017-production-dependency-remediation.md) | done     | 016                |
 | 018          | [Guarded I/O race hardening](../tasks/018-guarded-io-race-hardening.md)                | done     | 017                |
 | 019          | [Identity-bound destructive confirmations](../tasks/019-confirmation-identity.md)      | done     | 018                |
-| 020          | [Runtime key в portable config](../tasks/020-portable-runtime-key.md)                  | active   | 017–019            |
+| 020          | [Runtime key в portable config](../tasks/020-portable-runtime-key.md)                  | done     | 017–019            |
 | 005          | Контролируемое повторение предметного исследования                                     | proposed | 004, 006, 007, 008 |
 
 proposed — направление без назначения; ready — согласованная карточка;
@@ -40,6 +40,14 @@ active — назначен исполнитель; review — проверяе�
 
 ## Последняя приёмка
 
+- **020 (06.11)**: optional `runtimeApiKey` в portable config; непустой ключ
+  используется без prompt, пустое/отсутствующее/null поле сохраняет скрытый ввод
+  без записи. [PR #20](https://github.com/obolibok/filesystem-mcp/pull/20), merge
+  `a3af994b`. Итоговый head `32e452ed`,
+  [CI #152](https://github.com/obolibok/filesystem-mcp/actions/runs/42198319160)
+  Windows/Ubuntu PASS; локальный check 585/0/13, portable Verify **35/35 PASS**.
+  Чистый portable 020 собран из `dabb61b1`, production audit — 0, ZIP parity PASS.
+  [Контракт, проверки, комплект и SHA-256](../tasks/020-portable-runtime-key.md).
 - **Portable 017–019 (30.10)**: собран из `main` `282464ca`, Verify **24/24 PASS**,
   production audit — 0. ZIP и все 2,833 файла проверены по SHA-256/CRC.
   [Комплект, контрольная сумма и протокол](../testing/017-019-portable-2026-10-30.md).
@@ -60,12 +68,12 @@ active — назначен исполнитель; review — проверяе�
 
 ## Следующие решения
 
-1. Провести пользовательский smoke нового portable с 017–019. Комплект от 30.10
-   собран из принятого main, synthetic Verify 24/24 и ZIP parity PASS; deployment
-   и проверка через рабочий туннель ещё не выполнялись.
-2. Dev dependency triage: свежий npm audit 29.10 — 3 package findings (2 high,
-   1 moderate): @modelcontextprotocol/client, brace-expansion, smol-toml.
-   Production audit --omit=dev — 0. Исторические 9 в карточке 017 — не текущий счётчик.
+1. Провести пользовательский smoke portable 020 от 06.11, включая выбранный режим
+   runtimeApiKey. Synthetic Verify 35/35 и ZIP parity PASS; production deployment
+   и живая авторизация сохранённого ключа в этой приёмке не выполнялись.
+2. Dev dependency triage: npm ci 06.11 сообщил 14 full-graph findings (12 moderate,
+   2 high); source и packaged production audit --omit=dev — 0. Нужен отдельный
+   подробный full audit/triage. Счётчики 3 от 29.10 и 9 до remediation 017 — история.
 3. Выборочное upstream triage: проверен v2.12.1 82da458e; 019 адаптирует v2.12.0
    b23023f2. Кандидаты без назначения: EXDEV move staging/cleanup, replace_text
    match limits и list timeout. Общий merge upstream не назначен.

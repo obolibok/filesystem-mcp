@@ -77,8 +77,9 @@ whitespace-only строка сохраняют скрытый prompt без з�
 и граница проверки — в [инструкции комплекта](../../scripts/windows-portable/template/README.md#два-экземпляра-на-одном-компьютере).
 
 Обновление текста template само по себе не меняет уже собранный ZIP. Поставка
-[017–019 от 30.10](../testing/017-019-portable-2026-10-30.md) и её hashes сохраняются;
-новые пояснения войдут в следующую сборку README.md/README.html.
+[017–019 от 30.10](../testing/017-019-portable-2026-10-30.md) и её hashes сохраняются.
+Новая поставка [020 от 06.11](../tasks/020-portable-runtime-key.md) содержит optional
+runtime key и уточнения инструкции от 03.11 в README.md/README.html.
 
 ## Формат snapshot (016)
 
