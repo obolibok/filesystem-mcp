@@ -1,38 +1,38 @@
 # Приоритеты и интеграция
 
-Владелец — архитекторский/планирующий чат. Обновлено: 2026-11-06.
+Владелец — архитекторский/планирующий чат. Обновлено: 2026-11-07.
 Начать с [handover архитектору](architect-handover-2026-10-29.md).
 Все назначенные coding-задачи приняты, активных исполнителей сейчас нет.
 Предыдущая хроника сохранена в [архиве](history/status-2026-10-29.md).
 
-| ID           | Работа                                                                                 | Статус   | Зависит от         |
-| ------------ | -------------------------------------------------------------------------------------- | -------- | ------------------ |
-| 000          | Подготовка контекста и правил работы                                                   | done     | —                  |
-| 001          | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)                         | done     | 000                |
-| 002          | [Стенд доставки originals](../tasks/002-originals-delivery.md)                         | done     | 001                |
-| 002-live     | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)                   | done     | 002                |
-| 002-tool     | [Выдача originals через tool](../tasks/002-tool-delivery.md)                           | done     | 002, 002-live      |
-| 003          | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md)                 | done     | 002-tool           |
-| 004          | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md)                | done     | 003                |
-| 004-live     | [Живой bundle Windows/ChatGPT](../tasks/004-live-windows-chatgpt.md)                   | done     | 004 review PASS    |
-| 004-portable | [Переносимый Windows-комплект](../tasks/004-portable-windows.md)                       | done     | 004                |
-| 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md)               | done     | 003, 004-portable  |
-| 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md)    | done     | 006                |
-| 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)         | done     | 007 runtime        |
-| 009          | [Выбор инструментов и понятные результаты](../tasks/009-tool-selection.md)             | done     | 007, 008           |
-| 010          | [Ограниченный list и ясные лимиты](../tasks/010-bounded-list.md)                       | done     | 009                |
-| 011          | [Ограниченный поиск и пагинация](../tasks/011-bounded-search.md)                       | done     | 010, triage        |
-| 012          | [Память и TTL пагинации](../tasks/012-pagination-memory-study.md)                      | done     | 010, triage        |
-| 013          | [Машина и тома источников](../tasks/013-source-provenance.md)                          | done     | 011, 012           |
-| 014          | [Экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)                       | done     | 013                |
-| 015          | [Отдельные настройки snapshot_tree](../tasks/015-snapshot-tree-settings.md)            | done     | 014 live           |
-| 016          | [Tree как основной формат snapshot](../tasks/016-tree-default.md)                      | done     | 014, 015, live A/B |
-| 017          | [Production dependency remediation](../tasks/017-production-dependency-remediation.md) | done     | 016                |
-| 018          | [Guarded I/O race hardening](../tasks/018-guarded-io-race-hardening.md)                | done     | 017                |
-| 019          | [Identity-bound destructive confirmations](../tasks/019-confirmation-identity.md)      | done     | 018                |
-| 020          | [Runtime key в portable config](../tasks/020-portable-runtime-key.md)                  | done     | 017–019            |
-| 021          | [Диагностика provenance](../tasks/021-provenance-diagnostics.md)                       | done     | 020                |
-| 005          | Контролируемое повторение предметного исследования                                     | proposed | 004, 006, 007, 008 |
+| ID           | Работа                                                                                        | Статус | Зависит от         |
+| ------------ | --------------------------------------------------------------------------------------------- | ------ | ------------------ |
+| 000          | Подготовка контекста и правил работы                                                          | done   | —                  |
+| 001          | [Baseline-дефекты и Windows](../tasks/001-baseline-defects.md)                                | done   | 000                |
+| 002          | [Стенд доставки originals](../tasks/002-originals-delivery.md)                                | done   | 001                |
+| 002-live     | [Живой прогон Windows/ChatGPT](../tasks/002-live-windows-chatgpt.md)                          | done   | 002                |
+| 002-tool     | [Выдача originals через tool](../tasks/002-tool-delivery.md)                                  | done   | 002, 002-live      |
+| 003          | [Фоновый snapshot и сжатые части](../tasks/003-compressed-snapshot.md)                        | done   | 002-tool           |
+| 004          | [Bundle выбранных originals](../tasks/004-selected-originals-bundle.md)                       | done   | 003                |
+| 004-live     | [Живой bundle Windows/ChatGPT](../tasks/004-live-windows-chatgpt.md)                          | done   | 004 review PASS    |
+| 004-portable | [Переносимый Windows-комплект](../tasks/004-portable-windows.md)                              | done   | 004                |
+| 006          | [Общее переиспользование снимков](../tasks/006-shared-snapshot-reuse.md)                      | done   | 003, 004-portable  |
+| 007          | [Устойчивость snapshot и fatal diagnostics](../tasks/007-snapshot-walk-recovery.md)           | done   | 006                |
+| 008          | [Надёжность job metadata на Windows](../tasks/008-job-metadata-persistence.md)                | done   | 007 runtime        |
+| 009          | [Выбор инструментов и понятные результаты](../tasks/009-tool-selection.md)                    | done   | 007, 008           |
+| 010          | [Ограниченный list и ясные лимиты](../tasks/010-bounded-list.md)                              | done   | 009                |
+| 011          | [Ограниченный поиск и пагинация](../tasks/011-bounded-search.md)                              | done   | 010, triage        |
+| 012          | [Память и TTL пагинации](../tasks/012-pagination-memory-study.md)                             | done   | 010, triage        |
+| 013          | [Машина и тома источников](../tasks/013-source-provenance.md)                                 | done   | 011, 012           |
+| 014          | [Экспериментальный snapshot_tree](../tasks/014-snapshot-tree.md)                              | done   | 013                |
+| 015          | [Отдельные настройки snapshot_tree](../tasks/015-snapshot-tree-settings.md)                   | done   | 014 live           |
+| 016          | [Tree как основной формат snapshot](../tasks/016-tree-default.md)                             | done   | 014, 015, live A/B |
+| 017          | [Production dependency remediation](../tasks/017-production-dependency-remediation.md)        | done   | 016                |
+| 018          | [Guarded I/O race hardening](../tasks/018-guarded-io-race-hardening.md)                       | done   | 017                |
+| 019          | [Identity-bound destructive confirmations](../tasks/019-confirmation-identity.md)             | done   | 018                |
+| 020          | [Runtime key в portable config](../tasks/020-portable-runtime-key.md)                         | done   | 017–019            |
+| 021          | [Диагностика provenance](../tasks/021-provenance-diagnostics.md)                              | done   | 020                |
+| 005          | [Контролируемое повторение предметного исследования](../tasks/005-controlled-domain-study.md) | done   | 004, 006, 007, 008 |
 
 proposed — направление без назначения; ready — согласованная карточка;
 active — назначен исполнитель; review — проверяемый результат; done — принят
@@ -41,6 +41,13 @@ active — назначен исполнитель; review — проверяе�
 
 ## Последняя приёмка
 
+- **005 (07.11)**: пользователь принял предметный опыт 27–28.10 на копии архива
+  предприятия. В отдельном ChatGPT-чате выполнены пять вопросов руководства:
+  поиск по снапшотам, получение и анализ originals, отчёты DE/RU и расчётные
+  материалы. Сохранены оговорки о неполноте, допущениях и устаревшем бэкапе.
+  Это приёмка файлового исследовательского цикла; независимая численная сверка
+  всех ответов и работа локальной модели остаются за её пределами.
+  [Результаты и границы доказательств](../tasks/005-controlled-domain-study.md).
 - **021 (06.11)**: безопасные warnings отказов Windows provenance и показ при
   успешном preflight. Запуск helper, PowerShell scripts/flags, timeout и null
   fallback сохранены. [PR #21](https://github.com/obolibok/filesystem-mcp/pull/21),
@@ -90,7 +97,11 @@ active — назначен исполнитель; review — проверяе�
 3. Выборочное upstream triage: проверен v2.12.1 82da458e; 019 адаптирует v2.12.0
    b23023f2. Кандидаты без назначения: EXDEV move staging/cleanup, replace_text
    match limits и list timeout. Общий merge upstream не назначен.
-4. Предметный опыт 005 остаётся proposed: нужны выборка, вопрос и эталон.
+4. Следующий предметный эксперимент — локальная модель с файлами: сначала
+   получение одного оригинального Excel через FileMCP в расчётную среду,
+   затем повторение тех же пяти вопросов. Облачный опыт 005 даёт материал для
+   сравнения; старые ответы не заменяют независимый эталон. Реализация нового
+   подключения и изменения deployment пока не назначены.
 5. Намерение воспроизвести tunnel Ctrl+C после Windows Sleep сохраняется;
    подтверждённого диагноза и назначенной задачи нет.
 
