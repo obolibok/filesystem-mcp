@@ -9,9 +9,20 @@ try {
   const extra = process.argv.slice(2);
   if (extra.some((arg) => !['--print-config', '--json', '--preflight'].includes(arg)))
     throw new Error('Unsupported launcher argument.');
-  const config = await configuration();
+  const preflight = extra.includes('--preflight');
+  const config = await configuration({ includeHttpApiKey: !preflight });
+  const http = !preflight && config.transport === 'http';
+  const apiKey = http ? config.localHttp.apiKey || process.env.PORTABLE_HTTP_API_KEY?.trim() : '';
+  if (
+    http &&
+    (!apiKey || apiKey.length < 16 || apiKey.length > 4096 || /[^\x21-\x7e]/u.test(apiKey))
+  )
+    throw new Error(
+      'HTTP requires an API key of 16 to 4096 printable ASCII characters without whitespace. Use Start.ps1 for hidden input.',
+    );
   serverEnvironment(config);
-  if (extra.includes('--preflight')) {
+  if (http) process.env.FS_API_KEY = apiKey;
+  if (preflight) {
     mkdirSync(join(kit, 'data'), { recursive: true });
     const scratch = mkdtempSync(join(kit, 'data', 'preflight-'));
     process.env.FS_SNAPSHOT_DIR = scratch;
@@ -25,6 +36,9 @@ try {
     // The actual module URL below still resolves from the portable directory.
     'filesystem-mcp',
     '--read-only',
+    ...(http
+      ? ['--port', String(config.localHttp.port), '--http-host', config.localHttp.host]
+      : []),
     ...extra.filter((arg) => arg !== '--preflight'),
     ...config.roots,
   ];

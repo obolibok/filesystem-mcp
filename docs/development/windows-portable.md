@@ -33,6 +33,14 @@ production dependencies через npm ci --omit=dev --ignore-scripts, доба�
 Проверенный SHA runtime и версии находятся в BUILD.json.
 Не менять upstream package/server version ради локальной упаковки.
 
+Начиная с [022](../tasks/022-universal-portable.md), один template поддерживает
+`transport: stdio` (default, прежний tunnel flow) и `transport: http` с отдельным
+`localHttp.host/port/apiKey`. Start.ps1 выбирает транспорт; serve.mjs применяет
+общий config в обоих режимах. HTTP не требует tunnel credentials. Пустой HTTP-ключ
+запрашивается скрыто без сохранения; непустой config используется после trim.
+Прямой server/dist/index.js по-прежнему не читает portable config.
+Подробности и команды — в [HTTP-разделе инструкции](../../scripts/windows-portable/template/README.md#локальный-агент-по-http).
+
 Runtime provenance берётся на целевой машине при работе MCP, независимо от BUILD.json.
 `list_roots` показывает имя/системный UUID хоста и label/серийный номер тома каждого
 root; недоступные значения — null без требования elevation. Новые snapshot/bundle
@@ -45,6 +53,10 @@ Verify.mjs работает на копии поставки в ignored .tmp: п
 несколько roots, реальные snapshot/bundle, SHA/CRC/содержимое ZIP, ошибочная
 конфигурация, junction, PowerShell 5.1 doctor и отказ emergency stop по чужому PID.
 Используется фиктивный ключ только для локального doctor; run не вызывается.
+HTTP-сценарии используют synthetic loopback listener: auth, effective config
+parity, originals, multipart snapshot и повторную выдачу bytes после restart.
+Проверяются PowerShell 5.1 HTTP DoctorOnly, prompt/config fallback, redaction,
+failure cleanup и run lock. Рабочий туннель и production LAN не затрагиваются.
 Production roots не нужны. Synthetic копии и отчёты остаются локально.
 
 Результат помещать в ignored out/. В Git коммитятся builder, templates,

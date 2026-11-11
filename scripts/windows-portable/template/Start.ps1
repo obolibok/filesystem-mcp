@@ -11,6 +11,7 @@ $previousPath = $env:PATH
 $previousNodeOptions = $env:NODE_OPTIONS
 $secureKey = $null
 $configuredRuntimeKey = $null
+$configuredHttpKey = $null
 $runLock = $null
 $tunnelExit = 0
 Push-Location -LiteralPath $PSScriptRoot
@@ -21,17 +22,28 @@ try {
   }
   catch { throw 'Cannot read config.json: expected valid JSON.' }
   if ($null -eq $config -or $config -isnot [pscustomobject]) { throw 'config.json must contain an object.' }
+  $transportProperty = $config.PSObject.Properties['transport']
+  $transport = 'stdio'
+  if ($null -ne $transportProperty) {
+    if ($transportProperty.Value -isnot [string] -or @('stdio', 'http') -cnotcontains $transportProperty.Value) {
+      throw 'transport must be stdio or http.'
+    }
+    $transport = $transportProperty.Value
+  }
   $keyProperty = $config.PSObject.Properties['runtimeApiKey']
   if ($null -ne $keyProperty -and $null -ne $keyProperty.Value) {
     if ($keyProperty.Value -isnot [string]) { throw 'runtimeApiKey must be a string or null.' }
     $configuredRuntimeKey = $keyProperty.Value.Trim()
   }
-  $tunnelId = [string]$config.tunnelId
-  if ($tunnelId -notmatch '^tunnel_[A-Za-z0-9]+$') {
-    throw 'Set tunnelId in config.json first. See README.html.'
+  if ($transport -eq 'stdio') {
+    $tunnelIdProperty = $config.PSObject.Properties['tunnelId']
+    $tunnelId = if ($null -ne $tunnelIdProperty) { [string]$tunnelIdProperty.Value } else { '' }
+    if ($tunnelId -notmatch '^tunnel_[A-Za-z0-9]+$') {
+      throw 'Set tunnelId in config.json first. See README.html.'
+    }
   }
   # A stale PID file is not permission to terminate or reuse any process.
-  if (Test-Path -LiteralPath $pidFile) {
+  if ($transport -eq 'stdio' -and (Test-Path -LiteralPath $pidFile)) {
     $previousPid = 0
     if ([int]::TryParse((Get-Content -LiteralPath $pidFile -Raw).Trim(), [ref]$previousPid)) {
       if (Get-Process -Id $previousPid -ErrorAction SilentlyContinue) {
@@ -41,34 +53,61 @@ try {
   }
   & $node 'scripts/check.mjs'
   if ($LASTEXITCODE -ne 0) { throw 'Local MCP check failed. Nothing started.' }
-  New-Item -ItemType Directory -Force -Path $profileDirectory | Out-Null
-  $runLock = [IO.File]::Open((Join-Path $state 'run.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
-  $env:PATH = (Join-Path $PSScriptRoot 'runtime') + ';' + $env:PATH
-  if ([string]::IsNullOrWhiteSpace($configuredRuntimeKey)) {
-    $secureKey = Read-Host 'Runtime API key (hidden; not saved)' -AsSecureString
-    $env:CONTROL_PLANE_API_KEY = (New-Object System.Net.NetworkCredential('', $secureKey)).Password
-  }
-  else { $env:CONTROL_PLANE_API_KEY = $configuredRuntimeKey }
-  if ([string]::IsNullOrWhiteSpace($env:CONTROL_PLANE_API_KEY)) { throw 'Empty runtime API key.' }
-  # Relative command + explicit working directory avoids Windows nested quoting.
-  & $tunnel init --sample sample_mcp_stdio_local --profile portable --profile-dir $profileDirectory --tunnel-id $tunnelId --mcp-command 'node scripts/serve.mjs' --health-listen-addr '127.0.0.1:0' --force
-  if ($LASTEXITCODE -ne 0) { throw 'Tunnel profile initialization failed.' }
-  & $tunnel doctor --profile portable --profile-dir $profileDirectory --explain
-  if ($LASTEXITCODE -ne 0) { throw 'Tunnel doctor failed.' }
-  if (-not $DoctorOnly) {
-    if (Test-Path -LiteralPath $healthFile) { Remove-Item -LiteralPath $healthFile }
-    [IO.File]::WriteAllText((Join-Path $state 'started-at.txt'), [DateTime]::UtcNow.ToString('o'))
-    Write-Host 'Starting tunnel. Leave this window open. Use Ctrl+C once to stop.'
-    Write-Host 'Run Status.ps1 in a second PowerShell window to check readiness.'
-    $ErrorActionPreference = 'Continue'
-    & $tunnel run --profile portable --profile-dir $profileDirectory --pid.file $pidFile --health.listen-addr '127.0.0.1:0' --health.url-file $healthFile --log.format json
+  $runLock = [IO.File]::Open((Join-Path $PSScriptRoot 'data/run.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+  if ($transport -eq 'http') {
+    $httpProperty = $config.PSObject.Properties['localHttp']
+    if ($null -ne $httpProperty) {
+      $httpKeyProperty = $httpProperty.Value.PSObject.Properties['apiKey']
+      if ($null -ne $httpKeyProperty -and $null -ne $httpKeyProperty.Value) {
+        $configuredHttpKey = $httpKeyProperty.Value.Trim()
+      }
+    }
+    if ([string]::IsNullOrWhiteSpace($configuredHttpKey)) {
+      $secureKey = Read-Host 'HTTP MCP API key (hidden; not saved; minimum 16 characters)' -AsSecureString
+      $env:PORTABLE_HTTP_API_KEY = (New-Object System.Net.NetworkCredential('', $secureKey)).Password
+    }
+    else { $env:PORTABLE_HTTP_API_KEY = $configuredHttpKey }
+    if ($DoctorOnly) {
+      & $node 'scripts/serve.mjs' --print-config --json
+    }
+    else {
+      Write-Host 'Starting read-only HTTP MCP. Leave this window open. Use Ctrl+C once to stop.'
+      & $node 'scripts/serve.mjs'
+    }
     $tunnelExit = $LASTEXITCODE
-    if ($LASTEXITCODE -ne 0) { Write-Warning ('Tunnel exited with code ' + $LASTEXITCODE) }
+    if ($LASTEXITCODE -ne 0) { throw 'HTTP MCP launch failed.' }
+  }
+  else {
+    New-Item -ItemType Directory -Force -Path $profileDirectory | Out-Null
+    $env:PATH = (Join-Path $PSScriptRoot 'runtime') + ';' + $env:PATH
+    if ([string]::IsNullOrWhiteSpace($configuredRuntimeKey)) {
+      $secureKey = Read-Host 'Runtime API key (hidden; not saved)' -AsSecureString
+      $env:CONTROL_PLANE_API_KEY = (New-Object System.Net.NetworkCredential('', $secureKey)).Password
+    }
+    else { $env:CONTROL_PLANE_API_KEY = $configuredRuntimeKey }
+    if ([string]::IsNullOrWhiteSpace($env:CONTROL_PLANE_API_KEY)) { throw 'Empty runtime API key.' }
+    # Relative command + explicit working directory avoids Windows nested quoting.
+    & $tunnel init --sample sample_mcp_stdio_local --profile portable --profile-dir $profileDirectory --tunnel-id $tunnelId --mcp-command 'node scripts/serve.mjs' --health-listen-addr '127.0.0.1:0' --force
+    if ($LASTEXITCODE -ne 0) { throw 'Tunnel profile initialization failed.' }
+    & $tunnel doctor --profile portable --profile-dir $profileDirectory --explain
+    if ($LASTEXITCODE -ne 0) { throw 'Tunnel doctor failed.' }
+    if (-not $DoctorOnly) {
+      if (Test-Path -LiteralPath $healthFile) { Remove-Item -LiteralPath $healthFile }
+      [IO.File]::WriteAllText((Join-Path $state 'started-at.txt'), [DateTime]::UtcNow.ToString('o'))
+      Write-Host 'Starting tunnel. Leave this window open. Use Ctrl+C once to stop.'
+      Write-Host 'Run Status.ps1 in a second PowerShell window to check readiness.'
+      $ErrorActionPreference = 'Continue'
+      & $tunnel run --profile portable --profile-dir $profileDirectory --pid.file $pidFile --health.listen-addr '127.0.0.1:0' --health.url-file $healthFile --log.format json
+      $tunnelExit = $LASTEXITCODE
+      if ($LASTEXITCODE -ne 0) { Write-Warning ('Tunnel exited with code ' + $LASTEXITCODE) }
+    }
   }
 }
 finally {
   Remove-Item Env:CONTROL_PLANE_API_KEY -ErrorAction SilentlyContinue
   $configuredRuntimeKey = $null
+  Remove-Item Env:PORTABLE_HTTP_API_KEY -ErrorAction SilentlyContinue
+  $configuredHttpKey = $null
   if ($null -ne $secureKey) { $secureKey.Dispose() }
   if ($null -ne $runLock) { $runLock.Dispose() }
   $env:PATH = $previousPath

@@ -1,6 +1,12 @@
 {
+  "transport": "stdio",
   "tunnelId": "",
   "runtimeApiKey": "",
+  "localHttp": {
+    "host": "127.0.0.1",
+    "port": 8766,
+    "apiKey": ""
+  },
   "roots": ["./sample-source"],
   "scratchDirectory": "./data/jobs",
   "snapshotFormat": "tree",

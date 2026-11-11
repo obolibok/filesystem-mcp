@@ -5,6 +5,11 @@ production-зависимости и полный tunnel-client с cloudflared �
 Устанавливать Git, Node, npm, Python или компилятор на целевую машину не нужно.
 Версии, source commit и hashes записаны в BUILD.json и SHA256SUMS.json.
 
+Один комплект поддерживает два режима из config.json: `"transport": "stdio"`
+(по умолчанию, ChatGPT через туннель) и `"transport": "http"` (локальный MCP-клиент).
+Команда запуска в обоих случаях — `Start.ps1`. Для одновременной работы нужны
+две отдельные распакованные папки и разные scratchDirectory.
+
 Откройте этот файл или README.html. Все команды ниже выполняются из папки комплекта.
 Для проверки нового default tree и явного stable используйте
 [TEST-016.md](TEST-016.md). TEST-014.md сохраняет исторический протокол прежней сборки.
@@ -142,8 +147,8 @@ config после неё нет.
 Launcher передаёт ключ tunnel-client через environment; профиль содержит только
 `env:CONTROL_PLANE_API_KEY`. В argv, diagnostics и MCP configuration ключ не выводится.
 
-Правильный tunnel_id не заменяет runtime key. Это также не FS_API_KEY: наш MCP
-запущен через stdio, локального публичного HTTP endpoint и отдельного MCP API key нет.
+Правильный tunnel_id не заменяет runtime key. Это также не HTTP MCP API key:
+в режиме stdio сервер работает через туннель, без собственного HTTP listener.
 Туннель использует исходящее HTTPS; для обычного подключения требуется доступ
 к api.openai.com:443. Входящий порт на роутере открывать не требуется.
 Корпоративный proxy/CA/mTLS может потребовать настройки сетевым администратором;
@@ -177,6 +182,73 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Status.ps1
 Дождитесь HTTP 200 от /readyz. Скрипт покажет адрес локального /ui.
 Порт выбирается автоматически, admin UI доступен только с 127.0.0.1.
 Сообщения диагностик видны в окне запуска; постоянный log-файл по умолчанию не создаётся.
+
+### Локальный агент по HTTP
+
+Для этого режима туннель и ключ OpenAI не нужны. В config.json измените только
+следующие поля, сохранив свои roots, scratchDirectory, snapshotFormat и limits:
+
+```json
+"transport": "http",
+"localHttp": {
+  "host": "127.0.0.1",
+  "port": 8766,
+  "apiKey": ""
+}
+```
+
+Это фрагмент конфигурации. Если агент работает на другой машине, вместо loopback
+задайте конкретный IP компьютера с файлами, например `192.168.1.20`.
+Принимаются localhost и конкретные IP, порт 1–65535; wildcard `0.0.0.0`/`::`
+не поддерживается этим launcher. По умолчанию сетевого доступа извне нет.
+
+Запуск тот же:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Start.ps1
+```
+
+Пустой/отсутствующий/null/whitespace `localHttp.apiKey` вызывает скрытый запрос
+ключа: 16–4096 печатных ASCII-символов без пробелов. Введённый ключ не сохраняется.
+Можно заполнить `localHttp.apiKey` заранее: строка используется после trim.
+Это обычный текст в config.json; не включайте рабочий ключ в передаваемый комплект.
+Неверный тип/короткий непустой ключ отклоняется. `runtimeApiKey` для HTTP не нужен
+и не используется для доступа к MCP.
+
+Клиент подключается к `http://<host>:<port>/mcp` по Streamable HTTP с заголовком
+`Authorization: Bearer <ключ localHttp>`. Сам HTTP не шифрует передачу; доступ
+из LAN и сетевые правила согласуйте с администратором. Start не меняет firewall,
+не открывает порты на роутере и не отключает проверку Host/auth.
+
+Проверка эффективных настроек без постоянного listener:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Start.ps1 -DoctorOnly
+```
+
+После отдельного файлового preflight выводятся transport, allowedRoots,
+snapshotFormat и limits. Ключ показан как `***`. Scratch должен разрешаться
+от папки этого комплекта, а `maxTreeRawPartBytes` — совпадать с вашим limits.
+DoctorOnly не доказывает доступность HTTP из другой машины. `Status.ps1` в HTTP
+режиме проверяет `/healthz`: это доступность процесса, а auth, MCP tools и
+получение бинарных originals/artifacts проверяются клиентом отдельно.
+
+Остановка HTTP — Ctrl+C один раз в окне Start. `Stop.ps1` напомнит эту команду;
+`Stop.ps1 -Force` для HTTP откажется выполнять принудительную остановку.
+Один Start на папку защищён run lock. Не переключайте transport у работающего
+комплекта; для параллельного ChatGPT/HTTP используйте отдельные папки/scratch.
+
+Если запускаете Node вручную, используйте `runtime/node.exe scripts/serve.mjs`:
+он читает тот же config. В HTTP ему нужен сохранённый localHttp.apiKey либо
+временный `PORTABLE_HTTP_API_KEY`; интерактивный prompt предоставляет Start.ps1.
+Прямой `server/dist/index.js` читает CLI/env и не загружает portable config.json.
+Это относится и к scratch, и к лимитам частей; используйте штатный launcher.
+
+Check.ps1 всегда проверяет файловые инструменты через изолированный stdio,
+даже при transport=http: он не требует HTTP-ключа, не занимает порт и не меняет
+рабочие jobs. Оба режима read-only и применяют одинаковые roots, boundary,
+scratch, формат, raw/ZIP/delivery/job caps и TTL из config. Сам клиент должен
+поддерживать получение бинарных артефактов; выбор транспорта этого не гарантирует.
 
 ### Диагностика метаданных Windows
 

@@ -41,14 +41,14 @@ portable-комплект и одинаковый способ настройк�
 
 ## Acceptance
 
-- [ ] Старый stdio config и все прежние portable scenarios проходят.
-- [ ] HTTP effective config совпадает со stdio по roots/scratch/format/limits;
+- [x] Старый stdio config и все прежние portable scenarios проходят.
+- [x] HTTP effective config совпадает со stdio по roots/scratch/format/limits;
       штатный PowerShell 5.1 Start не требует tunnel credentials.
-- [ ] На synthetic loopback HTTP проходят auth, discovery 13 read-only tools,
+- [x] На synthetic loopback HTTP проходят auth, discovery 13 read-only tools,
       get_file, multipart snapshot, SHA/CRC/readback и reuse/restart artifacts.
-- [ ] Неверные transport/host/port/key types и короткий ключ отклоняются;
+- [x] Неверные transport/host/port/key types и короткий ключ отклоняются;
       секреты не попадают в stdout/stderr/argv/state, prompt не меняет config.
-- [ ] Проверены failure cleanup, перенос/Unicode и отказ при занятом run lock.
+- [x] Проверены failure cleanup, перенос/Unicode и отказ при занятом run lock.
 - [ ] Полный repository check, расширенный Verify, Windows/Ubuntu CI и
       production audit; новая чистая папка/ZIP, SHA-256 и parity всех файлов.
 - [ ] Инструкция и результаты в Git; комплект и логи в ignored out/.tmp.
@@ -57,4 +57,28 @@ portable-комплект и одинаковый способ настройк�
 
 - Base до назначения: `427d38d5`; implementation начинается от committed карточки.
 - До реализации: source/template diff отсутствует, оба checkout чистые.
-- Проверки и итоговые source/merge/build SHA будут записаны после выполнения.
+- Implementation base с карточкой: `e712a6c4`; ветка `codex/022-universal-portable`.
+- Изменены только portable config/launchers/verifier и документация. Ядро и
+  PowerShell provenance helper не менялись. Неверный HTTP key/host/port и transport
+  дают ошибки без вывода значений ключа; default configuration исключает секреты.
+- `Start.ps1` сохраняет прежний stdio tunnel flow. HTTP не требует tunnel ID/key;
+  DoctorOnly проверяет effective config с redaction без listener. Общий run lock
+  предотвращает второй Start в той же папке до ввода ключа.
+- `Status.ps1` проверяет HTTP /healthz без credentials и сообщает границу проверки;
+  Stop рекомендует Ctrl+C. Force-stop HTTP намеренно отказывает: PID ownership
+  для этого режима не добавлялся. Прежняя защита чужого tunnel PID сохранена.
+- Полный `npm run check`: 603 tests, 590 PASS, 0 FAIL, 13 штатных Windows skips;
+  static/build/types/ESLint/Prettier/Knip PASS. После уточнения verifier выполнены
+  targeted ESLint/Prettier и diff check.
+- Trial kit собран с pinned Node 24.15.0/tunnel-client 0.0.14. Verify: **51/51 PASS**,
+  включая прежние 36 сценариев, legacy config, HTTP auth/discovery/get_file,
+  effective-config parity, multipart SHA/CRC/readback/restart/reuse, PowerShell 5.1
+  key config/prompt fallback, failure cleanup, run lock и отказ force-stop.
+  После добавления rejection cases NUL/non-ASCII key и исправления числового типа
+  порта для PowerShell 7 Verify повторён: **51/51 PASS**. Управляющие символы
+  запрещены до записи в environment. Source production audit --omit=dev — **0**.
+- Реальная клиентская сессия Hermes/LAN, новая сессия ChatGPT и штатный Ctrl+C
+  на целевой машине остаются пользовательским smoke. Synthetic HTTP использует
+  настоящий Node launcher; PowerShell проверяется через DoctorOnly и injected
+  foreground launch failure. Это не подтверждение production deployment.
+- Итоговые source/merge/build SHA, CI, audit и комплект будут записаны при интеграции.
