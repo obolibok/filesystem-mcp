@@ -100,6 +100,9 @@ whitespace-only строка сохраняют скрытый prompt без з�
 runtime key и уточнения инструкции от 03.11 в README.md/README.html.
 Поставка [021 от 06.11](../tasks/021-provenance-diagnostics.md) включает 020 и
 безопасные warnings Windows provenance/preflight; формат запуска helper сохранён.
+Поставка [022 от 11.11](../tasks/022-universal-portable.md) добавляет выбор stdio/HTTP
+в общем config и Start.ps1; Verify **51/51 PASS**, source/packaged production audit 0.
+Для двух режимов одновременно нужны отдельные распакованные копии и scratch.
 
 ## Формат snapshot (016)
 

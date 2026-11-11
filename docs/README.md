@@ -90,7 +90,7 @@
   запуск helper сохранён, причина срабатывания Avast требует проверки на целевой машине.
 - [022: единый portable для stdio и HTTP](tasks/022-universal-portable.md):
   transport в config.json, общие roots/scratch/limits, отдельный HTTP key,
-  запуск через Start.ps1 и проверка multipart artifacts по HTTP.
+  запуск через Start.ps1, Verify 51/51 и комплект от 11.11 с SHA-256.
 - [005: предметный опыт на копии архива](tasks/005-controlled-domain-study.md):
   пять вопросов руководства, получение и анализ originals в ChatGPT, отчёты DE/RU,
   ограничения свежести и основа для сравнения с локальной моделью.

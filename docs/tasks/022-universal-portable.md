@@ -49,9 +49,9 @@ portable-комплект и одинаковый способ настройк�
 - [x] Неверные transport/host/port/key types и короткий ключ отклоняются;
       секреты не попадают в stdout/stderr/argv/state, prompt не меняет config.
 - [x] Проверены failure cleanup, перенос/Unicode и отказ при занятом run lock.
-- [ ] Полный repository check, расширенный Verify, Windows/Ubuntu CI и
+- [x] Полный repository check, расширенный Verify, Windows/Ubuntu CI и
       production audit; новая чистая папка/ZIP, SHA-256 и parity всех файлов.
-- [ ] Инструкция и результаты в Git; комплект и логи в ignored out/.tmp.
+- [x] Инструкция и результаты в Git; комплект и логи в ignored out/.tmp.
 
 ## Work record
 
@@ -81,4 +81,46 @@ portable-комплект и одинаковый способ настройк�
   на целевой машине остаются пользовательским smoke. Synthetic HTTP использует
   настоящий Node launcher; PowerShell проверяется через DoctorOnly и injected
   foreground launch failure. Это не подтверждение production deployment.
-- Итоговые source/merge/build SHA, CI, audit и комплект будут записаны при интеграции.
+- Итоговые source/merge/build SHA, CI, audit и комплект записаны ниже.
+
+## Интеграция и поставка 11.11.2026
+
+Принято planning после review diff, проверок и чистой поставки; центральный статус done.
+
+- [PR #22](https://github.com/obolibok/filesystem-mcp/pull/22): implementation head
+  `8eef4afbf14057390249d8d341384783f74ce4f8`, merge в main
+  `ff8b8e90e6d34b4108e729f665bb9fbe58b96b4c`.
+- [PR CI #163](https://github.com/obolibok/filesystem-mcp/actions/runs/42983280831):
+  полный check Windows/Ubuntu PASS.
+- [Main CI #164](https://github.com/obolibok/filesystem-mcp/actions/runs/42983787014):
+  attempt 1 Ubuntu PASS, Windows 597 PASS / 1 FAIL / 5 skips. Упал существующий
+  тест `keeps startup available when expired artifact deletion is temporarily blocked`:
+  `directoryBytes` в snapshot.test.ts перечислил metadata-tmp, затем получил
+  ENOENT при stat во время замены metadata. Этот test helper и job-manager в 022
+  не менялись. Запрошен rerun failed jobs без изменения кода; attempt 2 —
+  Windows/Ubuntu PASS. Проблемный сценарий дополнительно проверен локально через
+  test-name-pattern: **1/1 PASS**. Гонка test helper остаётся отдельным follow-up.
+- Чистый portable собран из main `ff8b8e90`, BUILD sourceCommit совпадает.
+  Финальный Verify на отдельной копии: **51/51 PASS**. Source и packaged
+  `npm audit --omit=dev` — **0 vulnerabilities**.
+- Проверены все dist/template/package/lock bytes, версии 85 production packages,
+  SHA256SUMS.json и отсутствие runtime data/credentials. ZIP parity всех файлов,
+  SHA-256 и CRC PASS. Прежние комплекты не перезаписывались.
+
+### Комплект
+
+- Папка: `out/Schwarzbeck-MCP-022-universal-2026-11-11/`.
+- ZIP: `out/Schwarzbeck-MCP-022-universal-2026-11-11.zip`, **69,603,761 bytes**.
+- SHA-256: `5de457e08eb28818e08a556aed6384ccb3954f2a1deb19a0212a5730741b4025`;
+  рядом sidecar `.zip.sha256`.
+- Распакованная папка: **2,833 файла, 180,030,731 bytes**. Node 24.15.0,
+  tunnel-client 0.0.14. Default transport stdio; только sample-source, пустые
+  tunnelId/runtimeApiKey/localHttp.apiKey; localHttp — loopback:8766.
+- Полные check/build/Verify/audit/QA logs остаются в ignored `.tmp/` двух checkout;
+  финальные комплект, ZIP и QA — в основном checkout. Git содержит только
+  исходники, инструкции и обезличенные результаты.
+
+Для локального агента: распаковать отдельную копию, настроить roots/scratch,
+`transport: http` и localHttp.host/port/apiKey; запускать штатный Start.ps1.
+Одинаковые roots разрешены, совместное использование scratch двумя процессами — нет.
+Сервис, рабочий туннель, firewall и антивирус на целевой машине не менялись.

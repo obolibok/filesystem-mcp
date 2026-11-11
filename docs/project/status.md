@@ -2,7 +2,7 @@
 
 Владелец — архитекторский/планирующий чат. Обновлено: 2026-11-11.
 Начать с [handover архитектору](architect-handover-2026-10-29.md).
-022 реализуется текущим planning-чатом в изолированном worktree; остальные назначенные задачи приняты.
+Все назначенные задачи приняты, активных исполнителей сейчас нет.
 Предыдущая хроника сохранена в [архиве](history/status-2026-10-29.md).
 
 | ID           | Работа                                                                                        | Статус | Зависит от         |
@@ -33,7 +33,7 @@
 | 020          | [Runtime key в portable config](../tasks/020-portable-runtime-key.md)                         | done   | 017–019            |
 | 021          | [Диагностика provenance](../tasks/021-provenance-diagnostics.md)                              | done   | 020                |
 | 005          | [Контролируемое повторение предметного исследования](../tasks/005-controlled-domain-study.md) | done   | 004, 006, 007, 008 |
-| 022          | [Единый portable для stdio и HTTP](../tasks/022-universal-portable.md)                        | active | 020, 021           |
+| 022          | [Единый portable для stdio и HTTP](../tasks/022-universal-portable.md)                        | done   | 020, 021           |
 
 proposed — направление без назначения; ready — согласованная карточка;
 active — назначен исполнитель; review — проверяемый результат; done — принят
@@ -42,6 +42,15 @@ active — назначен исполнитель; review — проверяе�
 
 ## Последняя приёмка
 
+- **022 (11.11)**: единый portable config/Start для stdio и HTTP; общий
+  roots/scratch/format/limits, отдельный HTTP key с config/prompt fallback.
+  [PR #22](https://github.com/obolibok/filesystem-mcp/pull/22), head `8eef4afb`,
+  merge/build `ff8b8e90`. [PR CI #163](https://github.com/obolibok/filesystem-mcp/actions/runs/42983280831)
+  Windows/Ubuntu PASS; [main CI #164](https://github.com/obolibok/filesystem-mcp/actions/runs/42983787014)
+  PASS после retry существующей test-helper race без изменения кода.
+  Локальный full check 590/0/13; финальный Verify **51/51 PASS**; source/packaged
+  production audit 0, ZIP parity всех 2,833 файлов PASS.
+  [Контракт, границы, комплект и SHA-256](../tasks/022-universal-portable.md).
 - **005 (07.11)**: пользователь принял предметный опыт 27–28.10 на копии архива
   предприятия. В отдельном ChatGPT-чате выполнены пять вопросов руководства:
   поиск по снапшотам, получение и анализ originals, отчёты DE/RU и расчётные
@@ -85,13 +94,14 @@ active — назначен исполнитель; review — проверяе�
 
 ## Следующие решения
 
-1. Продолжить пользовательский smoke portable 021 (включает 020): readiness,
-   ChatGPT round-trip и delivery originals/artifacts. На целевой машине уже
-   подтверждены BUILD sourceCommit, LOCAL_MCP_PASS, 13 tools/tree и заполненные
-   UUID/volume metadata для трёх roots. Пользователь наблюдает два задержанных
+1. Пользовательский smoke portable 022: прежний stdio/ChatGPT round-trip и
+   новое HTTP-подключение локального агента, originals/artifacts в его расчётную
+   среду. Для 021 на целевой машине ранее подтверждены BUILD sourceCommit,
+   LOCAL_MCP_PASS, 13 tools/tree и заполненные UUID/volume metadata трёх roots.
+   Пользователь наблюдал два задержанных
    окна Avast, warnings provenance нет; отказ helper в этом прогоне не выявлен.
    [Наблюдения и границы](../tasks/021-provenance-diagnostics.md#отдельный-preflight-на-целевой-машине-0611).
-   Для определения детекта остаются command line/parent/PID; переделка запуска не назначена.
+   Для определения детекта остаются command line/parent/PID; переделка provenance helper не назначена.
 2. Dev dependency triage: npm ci 06.11 сообщил 14 full-graph findings (12 moderate,
    2 high); source и packaged production audit --omit=dev — 0. Нужен отдельный
    подробный full audit/triage. Счётчики 3 от 29.10 и 9 до remediation 017 — история.
@@ -101,8 +111,8 @@ active — назначен исполнитель; review — проверяе�
 4. Следующий предметный эксперимент — локальная модель с файлами: сначала
    получение одного оригинального Excel через FileMCP в расчётную среду,
    затем повторение тех же пяти вопросов. Облачный опыт 005 даёт материал для
-   сравнения; старые ответы не заменяют независимый эталон. Реализация нового
-   подключения и изменения deployment пока не назначены.
+   сравнения; старые ответы не заменяют независимый эталон. HTTP launcher готов
+   в 022; клиентская передача в Python и целевой deployment ещё не проверены.
 5. Намерение воспроизвести tunnel Ctrl+C после Windows Sleep сохраняется;
    подтверждённого диагноза и назначенной задачи нет.
 
