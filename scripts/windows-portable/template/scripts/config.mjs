@@ -1,4 +1,5 @@
 import { readFile, realpath, stat } from 'node:fs/promises';
+import { isIP } from 'node:net';
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -46,7 +47,7 @@ function resolvePath(value) {
   return resolve(kit, value);
 }
 
-export async function configuration() {
+export async function configuration({ includeHttpApiKey = false } = {}) {
   const text = (await readFile(join(kit, 'config.json'), 'utf8')).replace(/^\uFEFF/, '');
   let config;
   try {
@@ -58,6 +59,32 @@ export async function configuration() {
     throw new Error('config.json must contain an object.');
   if (config.runtimeApiKey != null && typeof config.runtimeApiKey !== 'string')
     throw new Error('runtimeApiKey must be a string or null.');
+  const transport = config.transport === undefined ? 'stdio' : config.transport;
+  if (!['stdio', 'http'].includes(transport)) throw new Error('transport must be stdio or http.');
+  const http = config.localHttp === undefined ? {} : config.localHttp;
+  if (!http || typeof http !== 'object' || Array.isArray(http))
+    throw new Error('localHttp must be an object.');
+  const host = http.host === undefined ? '127.0.0.1' : http.host;
+  if (
+    typeof host !== 'string' ||
+    (host !== 'localhost' && !isIP(host)) ||
+    host === '0.0.0.0' ||
+    (isIP(host) === 6 && new URL('http://[' + host + ']').hostname === '[::]')
+  )
+    throw new Error('localHttp.host must be localhost or a concrete IP address.');
+  const port = http.port === undefined ? 8766 : http.port;
+  if (!Number.isInteger(port) || port < 1 || port > 65535)
+    throw new Error('localHttp.port must be an integer from 1 to 65535.');
+  if (http.apiKey != null && typeof http.apiKey !== 'string')
+    throw new Error('localHttp.apiKey must be a string or null.');
+  const httpApiKey = http.apiKey?.trim() ?? '';
+  if (
+    httpApiKey &&
+    (httpApiKey.length < 16 || httpApiKey.length > 4096 || /[^\x21-\x7e]/u.test(httpApiKey))
+  )
+    throw new Error(
+      'localHttp.apiKey must contain 16 to 4096 printable ASCII characters without whitespace.',
+    );
   const snapshotFormat = config.snapshotFormat ?? 'tree';
   if (config.snapshotFormat !== undefined && !['tree', 'stable'].includes(config.snapshotFormat))
     throw new Error('snapshotFormat must be tree or stable.');
@@ -101,8 +128,19 @@ export async function configuration() {
     if (!range || !Number.isSafeInteger(value) || value < range[0] || value > range[1])
       throw new Error('Unsupported or out-of-range limit: ' + key);
   }
-  const { runtimeApiKey: _runtimeApiKey, ...serverConfig } = config;
-  return { ...serverConfig, snapshotFormat, roots: [...new Set(roots)], scratchDirectory: scratch };
+  const { runtimeApiKey: _runtimeApiKey, localHttp: _localHttp, ...serverConfig } = config;
+  return {
+    ...serverConfig,
+    transport,
+    localHttp: {
+      host,
+      port,
+      ...(includeHttpApiKey && transport === 'http' ? { apiKey: httpApiKey } : {}),
+    },
+    snapshotFormat,
+    roots: [...new Set(roots)],
+    scratchDirectory: scratch,
+  };
 }
 
 export function serverEnvironment(config) {
@@ -120,4 +158,5 @@ export function serverEnvironment(config) {
   for (const [key, value] of Object.entries(config.limits)) process.env[key] = String(value);
   delete process.env.CONTROL_PLANE_API_KEY;
   delete process.env.OPENAI_API_KEY;
+  delete process.env.PORTABLE_HTTP_API_KEY;
 }

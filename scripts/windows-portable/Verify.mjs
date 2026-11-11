@@ -1,10 +1,11 @@
-import { Client } from '@modelcontextprotocol/client';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { once } from 'node:events';
 import {
   cp,
   mkdir,
@@ -17,6 +18,7 @@ import {
   symlink,
   writeFile,
 } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
@@ -60,6 +62,11 @@ await save({ ...omittedFormat, experimentalSnapshotTree: false });
 assert.equal(runCheck({ FS_SNAPSHOT_FORMAT: 'stable' }).snapshotFormat, 'tree');
 await save(original);
 reports.push('default-tree-omitted-format-and-retired-false-flag: PASS');
+const { transport: _transport, localHttp: _http, ...legacyConfig } = original;
+await save(legacyConfig);
+assert.equal(runCheck().configuredTransport, 'stdio');
+await save(original);
+reports.push('legacy-config-without-transport-or-localHttp: PASS');
 assert.equal(defaults.result, 'LOCAL_MCP_PASS');
 reports.push('relocation-space-unicode-and-foreign-cwd: PASS');
 const multi = { ...original, roots: [rootA, rootB] };
@@ -289,6 +296,7 @@ for (const phase of ['initial', 'changed', 'format-switch']) {
 }
 const configuredKey = 'sk-local-configured-placeholder-not-a-real-key';
 const promptKey = 'sk-local-doctor-placeholder-not-a-real-key';
+const httpKey = 'portable-http-synthetic-placeholder-not-a-real-key';
 const keyTypes = [false, 42, [], { secret: configuredKey }];
 const cases = [
   ['invalid-format', { ...multi, snapshotFormat: 'csv' }],
@@ -344,7 +352,7 @@ for (const [label, config] of cases) {
   reports.push(label + ': PASS');
 }
 // Only local doctor with synthetic keys; no tunnel run or cloud requests.
-function runDoctor(promptExpected) {
+function runDoctor(promptExpected, doctorOnly = true) {
   const ps = [
     "$ErrorActionPreference = 'Stop'",
     '$global:portablePromptCalls = 0',
@@ -354,8 +362,8 @@ function runDoctor(promptExpected) {
         '".ToCharArray()) { $value.AppendChar($c) }; return $value }'
       : "function Read-Host { throw 'Unexpected runtime key prompt.' }",
     'try {',
-    "& '" + join(kit, 'Start.ps1').replaceAll("'", "''") + "' -DoctorOnly",
-    '} finally { if (Test-Path Env:CONTROL_PLANE_API_KEY) { throw "Runtime key environment was not cleared." } }',
+    "& '" + join(kit, 'Start.ps1').replaceAll("'", "''") + "'" + (doctorOnly ? ' -DoctorOnly' : ''),
+    '} finally { if ((Test-Path Env:CONTROL_PLANE_API_KEY) -or (Test-Path Env:PORTABLE_HTTP_API_KEY)) { throw "Key environment was not cleared." } }',
     'if ($global:portablePromptCalls -ne ' +
       (promptExpected ? 1 : 0) +
       ') { throw "Unexpected prompt count." }',
@@ -382,7 +390,7 @@ function runDoctor(promptExpected) {
   return result.stdout;
 }
 function noKeys(text) {
-  for (const key of [configuredKey, promptKey]) assert(!String(text).includes(key));
+  for (const key of [configuredKey, promptKey, httpKey]) assert(!String(text).includes(key));
 }
 const { runtimeApiKey: _key, ...withoutKey } = multi;
 const doctorCases = [
@@ -411,6 +419,7 @@ const redactionProbe = [
     JSON.stringify(configModule) +
     ').href);',
   "const config = await configuration(); if ('runtimeApiKey' in config) throw new Error('Runtime key escaped configuration.');",
+  "if ('apiKey' in config.localHttp) throw new Error('HTTP key escaped configuration.');",
   "console.log('CONFIG_RUNTIME_KEY_REDACTION_PASS');",
 ].join('\n');
 assert(
@@ -497,6 +506,287 @@ assert.throws(
   (error) => /PID identity does not match/.test(error.stderr),
 );
 reports.push('emergency-stop-refuses-unrelated-PID: PASS');
+
+// The HTTP leg uses the same relocated kit and synthetic sources, without a tunnel.
+const reservation = createServer();
+reservation.listen(0, '127.0.0.1');
+await once(reservation, 'listening');
+const httpPort = reservation.address().port;
+await new Promise((resolve, reject) =>
+  reservation.close((error) => (error ? reject(error) : resolve())),
+);
+const httpConfig = {
+  ...capConfig,
+  transport: 'http',
+  localHttp: { host: '127.0.0.1', port: httpPort, apiKey: ' ' + httpKey + ' ' },
+  scratchDirectory: './data/http-jobs',
+};
+delete httpConfig.tunnelId;
+delete httpConfig.runtimeApiKey;
+const launcher = join(kit, 'scripts/serve.mjs');
+function effective() {
+  const output = execFileSync(node, [launcher, '--print-config', '--json'], {
+    cwd: stage,
+    encoding: 'utf8',
+    timeout: 30000,
+    windowsHide: true,
+    env: {
+      ...process.env,
+      NODE_OPTIONS: '',
+      FS_API_KEY: configuredKey,
+      FS_PORT: '39999',
+      PORTABLE_HTTP_API_KEY: '',
+    },
+  });
+  noKeys(output);
+  return JSON.parse(output);
+}
+await save({ ...httpConfig, transport: 'stdio' });
+const stdioEffective = effective();
+await save(httpConfig);
+const httpEffective = effective();
+assert.equal(stdioEffective.transport, 'stdio');
+assert.equal(httpEffective.transport, 'http://127.0.0.1:' + httpPort);
+assert.equal(stdioEffective.apiKey, null);
+assert.equal(httpEffective.apiKey, '***');
+assert.deepEqual(httpEffective.allowedRoots, stdioEffective.allowedRoots);
+assert.deepEqual(httpEffective.limits, stdioEffective.limits);
+assert.equal(httpEffective.snapshotFormat, stdioEffective.snapshotFormat);
+assert.equal(httpEffective.limits.snapshot.scratchDirectory, join(kit, 'data/http-jobs'));
+assert.equal(httpEffective.limits.snapshot.maxTreeRawPartBytes, 65536);
+assert.equal(runCheck().configuredTransport, 'http');
+reports.push('stdio-http-effective-config-parity-and-isolated-preflight: PASS');
+noKeys(
+  execFileSync(node, ['--input-type=module', '-e', redactionProbe], {
+    encoding: 'utf8',
+    windowsHide: true,
+  }),
+);
+reports.push('http-key-redacted-from-default-configuration: PASS');
+
+for (const [label, apiKey, promptExpected] of [
+  ['configured', httpKey, false],
+  ['empty', '', true],
+  ['null', null, true],
+  ['omitted', undefined, true],
+  ['whitespace', ' \t ', true],
+]) {
+  await save({ ...httpConfig, localHttp: { ...httpConfig.localHttp, apiKey } });
+  const before = await readFile(join(kit, 'config.json'), 'utf8');
+  const output = runDoctor(promptExpected);
+  assert(output.includes(httpEffective.transport));
+  assert(output.includes('"apiKey": "***"'));
+  noKeys(output);
+  assert.equal(await readFile(join(kit, 'config.json'), 'utf8'), before);
+  reports.push('PowerShell-5.1-http-doctor-' + label + '-key-no-tunnel-or-writeback: PASS');
+}
+
+await save(httpConfig);
+const binaryPath = join(capRoot, 'original.bin');
+const binary = Buffer.from([0, 255, 1, 128, 13, 10]);
+await writeFile(binaryPath, binary);
+const endpoint = 'http://127.0.0.1:' + httpPort;
+const httpArtifacts = new Map();
+let httpJobId;
+for (const phase of ['initial', 'restart']) {
+  let stderr = '';
+  const child = spawn(node, [launcher], {
+    cwd: stage,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+    env: {
+      ...process.env,
+      NODE_OPTIONS: '',
+      FS_API_KEY: configuredKey,
+      FS_SNAPSHOT_DIR: rootA,
+      FS_ALLOWED_HOSTS: 'evil.example',
+      FS_ALLOW_UNRESTRICTED_HOSTS: '1',
+    },
+  });
+  const exited = once(child, 'exit');
+  child.stdout.on('data', (chunk) => noKeys(chunk));
+  child.stderr.on('data', (chunk) => {
+    stderr = (stderr + chunk).slice(-16000);
+  });
+  const httpClient = new Client({ name: 'portable-http-acceptance', version: '1' });
+  try {
+    const deadline = Date.now() + 30000;
+    while (true) {
+      assert.equal(child.exitCode, null, stderr);
+      try {
+        const health = await fetch(endpoint + '/healthz', { signal: AbortSignal.timeout(1000) });
+        if (health.ok) break;
+      } catch {
+        /* Startup is bounded by the deadline below. */
+      }
+      assert(Date.now() < deadline, 'HTTP startup timed out: ' + stderr);
+      await delay(50);
+    }
+    const status = execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(kit, 'Status.ps1')],
+      { encoding: 'utf8', timeout: 15000, windowsHide: true },
+    );
+    assert(status.includes('HTTP MCP available: ' + endpoint + '/mcp'));
+    noKeys(status);
+    for (const token of ['', configuredKey]) {
+      const denied = await fetch(endpoint + '/mcp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+          ...(token ? { Authorization: 'Bearer ' + token } : {}),
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+      });
+      assert.equal(denied.status, 401);
+      noKeys(await denied.text());
+    }
+    await httpClient.connect(
+      new StreamableHTTPClientTransport(new URL(endpoint + '/mcp'), {
+        requestInit: { headers: { Authorization: 'Bearer ' + httpKey } },
+      }),
+    );
+    const tools = (await httpClient.listTools()).tools;
+    assert.deepEqual(tools.map((tool) => tool.name).sort(), httpEffective.tools.sort());
+    assert.equal(tools.length, 13);
+    const httpCall = async (name, args) => {
+      const response = await httpClient.callTool({ name, arguments: args });
+      assert(!response.isError, JSON.stringify(response));
+      return response;
+    };
+    assert.deepEqual(bytes(await httpCall('get_file', { path: binaryPath })), binary);
+    const submission = await httpCall('snapshot', { path: capRoot });
+    const submitted = submission.structuredContent ?? submission._meta;
+    if (phase === 'restart') {
+      assert.equal(submitted.reason, 'completed_reuse');
+      assert.equal(submitted.job.jobId, httpJobId);
+    }
+    let job = submitted.job;
+    while (['queued', 'running'].includes(job.state)) {
+      assert(Date.now() < deadline, 'HTTP snapshot timed out');
+      await delay(50);
+      const result = await httpCall('job_status', { jobId: job.jobId });
+      job = result.structuredContent ?? result._meta;
+    }
+    assert.equal(job.state, 'completed', JSON.stringify(job));
+    httpJobId = job.jobId;
+    const manifest = JSON.parse(
+      bytes(await httpCall('get_artifact', { artifactId: job.manifestArtifactId })),
+    );
+    assert.equal(manifest.layout, 'tree-depth-v1');
+    assert.equal(manifest.policy.maxRawPartBytes, 65536);
+    assert(manifest.parts.length > 1);
+    for (const part of manifest.parts) {
+      const zip = bytes(await httpCall('get_artifact', { artifactId: part.artifactId }));
+      assert.equal(createHash('sha256').update(zip).digest('hex'), part.sha256);
+      const raw = unzipSingle(zip);
+      assert.equal(raw.length, part.rawBytes);
+      assert(raw.length <= 65536);
+      if (phase === 'restart') assert.deepEqual(zip, httpArtifacts.get(part.artifactId));
+      httpArtifacts.set(part.artifactId, zip);
+    }
+    reports.push('http-auth-discovery-original-multipart-SHA-CRC-' + phase + ': PASS');
+  } finally {
+    try {
+      await httpClient.close();
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+      await exited;
+      noKeys(stderr);
+    }
+  }
+}
+
+const invalidHttp = [
+  ['transport', { ...httpConfig, transport: 'HTTP' }],
+  ['transport-null', { ...httpConfig, transport: null }],
+  ['http-object', { ...httpConfig, localHttp: null }],
+  ...['0.0.0.0', '::', '0:0:0:0:0:0:0:0', 'http://127.0.0.1', ''].map((host) => [
+    'host',
+    { ...httpConfig, localHttp: { ...httpConfig.localHttp, host } },
+  ]),
+  ...[0, 65536, '8766', 1.5].map((port) => [
+    'port',
+    { ...httpConfig, localHttp: { ...httpConfig.localHttp, port } },
+  ]),
+  ...[
+    false,
+    42,
+    [],
+    {},
+    'short',
+    'has whitespace in this key',
+    'sixteen-characters\0suffix',
+    'unicode-Антенна-key',
+  ].map((apiKey) => ['key', { ...httpConfig, localHttp: { ...httpConfig.localHttp, apiKey } }]),
+];
+for (const [label, config] of invalidHttp) {
+  await save(config);
+  assert.throws(
+    () => effective(),
+    (error) => {
+      noKeys(error.stderr);
+      return /transport must|localHttp\./.test(error.stderr) || /localHttp must/.test(error.stderr);
+    },
+    label,
+  );
+}
+reports.push('invalid-http-transport-host-port-key-types-and-values: PASS');
+await save({ ...httpConfig, localHttp: { ...httpConfig.localHttp, apiKey: '' } });
+assert.throws(
+  () => effective(),
+  (error) => /HTTP requires an API key/.test(error.stderr),
+);
+reports.push('direct-http-launch-refuses-missing-key-and-inherited-FS-key: PASS');
+
+// A post-prompt launch failure must clear the secret and release the common lock.
+const savedServe = await readFile(launcher, 'utf8');
+try {
+  await writeFile(
+    launcher,
+    "if (!process.argv.includes('--preflight')) { if (!process.env.PORTABLE_HTTP_API_KEY) process.exit(92); process.exit(23); }\n" +
+      savedServe,
+  );
+  assert.throws(
+    () => runDoctor(true, false),
+    (error) => /Local doctor failed/.test(error.message),
+  );
+} finally {
+  await writeFile(launcher, savedServe);
+}
+assert(runDoctor(true).includes('RUNTIME_KEY_CLEANUP_PASS'));
+reports.push('http-failed-launch-clears-key-and-releases-lock: PASS');
+
+// Holding the lock must prevent a second Start before it prompts for credentials.
+const lockProbe = [
+  "$ErrorActionPreference = 'Stop'",
+  "function Read-Host { throw 'UNEXPECTED_PROMPT' }",
+  "$lock = [IO.File]::Open('" +
+    join(kit, 'data/run.lock').replaceAll("'", "''") +
+    "', [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)",
+  "try { & '" +
+    join(kit, 'Start.ps1').replaceAll("'", "''") +
+    "' -DoctorOnly; throw 'START_WAS_NOT_BLOCKED' } catch { if ($_.Exception.Message -match 'UNEXPECTED_PROMPT|START_WAS_NOT_BLOCKED') { throw }; Write-Output 'RUN_LOCK_PASS' } finally { $lock.Dispose() }",
+].join('\n');
+assert(
+  execFileSync(
+    'powershell.exe',
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', lockProbe],
+    { encoding: 'utf8', timeout: 60000, windowsHide: true },
+  ).includes('RUN_LOCK_PASS'),
+);
+reports.push('http-start-refuses-concurrent-kit-run-before-prompt: PASS');
+assert.throws(
+  () =>
+    execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(kit, 'Stop.ps1'), '-Force'],
+      { encoding: 'utf8', timeout: 15000, windowsHide: true },
+    ),
+  (error) => /HTTP mode: use Ctrl\+C/.test(error.stderr),
+);
+reports.push('http-force-stop-refuses-to-touch-recorded-tunnel-PID: PASS');
 assert.equal(await readFile(join(rootB, 'sample.txt'), 'utf8'), 'synthetic B');
 const report = { result: 'PORTABLE_ACCEPTANCE_PASS', reports, kit, rootA, rootB };
 await writeFile(join(stage, 'result.json'), JSON.stringify(report, null, 2));

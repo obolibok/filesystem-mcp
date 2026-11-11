@@ -1,5 +1,14 @@
 param([switch]$Force)
 $ErrorActionPreference = 'Stop'
+try {
+  $config = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'config.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+}
+catch { throw 'Cannot read config.json: expected valid JSON.' }
+if ($config.transport -eq 'http') {
+  if ($Force) { throw 'HTTP mode: use Ctrl+C in the Start.ps1 window. Force-stop is supported only for an owned tunnel.' }
+  Write-Host 'HTTP stop: press Ctrl+C once in the Start.ps1 window and wait for shutdown.'
+  exit 0
+}
 if (-not $Force) {
   Write-Host 'Normal stop: press Ctrl+C once in the Start.ps1 window and wait up to 45 seconds.'
   Write-Host 'Only if it hangs: powershell -NoProfile -ExecutionPolicy Bypass -File .\Stop.ps1 -Force'

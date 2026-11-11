@@ -25,6 +25,17 @@
 
 ## Возможности
 
+### Portable launcher
+
+Windows-комплект выбирает `transport` в config.json: stdio по умолчанию для
+туннеля ChatGPT, http явно для локального MCP-клиента. Общий serve.mjs применяет
+roots/boundary, scratch, snapshot format и limits; прямой CLI config.json не читает.
+HTTP использует отдельный localHttp.apiKey; runtimeApiKey относится к туннелю.
+Start.ps1 поддерживает скрытый ввод без записи. Файловый preflight остаётся stdio
+с отдельным scratch, не открывает listener и не доказывает HTTP/client delivery.
+Оба режима read-only. Одновременным процессам нужны отдельные папки/scratch.
+Контракт и проверка поставки — [022](../tasks/022-universal-portable.md).
+
 ### Граница guarded file I/O
 
 `PathGuard` проверяет lexical/resolved roots и sensitive policy; возвращаемая
