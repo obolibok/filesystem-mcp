@@ -69,6 +69,17 @@ await save(original);
 reports.push('legacy-config-without-transport-or-localHttp: PASS');
 assert.equal(defaults.result, 'LOCAL_MCP_PASS');
 reports.push('relocation-space-unicode-and-foreign-cwd: PASS');
+await save({ ...original, catalogEnabled: true });
+const catalog = runCheck({ FS_CATALOG_ENABLED: '0' });
+assert.equal(catalog.catalogEnabled, true);
+assert(catalog.tools.includes('index_root') && catalog.tools.includes('search_index'));
+assert(
+  catalog.rootResponse.structuredContent.rootDetails.every(
+    (root) => root.catalog.indexed === false,
+  ),
+);
+await save(original);
+reports.push('catalog-preflight-isolated-and-config-controlled: PASS');
 const multi = { ...original, roots: [rootA, rootB] };
 await save(multi);
 const result = runCheck({
@@ -518,6 +529,7 @@ await new Promise((resolve, reject) =>
 const httpConfig = {
   ...capConfig,
   transport: 'http',
+  catalogEnabled: true,
   localHttp: { host: '127.0.0.1', port: httpPort, apiKey: ' ' + httpKey + ' ' },
   scratchDirectory: './data/http-jobs',
 };
@@ -588,6 +600,7 @@ await writeFile(binaryPath, binary);
 const endpoint = 'http://127.0.0.1:' + httpPort;
 const httpArtifacts = new Map();
 let httpJobId;
+let httpCatalogVersion;
 for (const phase of ['initial', 'restart']) {
   let stderr = '';
   const child = spawn(node, [launcher], {
@@ -649,7 +662,7 @@ for (const phase of ['initial', 'restart']) {
     );
     const tools = (await httpClient.listTools()).tools;
     assert.deepEqual(tools.map((tool) => tool.name).sort(), httpEffective.tools.sort());
-    assert.equal(tools.length, 13);
+    assert.equal(tools.length, 15);
     const httpCall = async (name, args) => {
       const response = await httpClient.callTool({ name, arguments: args });
       assert(!response.isError, JSON.stringify(response));
@@ -677,6 +690,30 @@ for (const phase of ['initial', 'restart']) {
     assert.equal(manifest.layout, 'tree-depth-v1');
     assert.equal(manifest.policy.maxRawPartBytes, 65536);
     assert(manifest.parts.length > 1);
+    const anotherClient = new Client({ name: 'portable-http-catalog-reader', version: '1' });
+    try {
+      await anotherClient.connect(
+        new StreamableHTTPClientTransport(new URL(endpoint + '/mcp'), {
+          requestInit: { headers: { Authorization: 'Bearer ' + httpKey } },
+        }),
+      );
+      const response = await anotherClient.callTool({
+        name: 'search_index',
+        arguments: { path: capRoot, name: 'original.bin' },
+      });
+      assert(!response.isError, JSON.stringify(response));
+      const catalog = response.structuredContent ?? response._meta;
+      assert.deepEqual(
+        catalog.entries.map((entry) => entry.name),
+        ['original.bin'],
+      );
+      assert.deepEqual({ ...catalog.observed, atomic: false }, manifest.observed);
+      if (phase === 'restart') assert.equal(catalog.version, httpCatalogVersion);
+      httpCatalogVersion = catalog.version;
+      reports.push('http-catalog-visible-to-another-client-' + phase + ': PASS');
+    } finally {
+      await anotherClient.close();
+    }
     for (const part of manifest.parts) {
       const zip = bytes(await httpCall('get_artifact', { artifactId: part.artifactId }));
       assert.equal(createHash('sha256').update(zip).digest('hex'), part.sha256);

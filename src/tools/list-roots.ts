@@ -3,6 +3,7 @@ import * as z from 'zod/v4';
 import { NO_POSITIONAL_ROOTS_GUIDANCE } from '../core/config.js';
 import { ErrorCode } from '../core/errors.js';
 import { HostSchema, RootDetailsSchema, sourceProvenance } from '../core/source-provenance.js';
+import { CatalogStatusSchema } from './catalog.js';
 import { defineTool } from './define.js';
 
 const RootsInputSchema = z.strictObject({});
@@ -10,7 +11,7 @@ const RootsInputSchema = z.strictObject({});
 const RootsOutputSchema = z.strictObject({
   roots: z.array(z.string()).describe('Absolute paths of the allowed workspace root directories'),
   host: HostSchema,
-  rootDetails: z.array(RootDetailsSchema),
+  rootDetails: z.array(RootDetailsSchema.extend({ catalog: CatalogStatusSchema.optional() })),
   hint: z
     .string()
     .optional()
@@ -42,10 +43,16 @@ export const LIST_ROOTS = defineTool({
     // and the elicitation route out — call a tool with a concrete path and
     // approve the grant — appears in no tool description. It is conditional
     // because a configured server pays nothing to be told how to configure.
+    const { host, rootDetails } = await sourceProvenance.describeRoots(dirs);
+    const catalogs = await ctx.jobManager.catalog?.describeRoots(ctx.fs, dirs);
     return {
       structured: {
         roots: [...dirs],
-        ...(await sourceProvenance.describeRoots(dirs)),
+        host,
+        rootDetails: rootDetails.map((root, i) => ({
+          ...root,
+          ...(catalogs?.[i] ? { catalog: catalogs[i] } : {}),
+        })),
         ...(dirs.length === 0 ? { hint: NO_POSITIONAL_ROOTS_GUIDANCE } : {}),
       },
     };

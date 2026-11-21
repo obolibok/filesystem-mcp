@@ -89,7 +89,7 @@ export interface StoredJob<Counters extends JobCounters = SnapshotCounters> {
   readonly idempotencyKey?: string;
   readonly fingerprint: string;
   /** Snapshot-only identity for automatic reuse, including traversal policy and format. */
-  readonly reuseFingerprint?: string;
+  reuseFingerprint?: string;
   readonly policyFingerprint?: string;
   readonly configFingerprint?: string;
   /** Snapshot-only identity of the caller's retry parameters. */
@@ -106,6 +106,8 @@ export interface StoredJob<Counters extends JobCounters = SnapshotCounters> {
   phase: string;
   readonly createdAt: string;
   startedAt?: string;
+  /** Source walk start for a snapshot exported from an earlier observation. */
+  observationStartedAt?: string;
   finishedAt?: string;
   resultExpiresAt?: string;
   resultExpired?: boolean;

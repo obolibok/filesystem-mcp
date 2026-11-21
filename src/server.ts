@@ -160,6 +160,7 @@ export async function createServer(
   // the root resolution per request and race a concurrent `applyGrant`, which
   // commits under a mutation lock this call does not take.
   if (!pathGuard.isInitialized()) await pathGuard.recomputeAllowedDirectories();
+  if (jobManager.catalog) await pathGuard.protectScratchDirectory(jobManager.scratchDirectory);
 
   const deps = {
     server,

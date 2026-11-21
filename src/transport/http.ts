@@ -292,6 +292,14 @@ export async function startHttpServer(
   // this ever serves more than one credential.
   const sharedPathGuard = new PathGuard(options);
   await sharedPathGuard.recomputeAllowedDirectories();
+  if (sharedJobManager.catalog) {
+    try {
+      await sharedPathGuard.protectScratchDirectory(sharedJobManager.scratchDirectory);
+    } catch (error) {
+      await sharedJobManager.close();
+      throw error;
+    }
+  }
 
   const modernHandler: McpHttpHandler = createMcpHandler(
     async ({ era }) => {
