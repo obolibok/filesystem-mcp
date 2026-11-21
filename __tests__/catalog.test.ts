@@ -12,6 +12,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { mergeTrees, verifyTreeZip } from '../scripts/snapshot-benchmark/verify-tree.mjs';
 import { verifySnapshotZip } from '../scripts/snapshot-benchmark/verify.mjs';
 import { FileCatalog } from '../src/core/catalog.js';
+import { isNodeError } from '../src/core/errors.js';
 import { GuardedFileSystem } from '../src/core/fs.js';
 import { normalizePath } from '../src/core/path-utils.js';
 import { getSnapshotConfig } from '../src/core/snapshot-config.js';
@@ -145,8 +146,16 @@ test(
     const scratch = join(base, 'Private Jobs');
     await mkdir(join(scope, 'a', 'empty'), { recursive: true });
     const report = join(scope, 'a', 'Report, Ω.DAT');
+    const lowercaseReport = join(scope, 'a', 'report, Ω.DAT');
     await writeFile(report, 'old');
     await utimes(report, new Date('2024-01-02T03:04:05Z'), new Date('2024-01-02T03:04:05Z'));
+    const distinctCase = await writeFile(lowercaseReport, 'different file', { flag: 'wx' }).then(
+      () => true,
+      (error: unknown) => {
+        if (isNodeError(error) && error.code === 'EEXIST') return false;
+        throw error;
+      },
+    );
     await writeFile(join(scope, 'a-file.txt'), 'neighbor');
     await writeFile(join(scope, '.hidden'), 'hidden');
     await writeFile(join(scope, 'omit.log'), 'ignored');
@@ -166,6 +175,7 @@ test(
       JSON.stringify(['a', 'empty']),
       JSON.stringify(['a', 'Report, Ω.DAT']),
       JSON.stringify(['a-file.txt']),
+      ...(distinctCase ? [JSON.stringify(['a', 'report, Ω.DAT'])] : []),
     ].sort();
     const live = await createStdioClient(
       root,
@@ -198,11 +208,14 @@ test(
         hits.entries.map((entry) => entry.path),
         [normalizePath(report)],
       );
-      const wrongCase = await call<SearchResult>(first.client, 'search_index', {
+      const lower = await call<SearchResult>(first.client, 'search_index', {
         path: scope,
         name: 'report, Ω.DAT',
       });
-      assert.deepEqual(wrongCase.entries, []);
+      assert.deepEqual(
+        lower.entries.map((entry) => entry.path),
+        distinctCase ? [normalizePath(lowercaseReport)] : [],
+      );
       observed = hits.observed;
       version = hits.version;
       assert.deepEqual(result.manifest.observed, { ...observed, atomic: false });
@@ -241,7 +254,11 @@ test(
       const paths = (
         await Promise.all(stable.archives.map((zip) => verifySnapshotZip(zip, true)))
       ).flatMap((part) => [...part.paths]);
-      assert.deepEqual(paths.sort(), ['a-file.txt', 'a/Report, Ω.DAT']);
+      assert.deepEqual(paths.sort(), [
+        'a-file.txt',
+        'a/Report, Ω.DAT',
+        ...(distinctCase ? ['a/report, Ω.DAT'] : []),
+      ]);
       assert.equal(
         (await bytes(restarted.client, 'get_file', { path: report })).toString(),
         'current bytes',

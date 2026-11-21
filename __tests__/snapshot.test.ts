@@ -185,6 +185,15 @@ async function waitForTerminal(
   }
 }
 
+/** Disk-accounting probes must wait for the atomic metadata replacement. */
+async function waitForStoredTerminal(
+  manager: ArtifactJobManager,
+  jobId: string,
+): Promise<StoredJob> {
+  const path = join(manager.jobDirectory(jobId), 'job.json');
+  return waitForTerminal(async () => JSON.parse(await readFile(path, 'utf8')) as StoredJob);
+}
+
 function deferred(): { promise: Promise<void>; release: () => void } {
   let release = (): void => {};
   const promise = new Promise<void>((resolve) => {
@@ -1664,7 +1673,6 @@ describe('snapshot jobs and artifacts', () => {
   it('serializes concurrent expiry cleanup without undercounting scratch usage', async () => {
     const root = await createTestRoot();
     const scratch = await createTestRoot();
-    const guard = await makeGuard([root]);
     const quota = 1024 * 1024;
     const artifactBytes = Buffer.alloc(256 * 1024, 0x61);
     const now = Date.now();
@@ -1722,7 +1730,7 @@ describe('snapshot jobs and artifacts', () => {
           return randomUUID();
         },
       });
-      const failed = await waitForTerminal(() => manager.getJob(probe.job.jobId, guard));
+      const failed = await waitForStoredTerminal(manager, probe.job.jobId);
       assert.equal(failed.state, 'failed');
       assert.match(failed.stopReason ?? '', /scratch quota/u);
       assert((await directoryBytes(scratch)) + reservation > quota);
@@ -1899,10 +1907,7 @@ describe('snapshot jobs and artifacts', () => {
             return randomUUID();
           },
         });
-        assert.equal(
-          (await waitForTerminal(() => manager.getJob(ordinary.job.jobId, guard))).state,
-          'completed',
-        );
+        assert.equal((await waitForStoredTerminal(manager, ordinary.job.jobId)).state, 'completed');
 
         const onDiskBeforeProbe = await directoryBytes(scratch);
         const reservation = quota - onDiskBeforeProbe + 4096;
