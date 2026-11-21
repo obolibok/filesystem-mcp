@@ -261,6 +261,16 @@ async function assertScratchHasNoLinks(path: string): Promise<void> {
   }
 }
 
+async function resolveScratchDestination(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    const parent = dirname(path);
+    if (parent === path || !isNodeError(error) || error.code !== 'ENOENT') throw error;
+    return join(await resolveScratchDestination(parent), basename(path));
+  }
+}
+
 export function fingerprintJobInput(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
@@ -391,9 +401,13 @@ export class ArtifactJobManager {
     return this.#scratchDirectory;
   }
 
-  async initialize(): Promise<void> {
-    this.#initialized ??= this.#initialize();
-    return this.#initialized;
+  async initialize(guard?: PathGuard): Promise<void> {
+    if (!this.#initialized && this.#closed) {
+      throw new FsError(ErrorCode.CANCELLED, 'Job manager is closed');
+    }
+    this.#initialized ??= this.#initialize(guard);
+    await this.#initialized;
+    if (guard && this.#catalog) await guard.protectScratchDirectory(this.#scratchDirectory);
   }
 
   /** Captured settings that can change snapshot traversal or published artifact shape. */
@@ -416,14 +430,19 @@ export class ArtifactJobManager {
     });
   }
 
-  async #initialize(): Promise<void> {
+  async #initialize(guard?: PathGuard): Promise<void> {
     const requestedScratch = this.config.scratchDirectory;
     await assertScratchHasNoLinks(requestedScratch);
+    const catalogGuard = this.config.catalogEnabled ? guard : undefined;
+    if (catalogGuard) {
+      await catalogGuard.protectScratchDirectory(await resolveScratchDestination(requestedScratch));
+    }
     await mkdir(requestedScratch, { recursive: true, mode: 0o700 });
     await assertScratchHasNoLinks(requestedScratch);
     // Windows 8.3 names are valid spellings, not links. Use their canonical path
     // for every later storage operation and comparison with guarded source paths.
     this.#scratchDirectory = await realpath(requestedScratch);
+    await catalogGuard?.protectScratchDirectory(this.#scratchDirectory);
     let entries: Dirent[];
     try {
       entries = await readdir(this.#scratchDirectory, { withFileTypes: true });
@@ -435,13 +454,21 @@ export class ArtifactJobManager {
         error,
       );
     }
-    for (const entry of entries) {
-      if (!entry.isDirectory() || !JOB_ID_RE.test(entry.name)) continue;
-      await this.#loadJob(entry.name);
+    // The catalog's exclusive lock also precedes any job recovery writes.
+    // A competing catalog process must leave the owner's active jobs alone.
+    const catalog = this.config.catalogEnabled
+      ? await FileCatalog.open(this.#scratchDirectory, this.config)
+      : undefined;
+    try {
+      for (const entry of entries) {
+        if (!entry.isDirectory() || !JOB_ID_RE.test(entry.name)) continue;
+        await this.#loadJob(entry.name);
+      }
+    } catch (error) {
+      await catalog?.close();
+      throw error;
     }
-    if (this.config.catalogEnabled) {
-      this.#catalog = await FileCatalog.open(this.#scratchDirectory, this.config);
-    }
+    this.#catalog = catalog;
     this.#cleanupTimer = setInterval(() => {
       void this.cleanupExpired().catch((error: unknown) => {
         Logger.warn(`Snapshot cleanup failed: ${formatUnknownErrorMessage(error)}`);
@@ -1350,7 +1377,11 @@ export class ArtifactJobManager {
   }
 
   async close(): Promise<void> {
-    await this.initialize();
+    if (!this.#initialized) {
+      this.#closed = true;
+      return;
+    }
+    await this.#initialized;
     if (this.#closed) return;
     this.#closed = true;
     if (this.#cleanupTimer) clearInterval(this.#cleanupTimer);

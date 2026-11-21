@@ -3,7 +3,17 @@ import type { Client } from '@modelcontextprotocol/client';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, delimiter, join } from 'node:path';
 import { test } from 'node:test';
@@ -14,6 +24,7 @@ import { verifySnapshotZip } from '../scripts/snapshot-benchmark/verify.mjs';
 import { FileCatalog } from '../src/core/catalog.js';
 import { isNodeError } from '../src/core/errors.js';
 import { GuardedFileSystem } from '../src/core/fs.js';
+import { ArtifactJobManager, fingerprintJobInput } from '../src/core/job-manager.js';
 import { normalizePath } from '../src/core/path-utils.js';
 import { getSnapshotConfig } from '../src/core/snapshot-config.js';
 import { createStdioClient, makeGuard } from './helpers.js';
@@ -134,6 +145,65 @@ async function tree(client: Client, path: string, extra: Record<string, unknown>
   );
   return { manifest, nodes: mergeTrees(parts) };
 }
+
+test(
+  'catalog startup keeps active job files with the scratch owner',
+  { timeout: 15_000 },
+  async (t) => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'filemcp-catalog-owner-')));
+    t.after(() => rm(base, { recursive: true, force: true }));
+    const root = join(base, 'Source Archive');
+    const scratch = join(base, 'Private Jobs');
+    await mkdir(root);
+    const guard = await makeGuard([root]);
+    const config = {
+      ...getSnapshotConfig(),
+      catalogEnabled: true,
+      scratchDirectory: scratch,
+      ephemeralScratch: false,
+    };
+    const nested = join(root, 'New Scratch');
+    const overlapping = new ArtifactJobManager({ ...config, scratchDirectory: nested });
+    await assert.rejects(
+      () => overlapping.initialize(guard),
+      /scratch and allowed roots must be disjoint/u,
+    );
+    await assert.rejects(() => stat(nested), { code: 'ENOENT' });
+
+    const owner = new ArtifactJobManager(config);
+    const workerReady = Promise.withResolvers<string>();
+    const finish = Promise.withResolvers<string>();
+    try {
+      await owner.initialize(guard);
+      const submitted = await owner.submit({
+        kind: 'snapshot',
+        fingerprint: fingerprintJobInput(root),
+        sourceRoot: root,
+        sourceRootId: 'owner-test',
+        input: {},
+        run: async (ctx) => {
+          const partial = ctx.tempPath('owner-test.zip');
+          await writeFile(partial, 'unpublished');
+          workerReady.resolve(partial);
+          return finish.promise;
+        },
+      });
+      const partial = await workerReady.promise;
+      const jobFile = join(owner.jobDirectory(submitted.job.jobId), 'job.json');
+      const before = await readFile(jobFile);
+      const contender = new ArtifactJobManager(config);
+      await assert.rejects(
+        () => contender.initialize(guard),
+        /Cannot open the local catalog database/u,
+      );
+      assert.deepEqual(await readFile(jobFile), before);
+      assert.equal(await readFile(partial, 'utf8'), 'unpublished');
+    } finally {
+      finish.resolve('test-ended');
+      await owner.close();
+    }
+  },
+);
 
 test(
   'built MCP exports a cold subtree and reads the saved generation after restart',

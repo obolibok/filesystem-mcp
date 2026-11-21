@@ -150,7 +150,6 @@ export async function createServer(
     });
   const pageStore = extraDeps?.pageStore ?? new PageSnapshotStore();
   const jobManager = extraDeps?.jobManager ?? new ArtifactJobManager();
-  await jobManager.initialize();
 
   const pathGuard = extraDeps?.pathGuard ?? new PathGuard(options);
   // Recompute once per guard, keyed on the guard's own state rather than on
@@ -160,7 +159,7 @@ export async function createServer(
   // the root resolution per request and race a concurrent `applyGrant`, which
   // commits under a mutation lock this call does not take.
   if (!pathGuard.isInitialized()) await pathGuard.recomputeAllowedDirectories();
-  if (jobManager.catalog) await pathGuard.protectScratchDirectory(jobManager.scratchDirectory);
+  await jobManager.initialize(pathGuard);
 
   const deps = {
     server,

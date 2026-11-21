@@ -193,7 +193,7 @@ export class FileCatalog {
 
   private enqueue(fs: GuardedFileSystem, target: CatalogTarget): Request {
     this.shutdown.signal.throwIfAborted();
-    if (this.pending.size >= 1 + this.config.maxQueuedJobs) {
+    if (!this.hasQueueRoom()) {
       throw new FsError(ErrorCode.TOO_LARGE, 'Catalog indexing queue is full');
     }
     const request: Request = {
@@ -207,6 +207,10 @@ export class FileCatalog {
     this.pending.set(target.root, request);
     this.worker ??= this.drain();
     return request;
+  }
+
+  private hasQueueRoom(): boolean {
+    return this.pending.size < 1 + this.config.maxQueuedJobs;
   }
 
   private async collect(): Promise<void> {
@@ -383,7 +387,9 @@ export class FileCatalog {
           ageAtRequest <= plan.maxAgeMs));
     if (!fresh) {
       ctx.signal.throwIfAborted();
-      const request = this.pending.get(target.root) ?? this.enqueue(fs, target);
+      const pending = this.pending.get(target.root);
+      if (!pending && !this.hasQueueRoom()) return undefined;
+      const request = pending ?? this.enqueue(fs, target);
       if (!(await withAbort(request.completion.promise, ctx.signal))) return undefined;
       await fs.pathGuard.assertNoSymlinkComponents(target.root, ctx.job.sourceRoot, ctx.signal);
       if ((await fs.pathGuard.snapshotPolicyFingerprint()) !== ctx.job.policyFingerprint)
