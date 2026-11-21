@@ -35,6 +35,7 @@
 | 005          | [Контролируемое повторение предметного исследования](../tasks/005-controlled-domain-study.md) | done   | 004, 006, 007, 008 |
 | 022          | [Единый portable для stdio и HTTP](../tasks/022-universal-portable.md)                        | done   | 020, 021           |
 | 023          | [Постоянный файловый каталог](../tasks/023-persistent-file-catalog.md)                        | done   | 006, 015, 018, 022 |
+| 024          | [Защищённые элементы при индексации](../tasks/024-catalog-protected-entries.md)               | active | 023                |
 
 proposed — направление без назначения; ready — согласованная карточка;
 active — назначен исполнитель; review — проверяемый результат; done — принят
