@@ -177,6 +177,7 @@ test(
       await owner.initialize(guard);
       const submitted = await owner.submit({
         kind: 'snapshot',
+        idempotencyKey: 'catalog-owner-test',
         fingerprint: fingerprintJobInput(root),
         sourceRoot: root,
         sourceRootId: 'owner-test',
