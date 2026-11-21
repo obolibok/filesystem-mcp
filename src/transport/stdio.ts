@@ -132,7 +132,6 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
   const jobManager = new ArtifactJobManager();
   const factory: McpServerFactory = async ({ era }) => {
     await ensurePathGuard();
-    await jobManager.initialize();
     const c = await createServer(options, {
       watcherRegistry: registry,
       pathGuard,

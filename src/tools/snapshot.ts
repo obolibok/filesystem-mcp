@@ -75,12 +75,22 @@ function snapshotTool(tree: boolean) {
       };
       const policyFingerprint = await ctx.fs.pathGuard.snapshotPolicyFingerprint();
       const configFingerprint = ctx.jobManager.snapshotConfigFingerprint(tree);
-      const automaticFingerprint = fingerprintJobInput({
-        version: 2,
-        ...normalized,
-        policyFingerprint,
-        configFingerprint,
-      });
+      const catalog = ctx.jobManager.catalog;
+      const plan = await catalog?.planSnapshot(
+        ctx.fs,
+        sourceRoot,
+        normalized,
+        args.maxAgeMs,
+        args.forceRefresh,
+      );
+      const automaticFingerprint = (generation?: string): string =>
+        fingerprintJobInput({
+          version: 2,
+          ...normalized,
+          policyFingerprint,
+          configFingerprint,
+          ...(generation ? { catalog: generation } : {}),
+        });
       const requestFingerprint = fingerprintJobInput({
         ...normalized,
         maxAgeMs: args.maxAgeMs,
@@ -93,7 +103,7 @@ function snapshotTool(tree: boolean) {
         ...(args.idempotencyKey ? { idempotencyKey: args.idempotencyKey } : {}),
         fingerprint: fingerprintJobInput(normalized),
         automaticReuse: {
-          fingerprint: automaticFingerprint,
+          fingerprint: automaticFingerprint(plan?.fingerprint),
           policyFingerprint,
           configFingerprint,
           requestFingerprint,
@@ -109,18 +119,21 @@ function snapshotTool(tree: boolean) {
           ...(tree ? { layout: 'tree-depth-v1' } : {}),
         },
         run: async (runCtx) => {
+          if (plan && catalog) {
+            const artifact = await catalog.exportSnapshot(
+              plan,
+              workerFs,
+              runCtx,
+              normalized,
+              (id) => {
+                runCtx.job.reuseFingerprint = automaticFingerprint(id);
+              },
+            );
+            if (artifact) return artifact;
+          }
           runCtx.job.provenance = await sourceProvenance.capture(sourceRoot);
           await runCtx.checkpoint();
-          return runSnapshotPipeline(
-            workerFs,
-            sourceRoot,
-            {
-              includeHidden: args.includeHidden,
-              includeIgnored: args.includeIgnored,
-              ...(tree ? { layout: 'tree-depth-v1' as const } : {}),
-            },
-            runCtx,
-          );
+          return runSnapshotPipeline(workerFs, sourceRoot, normalized, runCtx);
         },
       });
       const value = {

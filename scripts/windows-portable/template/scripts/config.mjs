@@ -88,6 +88,8 @@ export async function configuration({ includeHttpApiKey = false } = {}) {
   const snapshotFormat = config.snapshotFormat ?? 'tree';
   if (config.snapshotFormat !== undefined && !['tree', 'stable'].includes(config.snapshotFormat))
     throw new Error('snapshotFormat must be tree or stable.');
+  if (config.catalogEnabled !== undefined && typeof config.catalogEnabled !== 'boolean')
+    throw new Error('catalogEnabled must be a boolean.');
   if (
     config.experimentalSnapshotTree !== undefined &&
     typeof config.experimentalSnapshotTree !== 'boolean'
@@ -138,6 +140,7 @@ export async function configuration({ includeHttpApiKey = false } = {}) {
       ...(includeHttpApiKey && transport === 'http' ? { apiKey: httpApiKey } : {}),
     },
     snapshotFormat,
+    catalogEnabled: config.catalogEnabled ?? false,
     roots: [...new Set(roots)],
     scratchDirectory: scratch,
   };
@@ -155,6 +158,7 @@ export function serverEnvironment(config) {
   process.env.FS_ROOT_BOUNDARY = config.roots.join(delimiter);
   process.env.FS_SNAPSHOT_DIR = config.scratchDirectory;
   process.env.FS_SNAPSHOT_FORMAT = config.snapshotFormat;
+  if (config.catalogEnabled) process.env.FS_CATALOG_ENABLED = '1';
   for (const [key, value] of Object.entries(config.limits)) process.env[key] = String(value);
   delete process.env.CONTROL_PLANE_API_KEY;
   delete process.env.OPENAI_API_KEY;

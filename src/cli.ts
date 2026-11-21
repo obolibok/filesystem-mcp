@@ -239,8 +239,12 @@ export async function runPrintConfig(options: {
   await pathGuard.recomputeAllowedDirectories();
   const allowedRoots = pathGuard.getAllowedDirectories();
 
-  const tools = registeredTools(options.readOnly).map((t) => t.name);
   const snapshot = getSnapshotConfig();
+  const tools = registeredTools(
+    options.readOnly,
+    snapshot.snapshotFormat,
+    snapshot.catalogEnabled,
+  ).map((t) => t.name);
 
   // Derived, never assumed: `--print-config --port 3000` reports the HTTP bind
   // that `--port` would actually have started, not the stdio default.

@@ -83,6 +83,14 @@ list_roots в новом чате. При нескольких roots перед�
 строки; неверный тип или значение останавливает Check/Start до запуска MCP.
 После изменения нужен restart. Inherited FS_SNAPSHOT_FORMAT игнорируется.
 
+`"catalogEnabled": true` включает общий SQLite-каталог в `catalog.sqlite` внутри
+`scratchDirectory`. Выберите отдельный локальный scratch для каждого процесса.
+`list_roots` показывает версию и время индекса, `index_root` ставит корень в
+очередь, `search_index` ищет по метаданным. Обычный `snapshot` может выгрузить
+корень или подходящую подпапку через тот же manifest и ZIP. При отсутствии
+индекса он запрашивает обход корня. Каталог сохраняется при перезапуске.
+Когда поле отсутствует или равно `false`, действуют прежние настройки snapshot.
+
 Прежнее boolean поле experimentalSnapshotTree ещё принимается, но не влияет
 на формат. False/отсутствие поля тоже выбирает tree, если snapshotFormat не задан.
 Отдельный snapshot_tree удалён; FS_EXPERIMENTAL_SNAPSHOT_TREE больше не включает

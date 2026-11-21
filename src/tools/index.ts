@@ -7,6 +7,7 @@ import { getSnapshotFormat, type SnapshotFormat } from '../core/snapshot-config.
 import type { ResourceStore } from '../core/store.js';
 import { BUNDLE } from './bundle.js';
 import { CANCEL_JOB } from './cancel-job.js';
+import { INDEX_ROOT, SEARCH_INDEX } from './catalog.js';
 import { CREATE } from './create.js';
 import type { DefinedTool } from './define.js';
 import { DELETE } from './delete.js';
@@ -57,9 +58,10 @@ export const MUTATING_TOOL_NAMES = new Set(
 export function registeredTools(
   readOnly: boolean,
   snapshotFormat: SnapshotFormat = getSnapshotFormat(),
+  catalogEnabled = false,
 ): readonly DefinedTool[] {
   const tools = readOnly ? ALL_TOOLS.filter((t) => !MUTATING_TOOL_NAMES.has(t.name)) : ALL_TOOLS;
-  return tools.map((tool) =>
+  return [...tools, ...(catalogEnabled ? [INDEX_ROOT, SEARCH_INDEX] : [])].map((tool) =>
     tool === SNAPSHOT && snapshotFormat === 'stable' ? STABLE_SNAPSHOT : tool,
   );
 }
@@ -106,6 +108,7 @@ export function registerTools(deps: ToolRegistrarDeps): void {
   for (const tool of registeredTools(
     deps.readOnly ?? false,
     deps.jobManager.config.snapshotFormat,
+    deps.jobManager.config.catalogEnabled,
   )) {
     tool.register(toolDeps);
   }

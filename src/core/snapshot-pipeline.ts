@@ -13,7 +13,6 @@ import { ErrorCode, FsError, isFsError, isNodeError } from './errors.js';
 import type { GuardedFileSystem } from './fs.js';
 import type { JobRunContext } from './job-manager.js';
 import type { SnapshotCounters, StoredArtifact } from './job-types.js';
-import { toPosixRelative } from './path.js';
 import { getMaxTextFileSize } from './util.js';
 
 export const SNAPSHOT_CSV_HEADER = 'RootId,RelativePath,Name,Extension,Length,LastWriteTime\r\n';
@@ -28,6 +27,21 @@ export interface SnapshotTreeRecord {
 }
 
 type WalkRecord = SnapshotRecord | SnapshotTreeRecord;
+
+export interface SnapshotWalkContext {
+  readonly signal: AbortSignal;
+  readonly maxWalkDepth: number;
+  readonly sourceRootId: string;
+  readonly counters: SnapshotCounters;
+  readonly skipRedirectedDirectories?: boolean;
+  isScratchPath(path: string): boolean;
+  addError(error: unknown, path: string): void;
+  directoryFinished?(
+    relativePath: string,
+    counters: SnapshotCounters,
+    inheritedIgnore: boolean,
+  ): void;
+}
 
 export interface SnapshotRecord {
   readonly rootId: string;
@@ -200,7 +214,7 @@ function isRecoverableWalkError(error: unknown): boolean {
   );
 }
 
-function classifyWalkError(ctx: JobRunContext, error: unknown, path: string): void {
+function classifyWalkError(ctx: SnapshotWalkContext, error: unknown, path: string): void {
   ctx.signal.throwIfAborted();
   if (!isRecoverableWalkError(error)) throw error;
   const code = error instanceof FsError ? error.code : isNodeError(error) ? error.code : undefined;
@@ -212,9 +226,9 @@ function classifyWalkError(ctx: JobRunContext, error: unknown, path: string): vo
     code === 'ENOTDIR' ||
     code === 'EISDIR'
   ) {
-    snapshotCounters(ctx).disappearedSkipped += 1;
+    ctx.counters.disappearedSkipped += 1;
   } else {
-    snapshotCounters(ctx).inaccessibleSkipped += 1;
+    ctx.counters.inaccessibleSkipped += 1;
   }
   ctx.addError(error, path);
 }
@@ -223,7 +237,7 @@ async function loadLocalIgnore(
   fs: GuardedFileSystem,
   directory: string,
   relativeDirectory: string,
-  ctx: JobRunContext,
+  ctx: SnapshotWalkContext,
 ): Promise<IgnoreRule | undefined> {
   const path = join(directory, '.gitignore');
   try {
@@ -248,11 +262,11 @@ async function loadLocalIgnore(
   }
 }
 
-async function* walkSnapshotRecords(
+export async function* walkSnapshotRecords(
   fs: GuardedFileSystem,
   root: string,
   options: SnapshotWalkOptions,
-  ctx: JobRunContext,
+  ctx: SnapshotWalkContext,
 ): AsyncGenerator<WalkRecord> {
   async function* walkDirectory(
     absoluteDirectory: string,
@@ -266,33 +280,35 @@ async function* walkSnapshotRecords(
       name: basename(absoluteDirectory),
     });
     ctx.signal.throwIfAborted();
-    if (depth > ctx.config.maxWalkDepth) {
+    if (depth > ctx.maxWalkDepth) {
       throw new FsError(
         ErrorCode.TOO_LARGE,
-        `Snapshot walk depth exceeds configured cap ${String(ctx.config.maxWalkDepth)}`,
+        `Snapshot walk depth exceeds configured cap ${String(ctx.maxWalkDepth)}`,
         absoluteDirectory,
       );
     }
     let directory;
     try {
-      ({ directory } = await fs.opendir(absoluteDirectory, { signal: ctx.signal }));
+      const opened = await fs.opendir(absoluteDirectory, { signal: ctx.signal });
+      if (ctx.skipRedirectedDirectories && opened.validPath !== absoluteDirectory) {
+        await opened.directory.close();
+        throw new FsError(ErrorCode.ACCESS_DENIED, 'Source directory changed during catalog walk');
+      }
+      directory = opened.directory;
     } catch (error) {
       if (relativeDirectory === '') throw error;
       classifyWalkError(ctx, error, absoluteDirectory);
       if (options.layout) yield incomplete();
       return;
     }
-    snapshotCounters(ctx).directoriesVisited += 1;
+    const before = ctx.directoryFinished ? { ...ctx.counters } : undefined;
+    ctx.counters.directoriesVisited += 1;
     try {
-      const errorsBeforeIgnore = ctx.job.counters.errors;
+      const errorsBeforeIgnore = ctx.counters.errors;
       const localRule = options.includeIgnored
         ? undefined
         : await loadLocalIgnore(fs, absoluteDirectory, relativeDirectory, ctx);
-      if (
-        options.layout &&
-        relativeDirectory !== '' &&
-        ctx.job.counters.errors > errorsBeforeIgnore
-      )
+      if (options.layout && relativeDirectory !== '' && ctx.counters.errors > errorsBeforeIgnore)
         yield incomplete();
       const rules = localRule ? [...inheritedRules, localRule] : inheritedRules;
       for (;;) {
@@ -307,27 +323,26 @@ async function* walkSnapshotRecords(
         }
         if (entry === null) break;
         ctx.signal.throwIfAborted();
-        snapshotCounters(ctx).entriesSeen += 1;
+        ctx.counters.entriesSeen += 1;
         const absolutePath = join(absoluteDirectory, entry.name);
-        const relativePath = toPosixRelative(root, absolutePath);
-        if (ctx.runtime.job.state !== 'running') ctx.signal.throwIfAborted();
+        const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
         if (ctx.isScratchPath(absolutePath)) {
-          snapshotCounters(ctx).scratchExcluded += 1;
+          ctx.counters.scratchExcluded += 1;
           continue;
         }
         if (!options.includeHidden && entry.name.startsWith('.')) {
-          snapshotCounters(ctx).hiddenExcluded += 1;
+          ctx.counters.hiddenExcluded += 1;
           continue;
         }
         if (
           !options.includeIgnored &&
           (isDefaultIgnored(entry) || ignoredByRules(relativePath, entry.isDirectory(), rules))
         ) {
-          snapshotCounters(ctx).ignoredExcluded += 1;
+          ctx.counters.ignoredExcluded += 1;
           continue;
         }
         if (entry.isSymbolicLink()) {
-          snapshotCounters(ctx).symlinksSkipped += 1;
+          ctx.counters.symlinksSkipped += 1;
           continue;
         }
         if (entry.isDirectory()) {
@@ -336,7 +351,7 @@ async function* walkSnapshotRecords(
           continue;
         }
         if (!entry.isFile()) {
-          snapshotCounters(ctx).specialSkipped += 1;
+          ctx.counters.specialSkipped += 1;
           continue;
         }
         let detail;
@@ -347,7 +362,7 @@ async function* walkSnapshotRecords(
           continue;
         }
         if (detail.isSymlink) {
-          snapshotCounters(ctx).symlinksSkipped += 1;
+          ctx.counters.symlinksSkipped += 1;
           ctx.addError(
             new FsError(
               ErrorCode.NOT_FILE,
@@ -359,7 +374,7 @@ async function* walkSnapshotRecords(
           continue;
         }
         if (!detail.stats.isFile()) {
-          snapshotCounters(ctx).specialSkipped += 1;
+          ctx.counters.specialSkipped += 1;
           ctx.addError(
             new FsError(ErrorCode.NOT_FILE, 'File type changed during snapshot', absolutePath),
             absolutePath,
@@ -367,7 +382,7 @@ async function* walkSnapshotRecords(
           continue;
         }
         const record: SnapshotRecord = {
-          rootId: ctx.job.sourceRootId,
+          rootId: ctx.sourceRootId,
           relativePath,
           name: entry.name,
           extension: extname(entry.name),
@@ -383,6 +398,12 @@ async function* walkSnapshotRecords(
               lastWriteTime: record.lastWriteTime,
             }
           : record;
+      }
+      if (before && ctx.directoryFinished) {
+        for (const key of Object.keys(before) as (keyof SnapshotCounters)[]) {
+          before[key] = (ctx.counters[key] ?? 0) - (before[key] ?? 0);
+        }
+        ctx.directoryFinished(relativeDirectory, before, inheritedRules.length > 0);
       }
     } finally {
       await directory.close().catch(() => undefined);
@@ -541,6 +562,7 @@ export async function writeSnapshotFromRecords(
   ctx: JobRunContext,
   options: SnapshotWalkOptions,
   hooks: SnapshotPipelineHooks = {},
+  observation?: { startedAt: string; endedAt: string },
 ): Promise<string> {
   const startedAt = ctx.job.startedAt ?? new Date().toISOString();
   const parts: StoredArtifact[] = [];
@@ -659,7 +681,11 @@ export async function writeSnapshotFromRecords(
     jobId: ctx.job.jobId,
     root: { id: ctx.job.sourceRootId, path: ctx.job.sourceRoot },
     ...(ctx.job.provenance ? { provenance: ctx.job.provenance } : {}),
-    observed: { startedAt, endedAt, atomic: false },
+    observed: {
+      startedAt: observation?.startedAt ?? startedAt,
+      endedAt: observation?.endedAt ?? endedAt,
+      atomic: false,
+    },
     csv: {
       encoding: 'UTF-8',
       bom: false,
@@ -762,6 +788,15 @@ export async function runSnapshotPipeline(
   options: SnapshotWalkOptions,
   ctx: JobRunContext,
 ): Promise<string> {
-  const records = walkSnapshotRecords(fs, root, options, ctx);
+  const records = walkSnapshotRecords(fs, root, options, {
+    signal: ctx.signal,
+    maxWalkDepth: ctx.config.maxWalkDepth,
+    sourceRootId: ctx.job.sourceRootId,
+    counters: snapshotCounters(ctx),
+    isScratchPath: (path) => ctx.isScratchPath(path),
+    addError: (error, path) => {
+      ctx.addError(error, path);
+    },
+  });
   return writeSnapshotFromRecords(records, ctx, options);
 }

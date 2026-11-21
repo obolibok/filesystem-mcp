@@ -189,7 +189,37 @@ export class PathGuard {
   }
 
   initialize(expanded: readonly string[]): void {
+    this.assertScratchSeparated(expanded);
     this.allowedDirectoriesState = normalizeAllowedDirectories(expanded);
+  }
+
+  private protectedScratch: string | undefined;
+
+  async protectScratchDirectory(path: string): Promise<void> {
+    if (this.protectedScratch === path) return;
+    await this.runExclusive(async () => {
+      const roots = await resolveAllowedDirectoriesState(this.getAllowedDirectories());
+      this.assertScratchSeparated(roots, path);
+      this.protectedScratch = path;
+    });
+  }
+
+  private overlapsScratch(path: string, scratch = this.protectedScratch): boolean {
+    return (
+      scratch !== undefined &&
+      (isSamePath(path, scratch) ||
+        isPathInsideDirectory(path, scratch) ||
+        isPathInsideDirectory(scratch, path))
+    );
+  }
+
+  private assertScratchSeparated(roots: readonly string[], scratch = this.protectedScratch): void {
+    if (roots.some((path) => this.overlapsScratch(path, scratch))) {
+      throw new FsError(
+        ErrorCode.INVALID_INPUT,
+        'Catalog scratch and allowed roots must be disjoint',
+      );
+    }
   }
 
   isInitialized(): boolean {
@@ -336,14 +366,17 @@ export class PathGuard {
    */
   private async isUnsafeGrantTarget(targetDir: string): Promise<boolean> {
     const normalized = normalizePath(targetDir);
-    if (isUnsafeCwdPath(normalized)) return true;
+    if (isUnsafeCwdPath(normalized) || this.overlapsScratch(normalized)) return true;
     let resolved: string;
     try {
       resolved = normalizePath(await realpath(normalized));
     } catch {
       return false;
     }
-    return !isSamePath(resolved, normalized) && isUnsafeCwdPath(resolved);
+    return (
+      this.overlapsScratch(resolved) ||
+      (!isSamePath(resolved, normalized) && isUnsafeCwdPath(resolved))
+    );
   }
 
   /** Walk up from a blocked path to the closest existing ancestor directory. */
@@ -621,7 +654,10 @@ export class PathGuard {
     signal?.throwIfAborted();
     const normalizedReal = normalizePath(realPath);
 
-    if (!isPathWithinDirectories(normalizedReal, allowedDirs)) {
+    if (
+      !isPathWithinDirectories(normalizedReal, allowedDirs) ||
+      this.overlapsScratch(normalizedReal)
+    ) {
       this.throwAccessDenied(requestedPath, accessDeniedHint);
     }
 
@@ -928,7 +964,7 @@ export class PathGuard {
     // Commit boundaries and the allowed set together, after every await has
     // resolved, so a rejecting recompute leaves the guard's previous,
     // consistent view intact.
-    this.rootBoundaries = boundaries;
     this.initialize(nextState);
+    this.rootBoundaries = boundaries;
   }
 }

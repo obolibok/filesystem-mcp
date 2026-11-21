@@ -15,6 +15,7 @@ import {
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
+import { FileCatalog } from './catalog.js';
 import { ErrorCode, formatUnknownErrorMessage, FsError, isNodeError } from './errors.js';
 import type { GuardedFileSystem } from './fs.js';
 import type {
@@ -96,6 +97,10 @@ interface ArtifactJobManagerDeps {
 
 function isTerminal(job: StoredJob<JobCounters>): boolean {
   return ['completed', 'failed', 'cancelled', 'interrupted'].includes(job.state);
+}
+
+function observationStart(job: StoredJob<JobCounters>): number {
+  return Date.parse(job.observationStartedAt ?? job.startedAt ?? '');
 }
 
 function isJobRunning(job: StoredJob<JobCounters>): boolean {
@@ -256,6 +261,16 @@ async function assertScratchHasNoLinks(path: string): Promise<void> {
   }
 }
 
+async function resolveScratchDestination(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    const parent = dirname(path);
+    if (parent === path || !isNodeError(error) || error.code !== 'ENOENT') throw error;
+    return join(await resolveScratchDestination(parent), basename(path));
+  }
+}
+
 export function fingerprintJobInput(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
@@ -332,6 +347,11 @@ export class JobRunContext<Counters extends JobCounters = JobCounters> {
 }
 
 export class ArtifactJobManager {
+  #catalog: FileCatalog | undefined;
+
+  get catalog(): FileCatalog | undefined {
+    return this.#catalog;
+  }
   readonly config: SnapshotConfig;
   readonly #readArtifact: (path: string) => Promise<Buffer>;
   readonly #renameMetadata: (temp: string, destination: string) => Promise<void>;
@@ -381,9 +401,13 @@ export class ArtifactJobManager {
     return this.#scratchDirectory;
   }
 
-  async initialize(): Promise<void> {
-    this.#initialized ??= this.#initialize();
-    return this.#initialized;
+  async initialize(guard?: PathGuard): Promise<void> {
+    if (!this.#initialized && this.#closed) {
+      throw new FsError(ErrorCode.CANCELLED, 'Job manager is closed');
+    }
+    this.#initialized ??= this.#initialize(guard);
+    await this.#initialized;
+    if (guard && this.#catalog) await guard.protectScratchDirectory(this.#scratchDirectory);
   }
 
   /** Captured settings that can change snapshot traversal or published artifact shape. */
@@ -406,14 +430,19 @@ export class ArtifactJobManager {
     });
   }
 
-  async #initialize(): Promise<void> {
+  async #initialize(guard?: PathGuard): Promise<void> {
     const requestedScratch = this.config.scratchDirectory;
     await assertScratchHasNoLinks(requestedScratch);
+    const catalogGuard = this.config.catalogEnabled ? guard : undefined;
+    if (catalogGuard) {
+      await catalogGuard.protectScratchDirectory(await resolveScratchDestination(requestedScratch));
+    }
     await mkdir(requestedScratch, { recursive: true, mode: 0o700 });
     await assertScratchHasNoLinks(requestedScratch);
     // Windows 8.3 names are valid spellings, not links. Use their canonical path
     // for every later storage operation and comparison with guarded source paths.
     this.#scratchDirectory = await realpath(requestedScratch);
+    await catalogGuard?.protectScratchDirectory(this.#scratchDirectory);
     let entries: Dirent[];
     try {
       entries = await readdir(this.#scratchDirectory, { withFileTypes: true });
@@ -425,10 +454,21 @@ export class ArtifactJobManager {
         error,
       );
     }
-    for (const entry of entries) {
-      if (!entry.isDirectory() || !JOB_ID_RE.test(entry.name)) continue;
-      await this.#loadJob(entry.name);
+    // The catalog's exclusive lock also precedes any job recovery writes.
+    // A competing catalog process must leave the owner's active jobs alone.
+    const catalog = this.config.catalogEnabled
+      ? await FileCatalog.open(this.#scratchDirectory, this.config)
+      : undefined;
+    try {
+      for (const entry of entries) {
+        if (!entry.isDirectory() || !JOB_ID_RE.test(entry.name)) continue;
+        await this.#loadJob(entry.name);
+      }
+    } catch (error) {
+      await catalog?.close();
+      throw error;
     }
+    this.#catalog = catalog;
     this.#cleanupTimer = setInterval(() => {
       void this.cleanupExpired().catch((error: unknown) => {
         Logger.warn(`Snapshot cleanup failed: ${formatUnknownErrorMessage(error)}`);
@@ -708,7 +748,7 @@ export class ArtifactJobManager {
       const ready = candidates
         .filter((job) => {
           if (checked.has(job.jobId)) return false;
-          const started = job.startedAt ? Date.parse(job.startedAt) : NaN;
+          const started = observationStart(job);
           const expires = job.resultExpiresAt ? Date.parse(job.resultExpiresAt) : NaN;
           return (
             job.state === 'completed' &&
@@ -724,9 +764,7 @@ export class ArtifactJobManager {
           );
         })
         .sort(
-          (a, b) =>
-            Date.parse(b.startedAt ?? '') - Date.parse(a.startedAt ?? '') ||
-            b.jobId.localeCompare(a.jobId),
+          (a, b) => observationStart(b) - observationStart(a) || b.jobId.localeCompare(a.jobId),
         );
       const job = ready[0];
       if (!job) break;
@@ -734,7 +772,7 @@ export class ArtifactJobManager {
       if (
         (await this.#readyArtifactsPresent(job)) &&
         this.#now() < Date.parse(job.resultExpiresAt ?? '') &&
-        this.#now() - Date.parse(job.startedAt ?? '') <= request.maxAgeMs
+        this.#now() - observationStart(job) <= request.maxAgeMs
       ) {
         readyValid.push(job);
       }
@@ -748,12 +786,10 @@ export class ArtifactJobManager {
           !job.metadataPersistence &&
           !job.resultExpired &&
           now < Date.parse(job.resultExpiresAt ?? '') &&
-          now - Date.parse(job.startedAt ?? '') <= request.maxAgeMs,
+          now - observationStart(job) <= request.maxAgeMs,
       )
       .sort(
-        (a, b) =>
-          Date.parse(b.startedAt ?? '') - Date.parse(a.startedAt ?? '') ||
-          b.jobId.localeCompare(a.jobId),
+        (a, b) => observationStart(b) - observationStart(a) || b.jobId.localeCompare(a.jobId),
       )[0];
     if (best) return { job: best, reason: 'completed_reuse' };
     const inflight = candidates
@@ -1341,7 +1377,11 @@ export class ArtifactJobManager {
   }
 
   async close(): Promise<void> {
-    await this.initialize();
+    if (!this.#initialized) {
+      this.#closed = true;
+      return;
+    }
+    await this.#initialized;
     if (this.#closed) return;
     this.#closed = true;
     if (this.#cleanupTimer) clearInterval(this.#cleanupTimer);
@@ -1361,6 +1401,7 @@ export class ArtifactJobManager {
     }
     await Promise.allSettled(terminalWrites);
     await Promise.allSettled(workers);
+    await this.#catalog?.close();
     if (this.config.ephemeralScratch) {
       await rm(this.#scratchDirectory, { recursive: true, force: true });
     }

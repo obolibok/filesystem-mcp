@@ -281,7 +281,6 @@ export async function startHttpServer(
   });
   const sharedPageStore = new PageSnapshotStore();
   const sharedJobManager = new ArtifactJobManager();
-  await sharedJobManager.initialize();
   // One guard for the whole endpoint. The modern leg builds a fresh McpServer
   // per request, so a per-instance guard would discard every accepted access
   // grant the moment the request ended — re-prompting on each subsequent call
@@ -292,6 +291,7 @@ export async function startHttpServer(
   // this ever serves more than one credential.
   const sharedPathGuard = new PathGuard(options);
   await sharedPathGuard.recomputeAllowedDirectories();
+  await sharedJobManager.initialize(sharedPathGuard);
 
   const modernHandler: McpHttpHandler = createMcpHandler(
     async ({ era }) => {
