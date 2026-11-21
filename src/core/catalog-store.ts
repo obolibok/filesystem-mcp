@@ -32,7 +32,7 @@ export interface CatalogScope {
   last: number;
   depth: number;
   inheritedIgnore: boolean;
-  counters: SnapshotCounters;
+  counters: SnapshotCounters & { policyExcluded?: number };
 }
 
 export interface CatalogFilters {
@@ -204,7 +204,7 @@ export class CatalogStore {
     return {
       ...row,
       inheritedIgnore: Boolean(row.inheritedIgnore),
-      counters: JSON.parse(row.counters) as SnapshotCounters,
+      counters: JSON.parse(row.counters) as CatalogScope['counters'],
     };
   }
 

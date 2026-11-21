@@ -10,7 +10,7 @@ import {
   type CatalogVersion,
 } from './catalog-store.js';
 import { withAbort } from './concurrency.js';
-import { ErrorCode, FsError } from './errors.js';
+import { ErrorCode, FsError, isNodeError, Problem } from './errors.js';
 import {
   entryIdentity,
   type EntryIdentity,
@@ -20,6 +20,7 @@ import {
 import type { JobRunContext } from './job-manager.js';
 import { emptySnapshotCounters } from './job-types.js';
 import { resolveRealPath } from './path.js';
+import { IS_WINDOWS } from './primitives.js';
 import type { SnapshotConfig } from './snapshot-config.js';
 import {
   type SnapshotWalkOptions,
@@ -29,6 +30,27 @@ import {
 import { sourceProvenance } from './source-provenance.js';
 
 const profile = { includeHidden: false, includeIgnored: false, layout: 'tree-depth-v1' } as const;
+type IndexStage = 'source' | 'storage' | 'policy';
+
+async function isDeniedSystemDirectory(
+  fs: GuardedFileSystem,
+  path: string,
+  signal: AbortSignal,
+): Promise<boolean> {
+  try {
+    const { directory } = await fs.opendir(path, { signal });
+    await directory.close();
+    return false;
+  } catch (error) {
+    signal.throwIfAborted();
+    return (
+      Problem.fromUnknown(error, ErrorCode.IO_ERROR).code === ErrorCode.PERMISSION_DENIED ||
+      (error instanceof FsError &&
+        isNodeError(error.cause) &&
+        ['EACCES', 'EPERM'].includes(error.cause.code ?? ''))
+    );
+  }
+}
 
 interface CatalogTarget {
   root: string;
@@ -42,6 +64,7 @@ interface Request {
   target: CatalogTarget;
   fs: GuardedFileSystem;
   state: 'queued' | 'running';
+  stage: IndexStage;
   completion: PromiseWithResolvers<boolean>;
 }
 
@@ -63,6 +86,7 @@ interface SearchCursor {
 interface CatalogFailure {
   requestId: string;
   errorCode: ErrorCode;
+  errorStage: IndexStage;
 }
 
 export class FileCatalog {
@@ -168,9 +192,13 @@ export class FileCatalog {
           sameEntryIdentity(version.identity, identity);
         const request = this.pending.get(root);
         const failure = this.failed.get(root);
+        const policyExcluded = indexed
+          ? this.store.scope(version.id, '')?.counters.policyExcluded
+          : undefined;
         return {
           indexed,
           ...(indexed ? { version: version.id, indexedAt: version.endedAt } : {}),
+          ...(policyExcluded ? { policyExcluded } : {}),
           state: request?.state ?? (failure ? ('failed' as const) : ('idle' as const)),
           ...(request ? { requestId: request.id } : failure),
         };
@@ -201,6 +229,7 @@ export class FileCatalog {
       target,
       fs,
       state: 'queued',
+      stage: 'source',
       completion: Promise.withResolvers<boolean>(),
     };
     this.failed.delete(target.root);
@@ -231,8 +260,12 @@ export class FileCatalog {
         await this.build(request);
         success = true;
       } catch (error) {
-        const errorCode = error instanceof FsError ? error.code : ErrorCode.IO_ERROR;
-        this.failed.set(request.target.root, { requestId: request.id, errorCode });
+        const { code: errorCode } = Problem.fromUnknown(error, ErrorCode.IO_ERROR);
+        this.failed.set(request.target.root, {
+          requestId: request.id,
+          errorCode,
+          errorStage: request.stage,
+        });
       } finally {
         this.pending.delete(request.target.root);
         request.completion.resolve(success);
@@ -254,14 +287,20 @@ export class FileCatalog {
     const provenance = await sourceProvenance.capture(root);
     signal.throwIfAborted();
     const startedAt = new Date().toISOString();
+    request.stage = 'storage';
     this.store.begin(id);
+    request.stage = 'source';
     const counters = emptySnapshotCounters();
+    let firstSourceError: Error | undefined;
+    let policyExcluded = 0;
     let ordinal = 0;
     const entries: CatalogEntry[] = [];
     const scopes = new Map<string, CatalogScope>();
-    const directories = [{ path: '', ordinal: 0 }];
+    const directories = [{ path: '', ordinal: 0, exclusionsAtStart: 0 }];
     const flush = (): void => {
+      request.stage = 'storage';
       this.store.append(id, entries, scopes);
+      request.stage = 'source';
       entries.length = 0;
       scopes.clear();
     };
@@ -272,8 +311,23 @@ export class FileCatalog {
       sourceRootId: id,
       skipRedirectedDirectories: true,
       isScratchPath: () => false, // The guard keeps the entire scratch outside every allowed root.
-      addError: () => {
+      addError: (error) => {
         counters.errors += 1;
+        firstSourceError ??=
+          error instanceof Error
+            ? error
+            : new FsError(ErrorCode.IO_ERROR, 'Catalog walk was incomplete');
+      },
+      excludeEntry: async (entry, path, depth) => {
+        const excluded =
+          fs.pathGuard.isSensitive(path) ||
+          (IS_WINDOWS &&
+            depth === 0 &&
+            entry.isDirectory() &&
+            entry.name.toLowerCase() === 'system volume information' &&
+            (await isDeniedSystemDirectory(fs, path, signal)));
+        if (excluded) policyExcluded += 1;
+        return excluded;
       },
       directoryFinished: (path, counts, inheritedIgnore) => {
         const directory = directories.pop();
@@ -283,13 +337,13 @@ export class FileCatalog {
           last: ordinal,
           depth: directories.length,
           inheritedIgnore,
-          counters: counts,
+          counters: { ...counts, policyExcluded: policyExcluded - directory.exclusionsAtStart },
         });
       },
     });
     for await (const record of records) {
       if (!('type' in record) || record.type === 'U') {
-        throw new FsError(ErrorCode.IO_ERROR, 'Catalog walk was incomplete');
+        throw firstSourceError ?? new FsError(ErrorCode.IO_ERROR, 'Catalog walk was incomplete');
       }
       const parent = directories.at(-1);
       if (!parent || record.depth !== directories.length - 1)
@@ -306,12 +360,14 @@ export class FileCatalog {
         length: record.length ?? null,
         mtime: record.lastWriteTime ?? null,
       });
-      if (!isFile) directories.push({ path, ordinal });
+      if (!isFile) directories.push({ path, ordinal, exclusionsAtStart: policyExcluded });
       if (entries.length + scopes.size >= 256) flush();
     }
     const endedAt = new Date().toISOString();
-    if (counters.errors) throw new FsError(ErrorCode.IO_ERROR, 'Catalog walk was incomplete');
+    if (counters.errors)
+      throw firstSourceError ?? new FsError(ErrorCode.IO_ERROR, 'Catalog walk was incomplete');
     flush();
+    request.stage = 'policy';
     const current = await this.target(fs, root, true);
     signal.throwIfAborted();
     const version = {
@@ -326,6 +382,7 @@ export class FileCatalog {
     if (!current || !this.matches(version, current)) {
       throw new FsError(ErrorCode.ACCESS_DENIED, 'Catalog source changed during indexing');
     }
+    request.stage = 'storage';
     this.store.publish(version);
   }
 
@@ -342,7 +399,7 @@ export class FileCatalog {
     const version = this.store.active(target.root);
     if (this.matches(version, target)) {
       const scope = this.store.scope(version.id, target.relativePath);
-      if (!scope || scope.inheritedIgnore) return undefined;
+      if (!scope || scope.inheritedIgnore || scope.counters.policyExcluded) return undefined;
       const age = Date.now() - Date.parse(version.startedAt);
       if (!forceRefresh && maxAgeMs > 0 && age >= 0 && age <= maxAgeMs)
         return {
@@ -398,7 +455,7 @@ export class FileCatalog {
     }
     if (!this.matches(version, target)) return undefined;
     const scope = this.store.scope(version.id, target.relativePath);
-    if (!scope || scope.inheritedIgnore) return undefined;
+    if (!scope || scope.inheritedIgnore || scope.counters.policyExcluded) return undefined;
     this.readers.set(version.id, (this.readers.get(version.id) ?? 0) + 1);
     try {
       setGeneration(version.id);
@@ -407,7 +464,8 @@ export class FileCatalog {
         ...version.provenance,
         root: { ...version.provenance.root, path: ctx.job.sourceRoot },
       };
-      Object.assign(ctx.job.counters, scope.counters);
+      const { policyExcluded: _excluded, ...counters } = scope.counters;
+      Object.assign(ctx.job.counters, counters);
       return await writeSnapshotFromRecords(
         this.records(version.id, scope, target.relativePath, ctx, options),
         ctx,
@@ -494,7 +552,8 @@ export class FileCatalog {
     if (!target || !this.matches(version, target)) {
       throw new FsError(ErrorCode.NOT_FOUND, 'No current catalog for this root. Call index_root.');
     }
-    if (!this.store.scope(version.id, target.relativePath)) {
+    const scope = this.store.scope(version.id, target.relativePath);
+    if (!scope) {
       throw new FsError(ErrorCode.NOT_FOUND, 'The path is outside the indexed scope.');
     }
     const query = JSON.stringify([
@@ -531,6 +590,7 @@ export class FileCatalog {
       root: target.root,
       path,
       version: version.id,
+      ...(scope.counters.policyExcluded ? { policyExcluded: scope.counters.policyExcluded } : {}),
       observed: { startedAt: version.startedAt, endedAt: version.endedAt },
       entries: rows.slice(0, limit).map((entry: CatalogEntry) => ({
         path: join(target.root, ...entry.path.split('/')),

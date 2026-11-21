@@ -22,7 +22,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { mergeTrees, verifyTreeZip } from '../scripts/snapshot-benchmark/verify-tree.mjs';
 import { verifySnapshotZip } from '../scripts/snapshot-benchmark/verify.mjs';
 import { FileCatalog } from '../src/core/catalog.js';
-import { isNodeError } from '../src/core/errors.js';
+import { ErrorCode, FsError, isNodeError } from '../src/core/errors.js';
 import { GuardedFileSystem } from '../src/core/fs.js';
 import { ArtifactJobManager, fingerprintJobInput } from '../src/core/job-manager.js';
 import { normalizePath } from '../src/core/path-utils.js';
@@ -35,6 +35,9 @@ interface CatalogStatus {
   version?: string;
   state: 'idle' | 'queued' | 'running' | 'failed';
   requestId?: string;
+  errorCode?: string;
+  errorStage?: string;
+  policyExcluded?: number;
 }
 
 interface SearchResult {
@@ -42,6 +45,7 @@ interface SearchResult {
   observed: { startedAt: string; endedAt: string };
   entries: { path: string; name: string }[];
   cursor?: string;
+  policyExcluded?: number;
 }
 
 interface Manifest {
@@ -363,6 +367,98 @@ test(
       );
     } finally {
       await restarted.close();
+    }
+  },
+);
+
+test(
+  'catalog omits protected files and keeps the existing snapshot behavior',
+  { timeout: 60_000 },
+  async (t) => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'filemcp-catalog-protected-')));
+    t.after(() => rm(base, { recursive: true, force: true }));
+    const root = join(base, 'source');
+    const safe = join(root, 'allowed');
+    await mkdir(safe, { recursive: true });
+    await writeFile(join(root, 'restricted.pem'), 'synthetic');
+    await writeFile(join(safe, 'visible.txt'), 'synthetic');
+    const { client, close } = await createStdioClient(root, clientEnv(join(base, 'jobs')), [
+      '--read-only',
+    ]);
+    try {
+      const request = await call<{ requestId: string }>(client, 'index_root', { path: root });
+      const indexed = await waitFor(
+        () => status(client, root),
+        (value) => value.version === request.requestId || value.state === 'failed',
+      );
+      assert.equal(indexed.version, request.requestId, JSON.stringify(indexed));
+      assert.equal(indexed.policyExcluded, 1);
+      const search = await call<SearchResult>(client, 'search_index', { path: root });
+      assert.equal(search.policyExcluded, 1);
+      assert.deepEqual(
+        search.entries.map((entry) => entry.name),
+        ['allowed', 'visible.txt'],
+      );
+      const scoped = await tree(client, safe);
+      assert.deepEqual(scoped.manifest.observed, { ...search.observed, atomic: false });
+      assert.equal(scoped.manifest.complete, true);
+      const legacy = await tree(client, root);
+      assert.equal(legacy.manifest.complete, false);
+      assert.equal(legacy.manifest.counters['inaccessibleSkipped'], 1);
+      assert(!legacy.nodes.has(JSON.stringify(['restricted.pem'])));
+    } finally {
+      await close();
+    }
+  },
+);
+
+test(
+  'Windows catalog skips denied volume metadata and reports ordinary permission errors',
+  { skip: process.platform !== 'win32', timeout: 30_000 },
+  async (t) => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'filemcp-catalog-volume-')));
+    t.after(() => rm(base, { recursive: true, force: true }));
+    const root = normalizePath(join(base, 'source'));
+    const scratch = join(base, 'jobs');
+    const system = join(root, 'System Volume Information');
+    const ordinary = join(root, 'ordinary');
+    await Promise.all([mkdir(system, { recursive: true }), mkdir(scratch)]);
+    await writeFile(join(system, 'internal.txt'), 'synthetic');
+    await writeFile(join(root, 'visible.txt'), 'synthetic');
+    const fs = new GuardedFileSystem(await makeGuard([root]));
+    const open = fs.opendir.bind(fs);
+    t.mock.method(fs, 'opendir', async (path: string, options?: { signal?: AbortSignal }) => {
+      if (path === system || path === ordinary)
+        throw new FsError(ErrorCode.PERMISSION_DENIED, 'synthetic filesystem denial', path);
+      return open(path, options);
+    });
+    const catalog = await FileCatalog.open(scratch, getSnapshotConfig());
+    try {
+      const request = await catalog.request(fs, root);
+      await waitFor(
+        () => catalog.describeRoots(fs, [root]),
+        ([value]) => value?.version === request.requestId || value?.state === 'failed',
+      );
+      const ready = await catalog.search(fs, root, {}, 10);
+      assert.equal(ready.version, request.requestId);
+      assert.equal(ready.policyExcluded, 1);
+      assert.deepEqual(
+        ready.entries.map((entry) => entry.name),
+        ['visible.txt'],
+      );
+      await mkdir(ordinary);
+      const next = await catalog.request(fs, root);
+      const [failed] = await waitFor(
+        () => catalog.describeRoots(fs, [root]),
+        ([value]) => value?.state === 'failed',
+      );
+      assert(failed && 'errorStage' in failed);
+      assert.equal(failed.version, request.requestId);
+      assert.equal(failed.requestId, next.requestId);
+      assert.equal(failed.errorCode, ErrorCode.PERMISSION_DENIED);
+      assert.equal(failed.errorStage, 'source');
+    } finally {
+      await catalog.close();
     }
   },
 );

@@ -34,6 +34,7 @@ export interface SnapshotWalkContext {
   readonly sourceRootId: string;
   readonly counters: SnapshotCounters;
   readonly skipRedirectedDirectories?: boolean;
+  excludeEntry?(entry: Dirent, absolutePath: string, depth: number): boolean | Promise<boolean>;
   isScratchPath(path: string): boolean;
   addError(error: unknown, path: string): void;
   directoryFinished?(
@@ -345,6 +346,7 @@ export async function* walkSnapshotRecords(
           ctx.counters.symlinksSkipped += 1;
           continue;
         }
+        if (ctx.excludeEntry && (await ctx.excludeEntry(entry, absolutePath, depth))) continue;
         if (entry.isDirectory()) {
           if (options.layout) yield { type: 'D', depth, name: entry.name };
           yield* walkDirectory(absolutePath, relativePath, rules, depth + 1);

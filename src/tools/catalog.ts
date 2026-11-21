@@ -11,6 +11,8 @@ export const CatalogStatusSchema = z.strictObject({
   state: z.enum(['idle', 'queued', 'running', 'failed']),
   requestId: z.uuid().optional(),
   errorCode: z.enum(ErrorCode).optional(),
+  errorStage: z.enum(['source', 'storage', 'policy']).optional(),
+  policyExcluded: z.int().nonnegative().optional(),
 });
 
 function catalog(ctx: ToolCtx) {
@@ -78,6 +80,7 @@ export const SEARCH_INDEX = defineTool({
     root: z.string(),
     path: z.string(),
     version: z.uuid(),
+    policyExcluded: z.int().nonnegative().optional(),
     observed: z.strictObject({ startedAt: z.iso.datetime(), endedAt: z.iso.datetime() }),
     entries: z.array(
       z.strictObject({
