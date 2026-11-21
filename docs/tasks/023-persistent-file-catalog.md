@@ -82,3 +82,21 @@
   и [следующего CI](https://github.com/obolibok/filesystem-mcp/actions/runs/44941135081)
   относятся к `32aff466` и `de171e32` на `main`. Оба прогона остановил Prettier
   на этой карточке. Форматирование уже исправлено в PR.
+
+## Интеграция и поставка 21.11.2026
+
+- [PR #23](https://github.com/obolibok/filesystem-mcp/pull/23), проверенный head
+  `62dce8a1182f72ac0453b8067ccca4445736ede4`. Merge в `main`
+  `6107fa727f6a1b113731e6c9f990a3ad9d417736`. Деревья Git совпадают.
+- [CI #171](https://github.com/obolibok/filesystem-mcp/actions/runs/44942351164)
+  прошёл на Windows и Ubuntu. Локально прошли все 21 целевой тест каталога и
+  stdio. [Push CI #172](https://github.com/obolibok/filesystem-mcp/actions/runs/44942773117)
+  прошёл на merge-коммите `main` на обеих платформах.
+- Portable собран из merge-коммита. Verify **54/54 PASS** на отдельной копии.
+  Проверены HTTP-доступ двух клиентов к одной версии, restart и повторная
+  выдача ZIP с теми же байтами. Для комплекта проверены `SHA256SUMS.json`,
+  содержимое и CRC архива, пустые ключи и отсутствие runtime data.
+- ZIP `out/Schwarzbeck-MCP-023-universal-2026-11-21.zip`, **69 638 829 байт**,
+  2 845 файлов. SHA-256 `19ff61d8c800d2f45aa6a2593214f98b3e780dcbc2b3c81361f9193c77480a5d`.
+  Рядом файл `.zip.sha256` и распакованная папка. В `config.json` каталог
+  включается параметром `"catalogEnabled": true` для пилота.

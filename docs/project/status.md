@@ -2,7 +2,7 @@
 
 Владелец — архитекторский/планирующий чат. Обновлено 2026-11-21.
 Начать с [handover архитектору](architect-handover-2026-10-29.md).
-Задача 023 передана на проверку.
+Задача 023 принята. Проверочный portable для пилота собран из `main`.
 Предыдущая хроника сохранена в [архиве](history/status-2026-10-29.md).
 
 | ID           | Работа                                                                                        | Статус | Зависит от         |
@@ -34,7 +34,7 @@
 | 021          | [Диагностика provenance](../tasks/021-provenance-diagnostics.md)                              | done   | 020                |
 | 005          | [Контролируемое повторение предметного исследования](../tasks/005-controlled-domain-study.md) | done   | 004, 006, 007, 008 |
 | 022          | [Единый portable для stdio и HTTP](../tasks/022-universal-portable.md)                        | done   | 020, 021           |
-| 023          | [Постоянный файловый каталог](../tasks/023-persistent-file-catalog.md)                        | review | 006, 015, 018, 022 |
+| 023          | [Постоянный файловый каталог](../tasks/023-persistent-file-catalog.md)                        | done   | 006, 015, 018, 022 |
 
 proposed — направление без назначения; ready — согласованная карточка;
 active — назначен исполнитель; review — проверяемый результат; done — принят
@@ -42,6 +42,11 @@ active — назначен исполнитель; review — проверяе�
 Центральную доску ведёт планирование, coding-чаты — Work record своих карточек.
 
 ## Последняя приёмка
+
+- **023 (21.11)** — общий SQLite-каталог и экспорт через прежний snapshot.
+  PR #23 принят после повторного CI и проверки исключительного владения scratch.
+  Portable из `6107fa72` прошёл Verify 54/54. Комплект и контрольная сумма
+  записаны в [карточке 023](../tasks/023-persistent-file-catalog.md).
 
 - **022 (11.11)**: единый portable config/Start для stdio и HTTP; общий
   roots/scratch/format/limits, отдельный HTTP key с config/prompt fallback.
