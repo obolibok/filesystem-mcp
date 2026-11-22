@@ -101,13 +101,19 @@ async function status(client: Client, root: string): Promise<CatalogStatus> {
   return result;
 }
 
-test('SQL queries see only an authorized published file scope', { timeout: 75_000 }, async (t) => {
+test('SQL queries respect the published catalog scope', { timeout: 75_000 }, async (t) => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'filemcp-catalog-sql-')));
   t.after(() => rm(base, { recursive: true, force: true }));
   const root = join(base, 'First root');
   const sub = join(root, "scope's files");
   const other = join(base, 'Second root');
   await Promise.all([mkdir(sub, { recursive: true }), mkdir(other)]);
+  const empty = join(sub, 'Empty folder');
+  await Promise.all([
+    mkdir(empty),
+    mkdir(join(root, 'outside folder')),
+    mkdir(join(other, 'other folder')),
+  ]);
   const sample = join(sub, 'Manual Renault Koleos.pdf');
   await Promise.all([
     writeFile(sample, 'synthetic'),
@@ -169,6 +175,35 @@ test('SQL queries see only an authorized published file scope', { timeout: 75_00
       ],
     ]);
     assert.equal(record.version, count.version);
+    const directories = await query(
+      sub,
+      'SELECT relative_path, kind, extension, size_bytes, created_at, modified_at FROM catalog_entries WHERE kind = ?',
+      ['directory'],
+    );
+    assert.deepEqual(directories.rows, [
+      ["scope's files/Empty folder", 'directory', null, null, null, null],
+    ]);
+    assert.equal(directories.version, record.version);
+    assert.deepEqual((await query(empty, 'SELECT count(*) FROM catalog_entries')).rows, [[0]]);
+    const kinds = await query(
+      sub,
+      'SELECT kind, count(*) FROM catalog_entries GROUP BY kind ORDER BY kind',
+    );
+    assert.deepEqual(kinds.rows, [
+      ['directory', 1],
+      ['file', 107],
+    ]);
+    assert.deepEqual((await query(sub, 'SELECT count(*) FROM files')).rows, [[107]]);
+    assert.deepEqual((await query(sub, 'SELECT * FROM files', [], 1)).columns, [
+      'root_path',
+      'configured_root',
+      'relative_path',
+      'name',
+      'extension',
+      'size_bytes',
+      'created_at',
+      'modified_at',
+    ]);
     const grouped = await query(
       sub,
       `WITH hits AS (SELECT extension FROM files WHERE ${filter}) SELECT extension, count(*) FROM hits GROUP BY extension ORDER BY extension`,
@@ -198,7 +233,10 @@ test('SQL queries see only an authorized published file scope', { timeout: 75_00
       'DELETE FROM files',
       'SELECT count(*) FROM files; SELECT 1',
     ]) {
-      const denied = await client.callTool({ name: 'query_index', arguments: { path: sub, sql } });
+      const denied = await client.callTool({
+        name: 'query_index',
+        arguments: { path: sub, sql },
+      });
       assert.equal(denied.isError, true, sql);
     }
     const timeLimit = client.callTool({

@@ -602,6 +602,7 @@ await save(httpConfig);
 const binaryPath = join(capRoot, 'original.bin');
 const binary = Buffer.from([0, 255, 1, 128, 13, 10]);
 await writeFile(binaryPath, binary);
+await mkdir(join(capRoot, 'Empty folder'));
 const endpoint = 'http://127.0.0.1:' + httpPort;
 const httpArtifacts = new Map();
 let httpJobId;
@@ -731,6 +732,19 @@ for (const phase of ['initial', 'restart']) {
       assert.deepEqual(count.rows, [[1]]);
       assert.equal(count.truncated, false);
       reports.push('http-query-index-' + phase + ': PASS');
+      const directories = await anotherClient.callTool({
+        name: 'query_index',
+        arguments: {
+          path: capRoot,
+          sql: 'SELECT relative_path, kind FROM catalog_entries WHERE kind = ?',
+          params: ['directory'],
+        },
+      });
+      assert(!directories.isError, JSON.stringify(directories));
+      const entries = directories.structuredContent ?? directories._meta;
+      assert.equal(entries.version, catalog.version);
+      assert.deepEqual(entries.rows, [['Empty folder', 'directory']]);
+      reports.push('http-query-index-directory-' + phase + ': PASS');
     } finally {
       await anotherClient.close();
     }

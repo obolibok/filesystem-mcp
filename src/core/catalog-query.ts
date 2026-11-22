@@ -83,7 +83,7 @@ export function runCatalogQuery(
         const message =
           response.result === 'stale'
             ? 'Catalog generation changed. Retry the query.'
-            : 'SQL rejected. Use one SELECT over files and supported SQL functions.';
+            : 'SQL rejected. Use one SELECT over catalog_entries or files with supported SQL functions.';
         reject(new FsError(ErrorCode.INVALID_INPUT, message));
       }
     });

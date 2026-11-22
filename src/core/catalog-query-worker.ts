@@ -47,12 +47,15 @@ function installScope(db: DatabaseSync, request: CatalogQueryRequest): void {
   db.exec(`
     CREATE TEMP VIEW ${source} AS
       SELECT a.root AS root_path, a.configured_root, e.path AS relative_path,
-             e.name, e.extension, e.length AS size_bytes, e.created_at, e.mtime AS modified_at
+             e.name, e.extension, e.length AS size_bytes, e.created_at, e.mtime AS modified_at,
+             CASE WHEN e.mtime IS NULL THEN 'directory' ELSE 'file' END AS kind
       FROM main.entries AS e JOIN main.active AS a ON a.id = e.id
       WHERE a.root = ${quoted(db, request.root)} AND e.id = ${quoted(db, request.generation)}
-        AND e.ordinal > ${quoted(db, request.first)} AND e.ordinal <= ${quoted(db, request.last)}
-        AND e.mtime IS NOT NULL;
-    CREATE TEMP VIEW files AS SELECT * FROM ${source};
+        AND e.ordinal > ${quoted(db, request.first)} AND e.ordinal <= ${quoted(db, request.last)};
+    CREATE TEMP VIEW catalog_entries AS SELECT * FROM ${source};
+    CREATE TEMP VIEW files AS
+      SELECT root_path, configured_root, relative_path, name, extension, size_bytes, created_at, modified_at
+      FROM ${source} WHERE modified_at IS NOT NULL;
   `);
   db.setAuthorizer((action, object, column, database, origin) => {
     if (action === constants.SQLITE_SELECT) return constants.SQLITE_OK;
@@ -62,7 +65,9 @@ function installScope(db: DatabaseSync, request: CatalogQueryRequest): void {
     if (action === constants.SQLITE_READ) {
       if (
         database === 'temp' &&
-        (object === 'files' || (object === source && origin === 'files'))
+        (object === 'files' ||
+          object === 'catalog_entries' ||
+          (object === source && (origin === 'files' || origin === 'catalog_entries')))
       ) {
         return constants.SQLITE_OK;
       }

@@ -128,8 +128,9 @@ export const QUERY_INDEX = defineTool({
   name: 'query_index',
   title: 'Query Published File Catalog',
   description:
-    'Run one read-only SQLite SELECT over files in an indexed root or subfolder. ' +
-    'files columns: root_path, configured_root, relative_path, name, extension, size_bytes, created_at, modified_at. ' +
+    'Run one read-only SQLite SELECT in an indexed root or subfolder. ' +
+    'Use catalog_entries for files and directories, including empty directories. Filter kind by file or directory. ' +
+    'Both catalog_entries and the file-only files view have root_path, configured_root, relative_path, name, extension, size_bytes, created_at, modified_at. ' +
     'Use positional ? parameters and COUNT(*) for counts, GROUP BY for summaries, and ORDER BY with SQL LIMIT/OFFSET for pages. ' +
     'Use instr(lower(name), ?) for literal substring matching with ASCII case folding. Returns columns and rows, version, and truncation status. ' +
     'Limited by the server SQL timeout (15 seconds by default) and by 200 result rows. Dates are UTC, and creation time may be null.',
