@@ -90,6 +90,7 @@ export const SEARCH_INDEX = defineTool({
         length: z.int().nonnegative().nullable(),
         extension: z.string().nullable(),
         lastWriteTime: z.iso.datetime().nullable(),
+        creationTime: z.iso.datetime().nullable(),
       }),
     ),
     cursor: z.string().optional(),
@@ -118,5 +119,48 @@ export const SEARCH_INDEX = defineTool({
         cursor,
       ),
     };
+  },
+});
+
+const SqlValue = z.union([z.string().max(4096), z.number(), z.null()]);
+
+export const QUERY_INDEX = defineTool({
+  name: 'query_index',
+  title: 'Query Published File Catalog',
+  description:
+    'Run one read-only SQLite SELECT over files in an indexed root or subfolder. ' +
+    'files columns: root_path, configured_root, relative_path, name, extension, size_bytes, created_at, modified_at. ' +
+    'Use positional ? parameters and COUNT(*) for counts, GROUP BY for summaries, and ORDER BY with SQL LIMIT/OFFSET for pages. ' +
+    'Use instr(lower(name), ?) for literal substring matching with ASCII case folding. Returns columns and rows, version, and truncation status. ' +
+    'Limited to 5 seconds and 200 result rows. Dates are UTC, and creation time may be null.',
+  input: z.strictObject({
+    path: RequiredPath.describe(
+      'Indexed root or indexed subfolder. The server fixes the query scope.',
+    ),
+    sql: z.string().trim().min(1).max(8192),
+    params: z.array(SqlValue).max(64).default([]),
+    limit: z.int().min(1).max(200).default(100),
+  }),
+  output: z.strictObject({
+    root: z.string(),
+    path: z.string(),
+    version: z.uuid(),
+    observed: z.strictObject({ startedAt: z.iso.datetime(), endedAt: z.iso.datetime() }),
+    policyExcluded: z.int().nonnegative().optional(),
+    columns: z.array(z.string()),
+    rows: z.array(z.array(z.union([z.string(), z.number(), z.null()]))),
+    truncated: z.boolean(),
+  }),
+  annotations: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    destructiveHint: false,
+    openWorldHint: false,
+  },
+  defaultErrorCode: ErrorCode.IO_ERROR,
+  accessPaths: (args) => [args.path],
+  run: async ({ path, ...input }, ctx) => {
+    const scope = await ctx.fs.pathGuard.validateExistingDirectory(path, ctx.signal);
+    return { structured: await catalog(ctx).query(ctx.fs, scope, input, ctx.signal) };
   },
 });

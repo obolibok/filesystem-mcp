@@ -7,7 +7,7 @@ import { getSnapshotFormat, type SnapshotFormat } from '../core/snapshot-config.
 import type { ResourceStore } from '../core/store.js';
 import { BUNDLE } from './bundle.js';
 import { CANCEL_JOB } from './cancel-job.js';
-import { INDEX_ROOT, SEARCH_INDEX } from './catalog.js';
+import { INDEX_ROOT, QUERY_INDEX, SEARCH_INDEX } from './catalog.js';
 import { CREATE } from './create.js';
 import type { DefinedTool } from './define.js';
 import { DELETE } from './delete.js';
@@ -61,8 +61,8 @@ export function registeredTools(
   catalogEnabled = false,
 ): readonly DefinedTool[] {
   const tools = readOnly ? ALL_TOOLS.filter((t) => !MUTATING_TOOL_NAMES.has(t.name)) : ALL_TOOLS;
-  return [...tools, ...(catalogEnabled ? [INDEX_ROOT, SEARCH_INDEX] : [])].map((tool) =>
-    tool === SNAPSHOT && snapshotFormat === 'stable' ? STABLE_SNAPSHOT : tool,
+  return [...tools, ...(catalogEnabled ? [INDEX_ROOT, SEARCH_INDEX, QUERY_INDEX] : [])].map(
+    (tool) => (tool === SNAPSHOT && snapshotFormat === 'stable' ? STABLE_SNAPSHOT : tool),
   );
 }
 

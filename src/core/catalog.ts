@@ -2,9 +2,11 @@ import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { extname, join, relative, sep } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 
+import { type CatalogQueryInput, runCatalogQuery } from './catalog-query.js';
 import {
   type CatalogEntry,
   type CatalogFilters,
+  catalogRootPath,
   type CatalogScope,
   CatalogStore,
   type CatalogVersion,
@@ -105,6 +107,7 @@ export class FileCatalog {
   private readonly pending = new Map<string, Request>();
   private readonly failed = new Map<string, CatalogFailure>();
   private readonly readers = new Map<string, number>();
+  private readonly sqlQueries = new Set<Promise<unknown>>();
   private readonly cursorKey = randomBytes(32);
   private readonly shutdown = new AbortController();
   private readonly store: CatalogStore;
@@ -125,6 +128,7 @@ export class FileCatalog {
   private async closeStore(): Promise<void> {
     this.shutdown.abort();
     await this.worker;
+    await Promise.allSettled(this.sqlQueries);
     this.store.close();
   }
 
@@ -359,6 +363,7 @@ export class FileCatalog {
         extension: isFile ? extname(record.name) : null,
         length: record.length ?? null,
         mtime: record.lastWriteTime ?? null,
+        createdAt: record.creationTime ?? null,
       });
       if (!isFile) directories.push({ path, ordinal, exclusionsAtStart: policyExcluded });
       if (entries.length + scopes.size >= 256) flush();
@@ -370,9 +375,11 @@ export class FileCatalog {
     request.stage = 'policy';
     const current = await this.target(fs, root, true);
     signal.throwIfAborted();
+    const configuredRoot = this.config.catalogRootAliases?.get(root);
     const version = {
       id,
       root,
+      ...(configuredRoot ? { configuredRoot } : {}),
       identity: target.identity,
       policy: target.policy,
       startedAt,
@@ -540,13 +547,7 @@ export class FileCatalog {
     return JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as SearchCursor;
   }
 
-  async search(
-    fs: GuardedFileSystem,
-    path: string,
-    filters: CatalogFilters,
-    limit: number,
-    cursor?: string,
-  ) {
+  private async readScope(fs: GuardedFileSystem, path: string) {
     const target = await this.target(fs, path);
     const version = target ? this.store.active(target.root) : undefined;
     if (!target || !this.matches(version, target)) {
@@ -556,6 +557,50 @@ export class FileCatalog {
     if (!scope) {
       throw new FsError(ErrorCode.NOT_FOUND, 'The path is outside the indexed scope.');
     }
+    return { target, version, scope };
+  }
+
+  async query(fs: GuardedFileSystem, path: string, input: CatalogQueryInput, signal: AbortSignal) {
+    const { target, version, scope } = await this.readScope(fs, path);
+    const cancellation = AbortSignal.any([signal, this.shutdown.signal]);
+    cancellation.throwIfAborted();
+    if (this.sqlQueries.size >= 2)
+      throw new FsError(ErrorCode.TOO_LARGE, 'Catalog SQL reader is busy. Retry later.');
+    const pending = runCatalogQuery(
+      {
+        ...input,
+        databasePath: this.store.path,
+        root: catalogRootPath(target.root),
+        generation: version.id,
+        first: scope.first,
+        last: scope.last,
+      },
+      cancellation,
+    );
+    this.sqlQueries.add(pending);
+    try {
+      const result = await pending;
+      return {
+        ...result,
+        root: catalogRootPath(target.root),
+        path: catalogRootPath(path),
+        version: version.id,
+        observed: { startedAt: version.startedAt, endedAt: version.endedAt },
+        ...(scope.counters.policyExcluded ? { policyExcluded: scope.counters.policyExcluded } : {}),
+      };
+    } finally {
+      this.sqlQueries.delete(pending);
+    }
+  }
+
+  async search(
+    fs: GuardedFileSystem,
+    path: string,
+    filters: CatalogFilters,
+    limit: number,
+    cursor?: string,
+  ) {
+    const { target, version, scope } = await this.readScope(fs, path);
     const query = JSON.stringify([
       target.root,
       target.relativePath,
@@ -599,6 +644,7 @@ export class FileCatalog {
         length: entry.length,
         extension: entry.extension,
         lastWriteTime: entry.mtime,
+        creationTime: entry.createdAt,
       })),
       ...(tokenBody
         ? { cursor: `${tokenBody}.${this.cursorMac(tokenBody).toString('base64url')}` }

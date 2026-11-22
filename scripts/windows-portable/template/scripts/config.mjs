@@ -98,6 +98,7 @@ export async function configuration({ includeHttpApiKey = false } = {}) {
   if (!Array.isArray(config.roots) || config.roots.length === 0)
     throw new Error('config.json must contain at least one explicit source root.');
   const roots = [];
+  const rootAliases = new Map();
   for (const input of config.roots) {
     const path = await realpath(resolvePath(input));
     if (!(await stat(path)).isDirectory()) throw new Error('Source is not a directory: ' + input);
@@ -107,6 +108,7 @@ export async function configuration({ includeHttpApiKey = false } = {}) {
     if (inside(path, kit) || (inside(kit, path) && !inside(sample, path)))
       throw new Error('Keep sources separate from the kit: ' + input);
     roots.push(path);
+    if (!rootAliases.has(path)) rootAliases.set(path, input);
   }
   const scratch = await destination(resolvePath(config.scratchDirectory));
   for (const root of roots) {
@@ -142,6 +144,7 @@ export async function configuration({ includeHttpApiKey = false } = {}) {
     snapshotFormat,
     catalogEnabled: config.catalogEnabled ?? false,
     roots: [...new Set(roots)],
+    rootAliases: [...rootAliases],
     scratchDirectory: scratch,
   };
 }
@@ -158,7 +161,10 @@ export function serverEnvironment(config) {
   process.env.FS_ROOT_BOUNDARY = config.roots.join(delimiter);
   process.env.FS_SNAPSHOT_DIR = config.scratchDirectory;
   process.env.FS_SNAPSHOT_FORMAT = config.snapshotFormat;
-  if (config.catalogEnabled) process.env.FS_CATALOG_ENABLED = '1';
+  if (config.catalogEnabled) {
+    process.env.FS_CATALOG_ENABLED = '1';
+    process.env.FS_CATALOG_ROOT_ALIASES = JSON.stringify(config.rootAliases);
+  }
   for (const [key, value] of Object.entries(config.limits)) process.env[key] = String(value);
   delete process.env.CONTROL_PLANE_API_KEY;
   delete process.env.OPENAI_API_KEY;

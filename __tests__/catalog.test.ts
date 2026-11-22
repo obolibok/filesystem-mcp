@@ -16,6 +16,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, delimiter, join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -46,6 +47,13 @@ interface SearchResult {
   entries: { path: string; name: string }[];
   cursor?: string;
   policyExcluded?: number;
+}
+
+interface QueryResult {
+  columns: string[];
+  rows: (string | number | null)[][];
+  version: string;
+  truncated: boolean;
 }
 
 interface Manifest {
@@ -92,6 +100,139 @@ async function status(client: Client, root: string): Promise<CatalogStatus> {
   assert(result);
   return result;
 }
+
+test('SQL queries see only an authorized published file scope', { timeout: 75_000 }, async (t) => {
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'filemcp-catalog-sql-')));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const root = join(base, 'First root');
+  const sub = join(root, "scope's files");
+  const other = join(base, 'Second root');
+  await Promise.all([mkdir(sub, { recursive: true }), mkdir(other)]);
+  const sample = join(sub, 'Manual Renault Koleos.pdf');
+  await Promise.all([
+    writeFile(sample, 'synthetic'),
+    writeFile(join(sub, 'Photos about Koleos.txt'), 'synthetic'),
+    writeFile(join(sub, 'blocked.pem'), 'synthetic'),
+    writeFile(join(root, 'outside Renault.pdf'), 'synthetic'),
+    writeFile(join(other, 'other Renault.pdf'), 'synthetic'),
+  ]);
+  await utimes(sample, new Date('2024-01-02T03:04:05Z'), new Date('2024-01-02T03:04:05Z'));
+  for (let i = 0; i < 80; i++) await writeFile(join(sub, `fixture-${String(i)}.bin`), 'x');
+  const env = clientEnv(join(base, 'jobs'), {
+    FS_ALLOWED_DIRS: [other].join(delimiter),
+    FS_CATALOG_ROOT_ALIASES: JSON.stringify([[root, './original-spelling']]),
+  });
+  const { client, close } = await createStdioClient(root, env, ['--read-only']);
+  try {
+    await call(client, 'index_root', { path: root });
+    await call(client, 'index_root', { path: other });
+    await waitFor(
+      () => statuses(client),
+      (values) => values.size === 2 && [...values.values()].every((value) => value.indexed),
+    );
+    const filter = 'instr(lower(name), ?) > 0 OR instr(lower(name), ?) > 0';
+    const params = ['renault', 'koleos'];
+    const query = (path: string, sql: string, values: readonly string[] = [], limit?: number) =>
+      call<QueryResult>(client, 'query_index', {
+        path,
+        sql,
+        params: values,
+        ...(limit ? { limit } : {}),
+      });
+    const count = await query(sub, `SELECT count(*) AS total FROM files WHERE ${filter};`, params);
+    assert.deepEqual(count.columns, ['total']);
+    assert.deepEqual(count.rows, [[2]]);
+    assert.deepEqual(
+      (await query(root, `SELECT count(*) FROM files WHERE ${filter}`, params)).rows,
+      [[3]],
+    );
+    assert.deepEqual((await query(other, 'SELECT count(*) FROM files')).rows, [[1]]);
+    const rootPath =
+      process.platform === 'win32' ? normalizePath(root).replaceAll('\\', '/') : root;
+    const record = await query(
+      sub,
+      'SELECT root_path, configured_root, relative_path, size_bytes, created_at, modified_at FROM files WHERE name = ?',
+      ['Manual Renault Koleos.pdf'],
+    );
+    const birthtime = (await stat(sample)).birthtime;
+    assert.deepEqual(record.rows, [
+      [
+        rootPath,
+        './original-spelling',
+        "scope's files/Manual Renault Koleos.pdf",
+        9,
+        Number.isFinite(birthtime.getTime()) && birthtime.getTime() !== 0
+          ? birthtime.toISOString()
+          : null,
+        '2024-01-02T03:04:05.000Z',
+      ],
+    ]);
+    assert.equal(record.version, count.version);
+    const grouped = await query(
+      sub,
+      `WITH hits AS (SELECT extension FROM files WHERE ${filter}) SELECT extension, count(*) FROM hits GROUP BY extension ORDER BY extension`,
+      params,
+    );
+    assert.deepEqual(grouped.rows, [
+      ['.pdf', 1],
+      ['.txt', 1],
+    ]);
+    const bounded = await query(sub, 'SELECT name FROM files ORDER BY name', [], 1);
+    assert.equal(bounded.rows.length, 1);
+    assert.equal(bounded.truncated, true);
+
+    for (const sql of [
+      'SELECT name FROM entries',
+      'SELECT root FROM active',
+      'SELECT path FROM scopes',
+      'SELECT name FROM sqlite_schema',
+      'SELECT name FROM sqlite_temp_schema',
+      'PRAGMA user_version',
+      'DELETE FROM files',
+      'SELECT count(*) FROM files; SELECT 1',
+    ]) {
+      const denied = await client.callTool({ name: 'query_index', arguments: { path: sub, sql } });
+      assert.equal(denied.isError, true, sql);
+    }
+    const timeLimit = client.callTool({
+      name: 'query_index',
+      arguments: {
+        path: sub,
+        sql: 'SELECT count(*) FROM files a CROSS JOIN files b CROSS JOIN files c CROSS JOIN files d CROSS JOIN files e CROSS JOIN files f',
+      },
+    });
+    await delay(500);
+    const lightweight = await call<SearchResult>(client, 'search_index', {
+      path: sub,
+      name: 'Manual Renault Koleos.pdf',
+    });
+    assert.equal(lightweight.entries.length, 1);
+    const timedOut = await timeLimit;
+    assert.equal(timedOut.isError, true);
+    assert.match(JSON.stringify(timedOut.content), /5 second time limit/u);
+    assert.deepEqual(
+      (await query(sub, `SELECT count(*) FROM files WHERE ${filter}`, params)).rows,
+      [[2]],
+    );
+  } finally {
+    await close();
+  }
+});
+
+test('old catalog schema is rejected without changing its bytes', async (t) => {
+  const scratch = await realpath(await mkdtemp(join(tmpdir(), 'filemcp-legacy-catalog-')));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const path = join(scratch, 'catalog.sqlite');
+  const db = new DatabaseSync(path);
+  db.exec('CREATE TABLE legacy (id INTEGER); PRAGMA user_version = 1');
+  db.close();
+  const before = await readFile(path);
+  await assert.rejects(
+    () => FileCatalog.open(scratch, getSnapshotConfig()),
+    /Unsupported catalog\.sqlite schema/u,
+  );
+  assert.deepEqual(await readFile(path), before);
+});
 
 async function bytes(
   client: Client,
@@ -265,8 +406,12 @@ test(
     let version: string;
     try {
       const names = (await first.client.listTools()).tools.map((tool) => tool.name);
-      assert.equal(names.length, 15);
-      assert(names.includes('index_root') && names.includes('search_index'));
+      assert.equal(names.length, 16);
+      assert(
+        names.includes('index_root') &&
+          names.includes('search_index') &&
+          names.includes('query_index'),
+      );
       assert.equal((await status(first.client, root)).indexed, false);
       const result = await tree(first.client, scope);
       assert.deepEqual(result.nodes, baseline.nodes);

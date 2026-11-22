@@ -73,6 +73,7 @@ await save({ ...original, catalogEnabled: true });
 const catalog = runCheck({ FS_CATALOG_ENABLED: '0' });
 assert.equal(catalog.catalogEnabled, true);
 assert(catalog.tools.includes('index_root') && catalog.tools.includes('search_index'));
+assert(catalog.tools.includes('query_index'));
 assert(
   catalog.rootResponse.structuredContent.rootDetails.every(
     (root) => root.catalog.indexed === false,
@@ -662,7 +663,7 @@ for (const phase of ['initial', 'restart']) {
     );
     const tools = (await httpClient.listTools()).tools;
     assert.deepEqual(tools.map((tool) => tool.name).sort(), httpEffective.tools.sort());
-    assert.equal(tools.length, 15);
+    assert.equal(tools.length, 16);
     const httpCall = async (name, args) => {
       const response = await httpClient.callTool({ name, arguments: args });
       assert(!response.isError, JSON.stringify(response));
@@ -711,6 +712,21 @@ for (const phase of ['initial', 'restart']) {
       if (phase === 'restart') assert.equal(catalog.version, httpCatalogVersion);
       httpCatalogVersion = catalog.version;
       reports.push('http-catalog-visible-to-another-client-' + phase + ': PASS');
+      const query = await anotherClient.callTool({
+        name: 'query_index',
+        arguments: {
+          path: capRoot,
+          sql: 'SELECT count(*) AS total FROM files WHERE name = ?',
+          params: ['original.bin'],
+        },
+      });
+      assert(!query.isError, JSON.stringify(query));
+      const count = query.structuredContent ?? query._meta;
+      assert.equal(count.version, catalog.version);
+      assert.deepEqual(count.columns, ['total']);
+      assert.deepEqual(count.rows, [[1]]);
+      assert.equal(count.truncated, false);
+      reports.push('http-query-index-' + phase + ': PASS');
     } finally {
       await anotherClient.close();
     }
