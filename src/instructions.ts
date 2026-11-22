@@ -63,6 +63,7 @@ export function buildSectionsRecord(readOnly: boolean): Record<string, string> {
       'root_selection: Select the scope requested by the user; never silently choose the first of several roots. Omit path only when root entries resolve to exactly one filesystem location; with roots at multiple locations, provide an explicit path.',
       'modern_root_grants: Modern clients do not automatically send workspace roots. Call a tool with a concrete path and approve its grant when elicitation is available.',
       `path_resolution: Use returned roots/paths or concrete user-provided paths. Discover unknown children with ${LIST.name} or ${FIND_FILES.name}; a known root can go straight to ${SNAPSHOT.name}.`,
+      'published_catalog: When tools/list offers the catalog tools and list_roots reports an indexed root, use search_index for name, prefix, extension or modification-time filters with cursor pagination. Use query_index for counts, grouping, substring matches or combined conditions on that same published index. Use snapshot to export an inventory or to request a fresh walk.',
       '```',
     ].join('\n'),
     tools_overview: [
