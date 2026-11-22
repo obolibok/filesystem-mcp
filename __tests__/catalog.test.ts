@@ -117,10 +117,11 @@ test('SQL queries see only an authorized published file scope', { timeout: 75_00
     writeFile(join(other, 'other Renault.pdf'), 'synthetic'),
   ]);
   await utimes(sample, new Date('2024-01-02T03:04:05Z'), new Date('2024-01-02T03:04:05Z'));
-  for (let i = 0; i < 80; i++) await writeFile(join(sub, `fixture-${String(i)}.bin`), 'x');
+  for (let i = 0; i < 105; i++) await writeFile(join(sub, `fixture-${String(i)}.bin`), 'x');
   const env = clientEnv(join(base, 'jobs'), {
     FS_ALLOWED_DIRS: [other].join(delimiter),
     FS_CATALOG_ROOT_ALIASES: JSON.stringify([[root, './original-spelling']]),
+    FS_CATALOG_QUERY_TIMEOUT_MS: '6000',
   });
   const { client, close } = await createStdioClient(root, env, ['--read-only']);
   try {
@@ -180,6 +181,12 @@ test('SQL queries see only an authorized published file scope', { timeout: 75_00
     const bounded = await query(sub, 'SELECT name FROM files ORDER BY name', [], 1);
     assert.equal(bounded.rows.length, 1);
     assert.equal(bounded.truncated, true);
+    const page = await query(
+      sub,
+      'SELECT relative_path FROM files ORDER BY relative_path LIMIT 100',
+    );
+    assert.equal(page.rows.length, 100);
+    assert.equal(page.truncated, false);
 
     for (const sql of [
       'SELECT name FROM entries',
@@ -209,7 +216,7 @@ test('SQL queries see only an authorized published file scope', { timeout: 75_00
     assert.equal(lightweight.entries.length, 1);
     const timedOut = await timeLimit;
     assert.equal(timedOut.isError, true);
-    assert.match(JSON.stringify(timedOut.content), /5 second time limit/u);
+    assert.match(JSON.stringify(timedOut.content), /6000 ms time limit/u);
     assert.deepEqual(
       (await query(sub, `SELECT count(*) FROM files WHERE ${filter}`, params)).rows,
       [[2]],

@@ -57,6 +57,7 @@ function runCheck(env = {}) {
 }
 const defaults = runCheck({ FS_SNAPSHOT_FORMAT: 'stable', FS_EXPERIMENTAL_SNAPSHOT_TREE: '1' });
 assert.equal(defaults.snapshotFormat, 'tree');
+assert.equal(defaults.limits.FS_CATALOG_QUERY_TIMEOUT_MS, 15000);
 const { snapshotFormat: _format, ...omittedFormat } = original;
 await save({ ...omittedFormat, experimentalSnapshotTree: false });
 assert.equal(runCheck({ FS_SNAPSHOT_FORMAT: 'stable' }).snapshotFormat, 'tree');
@@ -531,6 +532,7 @@ const httpConfig = {
   ...capConfig,
   transport: 'http',
   catalogEnabled: true,
+  limits: { ...capConfig.limits, FS_CATALOG_QUERY_TIMEOUT_MS: 17000 },
   localHttp: { host: '127.0.0.1', port: httpPort, apiKey: ' ' + httpKey + ' ' },
   scratchDirectory: './data/http-jobs',
 };
@@ -548,6 +550,7 @@ function effective() {
       NODE_OPTIONS: '',
       FS_API_KEY: configuredKey,
       FS_PORT: '39999',
+      FS_CATALOG_QUERY_TIMEOUT_MS: '1000',
       PORTABLE_HTTP_API_KEY: '',
     },
   });
@@ -567,6 +570,7 @@ assert.deepEqual(httpEffective.limits, stdioEffective.limits);
 assert.equal(httpEffective.snapshotFormat, stdioEffective.snapshotFormat);
 assert.equal(httpEffective.limits.snapshot.scratchDirectory, join(kit, 'data/http-jobs'));
 assert.equal(httpEffective.limits.snapshot.maxTreeRawPartBytes, 65536);
+assert.equal(httpEffective.limits.catalogQueryTimeoutMs, 17000);
 assert.equal(runCheck().configuredTransport, 'http');
 reports.push('stdio-http-effective-config-parity-and-isolated-preflight: PASS');
 noKeys(

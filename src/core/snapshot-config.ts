@@ -24,6 +24,7 @@ export interface SnapshotConfig {
   readonly snapshotFormat: SnapshotFormat;
   readonly catalogEnabled?: boolean;
   readonly catalogRootAliases?: ReadonlyMap<string, string>;
+  readonly catalogQueryTimeoutMs: number;
   readonly scratchDirectory: string;
   readonly maxRecordBytes: number;
   readonly maxRawPartBytes: number;
@@ -76,6 +77,7 @@ export function getSnapshotConfig(): SnapshotConfig {
   return {
     snapshotFormat: getSnapshotFormat(),
     catalogEnabled,
+    catalogQueryTimeoutMs: parseEnvInt('FS_CATALOG_QUERY_TIMEOUT_MS', 15_000, 1_000, 60_000),
     ...(aliases
       ? {
           catalogRootAliases: new Map(

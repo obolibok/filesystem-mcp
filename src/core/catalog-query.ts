@@ -3,8 +3,6 @@ import { fileURLToPath } from 'node:url';
 
 import { ErrorCode, FsError } from './errors.js';
 
-const QUERY_TIMEOUT_MS = 5_000;
-
 export type QueryValue = string | number | null;
 
 export interface CatalogQueryInput {
@@ -32,6 +30,7 @@ export type CatalogQueryReply =
 
 export function runCatalogQuery(
   request: CatalogQueryRequest,
+  timeoutMs: number,
   signal: AbortSignal,
 ): Promise<QueryRows> {
   signal.throwIfAborted();
@@ -58,8 +57,13 @@ export function runCatalogQuery(
       stop(new FsError(ErrorCode.CANCELLED, 'Catalog SQL query cancelled'));
     }
     const timer = setTimeout(() => {
-      stop(new FsError(ErrorCode.TIMEOUT, 'Catalog SQL query exceeded its 5 second time limit'));
-    }, QUERY_TIMEOUT_MS);
+      stop(
+        new FsError(
+          ErrorCode.TIMEOUT,
+          `Catalog SQL query exceeded its ${String(timeoutMs)} ms time limit`,
+        ),
+      );
+    }, timeoutMs);
     signal.addEventListener('abort', onAbort, { once: true });
     child.once('message', (message: CatalogQueryReply) => {
       response = message;

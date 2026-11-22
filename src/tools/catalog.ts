@@ -132,7 +132,7 @@ export const QUERY_INDEX = defineTool({
     'files columns: root_path, configured_root, relative_path, name, extension, size_bytes, created_at, modified_at. ' +
     'Use positional ? parameters and COUNT(*) for counts, GROUP BY for summaries, and ORDER BY with SQL LIMIT/OFFSET for pages. ' +
     'Use instr(lower(name), ?) for literal substring matching with ASCII case folding. Returns columns and rows, version, and truncation status. ' +
-    'Limited to 5 seconds and 200 result rows. Dates are UTC, and creation time may be null.',
+    'Limited by the server SQL timeout (15 seconds by default) and by 200 result rows. Dates are UTC, and creation time may be null.',
   input: z.strictObject({
     path: RequiredPath.describe(
       'Indexed root or indexed subfolder. The server fixes the query scope.',

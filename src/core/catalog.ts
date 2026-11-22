@@ -575,6 +575,7 @@ export class FileCatalog {
         first: scope.first,
         last: scope.last,
       },
+      this.config.catalogQueryTimeoutMs,
       cancellation,
     );
     this.sqlQueries.add(pending);

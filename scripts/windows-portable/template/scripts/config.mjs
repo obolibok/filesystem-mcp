@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 export const kit = await realpath(resolve(dirname(fileURLToPath(import.meta.url)), '..'));
 const ranges = {
   FS_MAX_FILE_SIZE: [1048576, 104857600],
+  FS_CATALOG_QUERY_TIMEOUT_MS: [1000, 60000],
   FS_SNAPSHOT_RESULT_TTL_MS: [1000, 2592000000],
   FS_SNAPSHOT_CLEANUP_INTERVAL_MS: [1000, 3600000],
   FS_SNAPSHOT_SCRATCH_QUOTA_BYTES: [1048576, 68719476736],
