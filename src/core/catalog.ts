@@ -112,6 +112,7 @@ export class FileCatalog {
   private readonly shutdown = new AbortController();
   private readonly store: CatalogStore;
   private readonly config: SnapshotConfig;
+  private startup: Promise<void> | undefined;
   private worker: Promise<void> | undefined;
   private closing: Promise<void> | undefined;
 
@@ -127,9 +128,48 @@ export class FileCatalog {
 
   private async closeStore(): Promise<void> {
     this.shutdown.abort();
+    await this.startup;
     await this.worker;
     await Promise.allSettled(this.sqlQueries);
     this.store.close();
+  }
+
+  startMissingRoots(fs: GuardedFileSystem): void {
+    if (!this.shutdown.signal.aborted) this.startup ??= this.enqueueMissingRoots(fs);
+  }
+
+  private async enqueueMissingRoots(fs: GuardedFileSystem): Promise<void> {
+    const signal = this.shutdown.signal;
+    for (const root of fs.pathGuard.getAllowedDirectories()) {
+      if (signal.aborted) return;
+      let path = root;
+      try {
+        path = await withAbort(fs.pathGuard.validateExistingDirectory(root, signal), signal);
+        const target = await withAbort(this.target(fs, path, true), signal);
+        if (!target) continue;
+        while (
+          !this.pending.has(target.root) &&
+          !this.matches(this.store.active(target.root), target)
+        ) {
+          if (this.hasQueueRoom()) {
+            this.enqueue(fs, target);
+            break;
+          }
+          const first = this.pending.values().next().value;
+          if (!first) break;
+          await withAbort(first.completion.promise, signal);
+        }
+      } catch (error) {
+        if (signal.aborted) return;
+        if (!this.pending.has(path) && !this.failed.has(path)) {
+          this.failed.set(path, {
+            requestId: randomUUID(),
+            errorCode: Problem.fromUnknown(error, ErrorCode.IO_ERROR).code,
+            errorStage: 'source',
+          });
+        }
+      }
+    }
   }
 
   private async target(
@@ -551,7 +591,11 @@ export class FileCatalog {
     const target = await this.target(fs, path);
     const version = target ? this.store.active(target.root) : undefined;
     if (!target || !this.matches(version, target)) {
-      throw new FsError(ErrorCode.NOT_FOUND, 'No current catalog for this root. Call index_root.');
+      const message =
+        target && this.pending.has(target.root)
+          ? 'Catalog indexing is in progress. Check list_roots, then retry.'
+          : 'No current catalog for this root. Call index_root.';
+      throw new FsError(ErrorCode.NOT_FOUND, message);
     }
     const scope = this.store.scope(version.id, target.relativePath);
     if (!scope) {

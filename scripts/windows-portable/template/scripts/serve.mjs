@@ -26,6 +26,7 @@ try {
     mkdirSync(join(kit, 'data'), { recursive: true });
     const scratch = mkdtempSync(join(kit, 'data', 'preflight-'));
     process.env.FS_SNAPSHOT_DIR = scratch;
+    process.env.FS_CATALOG_INDEX_ON_STARTUP = '0';
     // This exact directory was created by this invocation, never an operator path.
     process.once('exit', () => rmSync(scratch, { recursive: true, force: true }));
   }

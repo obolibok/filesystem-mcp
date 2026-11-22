@@ -28,7 +28,7 @@ import { GuardedFileSystem } from '../src/core/fs.js';
 import { ArtifactJobManager, fingerprintJobInput } from '../src/core/job-manager.js';
 import { normalizePath } from '../src/core/path-utils.js';
 import { getSnapshotConfig } from '../src/core/snapshot-config.js';
-import { createStdioClient, makeGuard } from './helpers.js';
+import { createRawStdioServer, createStdioClient, makeGuard } from './helpers.js';
 
 interface CatalogStatus {
   indexed: boolean;
@@ -101,6 +101,42 @@ async function status(client: Client, root: string): Promise<CatalogStatus> {
   return result;
 }
 
+test(
+  'stdio builds the catalog before receiving any client messages',
+  { timeout: 45_000 },
+  async (t) => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'filemcp-catalog-start-')));
+    t.after(() => rm(base, { recursive: true, force: true }));
+    const root = join(base, 'source');
+    const scratch = join(base, 'jobs');
+    await mkdir(root);
+    await writeFile(join(root, 'sample.txt'), 'synthetic');
+    const raw = await createRawStdioServer(root, clientEnv(scratch));
+    raw.child.stderr.resume();
+    try {
+      await waitFor(
+        async () => {
+          assert.equal(raw.child.exitCode, null);
+          if (!(await stat(join(scratch, 'catalog.sqlite-wal')).catch(() => undefined))) return;
+          try {
+            const db = new DatabaseSync(join(scratch, 'catalog.sqlite'), { readOnly: true });
+            try {
+              return db.prepare('SELECT id FROM active').get()?.['id'];
+            } finally {
+              db.close();
+            }
+          } catch (error) {
+            return { opening: String(error) };
+          }
+        },
+        (value) => typeof value === 'string',
+      );
+    } finally {
+      await raw.close();
+    }
+  },
+);
+
 test('SQL queries respect the published catalog scope', { timeout: 75_000 }, async (t) => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'filemcp-catalog-sql-')));
   t.after(() => rm(base, { recursive: true, force: true }));
@@ -128,11 +164,10 @@ test('SQL queries respect the published catalog scope', { timeout: 75_000 }, asy
     FS_ALLOWED_DIRS: [other].join(delimiter),
     FS_CATALOG_ROOT_ALIASES: JSON.stringify([[root, './original-spelling']]),
     FS_CATALOG_QUERY_TIMEOUT_MS: '6000',
+    FS_SNAPSHOT_MAX_QUEUED_JOBS: '0',
   });
   const { client, close } = await createStdioClient(root, env, ['--read-only']);
   try {
-    await call(client, 'index_root', { path: root });
-    await call(client, 'index_root', { path: other });
     await waitFor(
       () => statuses(client),
       (values) => values.size === 2 && [...values.values()].every((value) => value.indexed),
@@ -446,7 +481,11 @@ test(
     const baseline = await tree(live.client, scope).finally(() => live.close());
     assert.deepEqual([...baseline.nodes.keys()].sort(), expected);
 
-    const first = await createStdioClient(root, clientEnv(scratch), ['--read-only']);
+    const first = await createStdioClient(
+      root,
+      clientEnv(scratch, { FS_CATALOG_INDEX_ON_STARTUP: '0' }),
+      ['--read-only'],
+    );
     let observed: SearchResult['observed'];
     let version: string;
     try {
@@ -735,6 +774,7 @@ test(
     const env = clientEnv(scratch, {
       FS_ALLOWED_DIRS: [other].join(delimiter),
       FS_SNAPSHOT_MAX_WALK_DEPTH: '8',
+      FS_CATALOG_INDEX_ON_STARTUP: '0',
     });
     const { client, close } = await createStdioClient(root, env, ['--read-only']);
     try {
@@ -808,7 +848,7 @@ test(
     // A changed guard policy invalidates old results even though the file exists.
     const restricted = await createStdioClient(
       root,
-      clientEnv(scratch, { FS_SNAPSHOT_MAX_WALK_DEPTH: '8' }),
+      clientEnv(scratch, { FS_SNAPSHOT_MAX_WALK_DEPTH: '8', FS_CATALOG_INDEX_ON_STARTUP: '0' }),
       ['--read-only'],
     );
     try {

@@ -674,6 +674,22 @@ for (const phase of ['initial', 'restart']) {
       assert(!response.isError, JSON.stringify(response));
       return response;
     };
+    const startupDeadline = Date.now() + 30000;
+    let startupVersion;
+    while (!startupVersion) {
+      const roots = await httpCall('list_roots', {});
+      const [root] = (roots.structuredContent ?? roots._meta).rootDetails;
+      assert.notEqual(root.catalog.state, 'failed', JSON.stringify(root.catalog));
+      startupVersion = root.catalog.version;
+      if (startupVersion) {
+        assert.equal(root.catalog.state, 'idle');
+        break;
+      }
+      assert(phase === 'initial' && Date.now() < startupDeadline, 'Missing startup catalog');
+      await delay(50);
+    }
+    if (phase === 'restart') assert.equal(startupVersion, httpCatalogVersion);
+    reports.push('http-catalog-startup-' + phase + ': PASS');
     assert.deepEqual(bytes(await httpCall('get_file', { path: binaryPath })), binary);
     const submission = await httpCall('snapshot', { path: capRoot });
     const submitted = submission.structuredContent ?? submission._meta;
@@ -709,6 +725,7 @@ for (const phase of ['initial', 'restart']) {
       });
       assert(!response.isError, JSON.stringify(response));
       const catalog = response.structuredContent ?? response._meta;
+      assert.equal(catalog.version, startupVersion);
       assert.deepEqual(
         catalog.entries.map((entry) => entry.name),
         ['original.bin'],

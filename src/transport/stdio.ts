@@ -343,6 +343,15 @@ export function startServer(options: ServerOptions, config: RuntimeConfig = {}):
       });
   };
 
+  if (jobManager.config.catalogEnabled && jobManager.config.catalogIndexOnStartup) {
+    void ensurePathGuard()
+      .then(() => jobManager.initialize(pathGuard))
+      .catch((error: unknown) => {
+        if (!closed)
+          Logger.error('[Stdio] catalog startup failed:', formatUnknownErrorMessage(error));
+      });
+  }
+
   return {
     close: async () => {
       try {

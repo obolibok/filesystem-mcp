@@ -25,7 +25,7 @@ export const INDEX_ROOT = defineTool({
   name: 'index_root',
   title: 'Build File Catalog',
   description:
-    'Queue an index of one allowed root from list_roots. Only one root is scanned at a time. Monitor indexing through list_roots. A failed scan preserves the previous index.',
+    'Queue an index of one allowed root from list_roots. Roots without a usable index are queued at server startup. Only one root is scanned at a time. Monitor indexing through list_roots. A failed scan preserves the previous index.',
   input: z.strictObject({ path: RequiredPath }),
   output: z.strictObject({
     requestId: z.uuid(),

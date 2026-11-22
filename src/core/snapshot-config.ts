@@ -23,6 +23,7 @@ export function getSnapshotFormat(): SnapshotFormat {
 export interface SnapshotConfig {
   readonly snapshotFormat: SnapshotFormat;
   readonly catalogEnabled?: boolean;
+  readonly catalogIndexOnStartup: boolean;
   readonly catalogRootAliases?: ReadonlyMap<string, string>;
   readonly catalogQueryTimeoutMs: number;
   readonly scratchDirectory: string;
@@ -77,6 +78,10 @@ export function getSnapshotConfig(): SnapshotConfig {
   return {
     snapshotFormat: getSnapshotFormat(),
     catalogEnabled,
+    catalogIndexOnStartup: parseTrueEnvFlag(
+      process.env['FS_CATALOG_INDEX_ON_STARTUP'] ?? '1',
+      'FS_CATALOG_INDEX_ON_STARTUP',
+    ),
     catalogQueryTimeoutMs: parseEnvInt('FS_CATALOG_QUERY_TIMEOUT_MS', 15_000, 1_000, 60_000),
     ...(aliases
       ? {
