@@ -2,7 +2,7 @@
 
 Владелец — архитекторский/планирующий чат. Обновлено 2026-11-22.
 Начать с [handover архитектору](architect-handover-2026-10-29.md).
-Задача 023 принята. Проверочный portable для пилота собран из `main`.
+Задачи 024 и 025 приняты и вошли в `main`.
 Предыдущая хроника сохранена в [архиве](history/status-2026-10-29.md).
 
 | ID           | Работа                                                                                        | Статус | Зависит от         |
@@ -35,8 +35,8 @@
 | 005          | [Контролируемое повторение предметного исследования](../tasks/005-controlled-domain-study.md) | done   | 004, 006, 007, 008 |
 | 022          | [Единый portable для stdio и HTTP](../tasks/022-universal-portable.md)                        | done   | 020, 021           |
 | 023          | [Постоянный файловый каталог](../tasks/023-persistent-file-catalog.md)                        | done   | 006, 015, 018, 022 |
-| 024          | [Защищённые элементы при индексации](../tasks/024-catalog-protected-entries.md)               | active | 023                |
-| 025          | [SQL для опубликованного каталога](../tasks/025-catalog-sql.md)                               | active | 024                |
+| 024          | [Защищённые элементы при индексации](../tasks/024-catalog-protected-entries.md)               | done   | 023                |
+| 025          | [SQL для опубликованного каталога](../tasks/025-catalog-sql.md)                               | done   | 024                |
 
 proposed — направление без назначения; ready — согласованная карточка;
 active — назначен исполнитель; review — проверяемый результат; done — принят
@@ -44,6 +44,21 @@ active — назначен исполнитель; review — проверяе�
 Центральную доску ведёт планирование, coding-чаты — Work record своих карточек.
 
 ## Последняя приёмка
+
+- **025 (22.11)** — SQL по опубликованному индексу, фильтр по типу записи,
+  стартовая индексация и переиспользование готовых поколений. Справка объясняет
+  выбор между `search_index`, `query_index` и `snapshot`.
+  [PR #25](https://github.com/obolibok/filesystem-mcp/pull/25), merge `57036f96`.
+  [CI #188](https://github.com/obolibok/filesystem-mcp/actions/runs/45019872081)
+  Windows/Ubuntu PASS. Portable из `450e8851` прошёл Verify 60/60 на
+  синтетических источниках. [Карточка 025](../tasks/025-catalog-sql.md).
+
+- **024 (22.11)** — штатные исключения Windows и диагностика отказа индексации.
+  [PR #24](https://github.com/obolibok/filesystem-mcp/pull/24), merge `5d13d96f`.
+  [CI #176](https://github.com/obolibok/filesystem-mcp/actions/runs/44949133923)
+  Windows/Ubuntu PASS. Изолированная проверка на пилотном корне опубликовала
+  пригодное поколение с 61 исключением.
+  [Карточка 024](../tasks/024-catalog-protected-entries.md).
 
 - **023 (21.11)** — общий SQLite-каталог и экспорт через прежний snapshot.
   PR #23 принят после повторного CI и проверки исключительного владения scratch.
