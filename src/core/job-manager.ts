@@ -17,7 +17,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import { FileCatalog } from './catalog.js';
 import { ErrorCode, formatUnknownErrorMessage, FsError, isNodeError } from './errors.js';
-import type { GuardedFileSystem } from './fs.js';
+import { GuardedFileSystem } from './fs.js';
 import type {
   JobCounters,
   JobErrorSample,
@@ -407,7 +407,11 @@ export class ArtifactJobManager {
     }
     this.#initialized ??= this.#initialize(guard);
     await this.#initialized;
-    if (guard && this.#catalog) await guard.protectScratchDirectory(this.#scratchDirectory);
+    if (guard && this.#catalog) {
+      await guard.protectScratchDirectory(this.#scratchDirectory);
+      if (this.config.catalogIndexOnStartup)
+        this.#catalog.startMissingRoots(new GuardedFileSystem(guard));
+    }
   }
 
   /** Captured settings that can change snapshot traversal or published artifact shape. */
@@ -1381,7 +1385,12 @@ export class ArtifactJobManager {
       this.#closed = true;
       return;
     }
-    await this.#initialized;
+    try {
+      await this.#initialized;
+    } catch {
+      this.#closed = true;
+      return;
+    }
     if (this.#closed) return;
     this.#closed = true;
     if (this.#cleanupTimer) clearInterval(this.#cleanupTimer);

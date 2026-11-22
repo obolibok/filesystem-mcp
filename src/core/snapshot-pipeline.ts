@@ -24,6 +24,7 @@ export interface SnapshotTreeRecord {
   readonly name: string;
   readonly length?: number;
   readonly lastWriteTime?: string;
+  readonly creationTime?: string;
 }
 
 type WalkRecord = SnapshotRecord | SnapshotTreeRecord;
@@ -391,6 +392,8 @@ export async function* walkSnapshotRecords(
           length: detail.stats.size,
           lastWriteTime: detail.stats.mtime.toISOString(),
         };
+        const birthtime = detail.stats.birthtime;
+        const birthtimeMs = birthtime.getTime();
         yield options.layout
           ? {
               type: 'F',
@@ -398,6 +401,9 @@ export async function* walkSnapshotRecords(
               name: record.name,
               length: record.length,
               lastWriteTime: record.lastWriteTime,
+              ...(Number.isFinite(birthtimeMs) && birthtimeMs !== 0
+                ? { creationTime: birthtime.toISOString() }
+                : {}),
             }
           : record;
       }

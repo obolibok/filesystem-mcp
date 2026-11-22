@@ -260,6 +260,7 @@ export async function runPrintConfig(options: {
     apiKey: options.apiKey ? '***' : null,
     limits: {
       maxFileSizeBytes: getMaxTextFileSize(),
+      catalogQueryTimeoutMs: snapshot.catalogQueryTimeoutMs,
       snapshot: {
         scratchDirectory: snapshot.scratchDirectory,
         maxRecordBytes: snapshot.maxRecordBytes,

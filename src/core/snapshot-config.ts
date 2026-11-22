@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
+import * as z from 'zod/v4';
+
+import { normalizePath } from './path-utils.js';
 import { parseTrueEnvFlag } from './primitives.js';
 import { getMaxTextFileSize, MIB, parseEnvInt } from './util.js';
 
@@ -20,6 +23,9 @@ export function getSnapshotFormat(): SnapshotFormat {
 export interface SnapshotConfig {
   readonly snapshotFormat: SnapshotFormat;
   readonly catalogEnabled?: boolean;
+  readonly catalogIndexOnStartup: boolean;
+  readonly catalogRootAliases?: ReadonlyMap<string, string>;
+  readonly catalogQueryTimeoutMs: number;
   readonly scratchDirectory: string;
   readonly maxRecordBytes: number;
   readonly maxRawPartBytes: number;
@@ -50,6 +56,11 @@ export interface SnapshotConfig {
 }
 
 export function getSnapshotConfig(): SnapshotConfig {
+  const catalogEnabled = parseTrueEnvFlag(process.env['FS_CATALOG_ENABLED'], 'FS_CATALOG_ENABLED');
+  const rootAliases = catalogEnabled ? process.env['FS_CATALOG_ROOT_ALIASES'] : undefined;
+  const aliases = rootAliases
+    ? z.array(z.tuple([z.string().min(1), z.string().min(1)])).parse(JSON.parse(rootAliases))
+    : undefined;
   const isTest =
     process.env['NODE_ENV'] === 'test' ||
     process.env['NODE_TEST_CONTEXT'] !== undefined ||
@@ -66,7 +77,19 @@ export function getSnapshotConfig(): SnapshotConfig {
   );
   return {
     snapshotFormat: getSnapshotFormat(),
-    catalogEnabled: parseTrueEnvFlag(process.env['FS_CATALOG_ENABLED'], 'FS_CATALOG_ENABLED'),
+    catalogEnabled,
+    catalogIndexOnStartup: parseTrueEnvFlag(
+      process.env['FS_CATALOG_INDEX_ON_STARTUP'] ?? '1',
+      'FS_CATALOG_INDEX_ON_STARTUP',
+    ),
+    catalogQueryTimeoutMs: parseEnvInt('FS_CATALOG_QUERY_TIMEOUT_MS', 15_000, 1_000, 60_000),
+    ...(aliases
+      ? {
+          catalogRootAliases: new Map(
+            aliases.map(([path, configured]) => [normalizePath(path), configured]),
+          ),
+        }
+      : {}),
     scratchDirectory: resolve(process.env['FS_SNAPSHOT_DIR'] ?? defaultScratch),
     maxRecordBytes: parseEnvInt('FS_SNAPSHOT_MAX_RECORD_BYTES', MIB, 1024, 16 * MIB),
     maxRawPartBytes,

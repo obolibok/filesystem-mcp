@@ -57,6 +57,7 @@ function runCheck(env = {}) {
 }
 const defaults = runCheck({ FS_SNAPSHOT_FORMAT: 'stable', FS_EXPERIMENTAL_SNAPSHOT_TREE: '1' });
 assert.equal(defaults.snapshotFormat, 'tree');
+assert.equal(defaults.limits.FS_CATALOG_QUERY_TIMEOUT_MS, 15000);
 const { snapshotFormat: _format, ...omittedFormat } = original;
 await save({ ...omittedFormat, experimentalSnapshotTree: false });
 assert.equal(runCheck({ FS_SNAPSHOT_FORMAT: 'stable' }).snapshotFormat, 'tree');
@@ -73,6 +74,7 @@ await save({ ...original, catalogEnabled: true });
 const catalog = runCheck({ FS_CATALOG_ENABLED: '0' });
 assert.equal(catalog.catalogEnabled, true);
 assert(catalog.tools.includes('index_root') && catalog.tools.includes('search_index'));
+assert(catalog.tools.includes('query_index'));
 assert(
   catalog.rootResponse.structuredContent.rootDetails.every(
     (root) => root.catalog.indexed === false,
@@ -530,6 +532,7 @@ const httpConfig = {
   ...capConfig,
   transport: 'http',
   catalogEnabled: true,
+  limits: { ...capConfig.limits, FS_CATALOG_QUERY_TIMEOUT_MS: 17000 },
   localHttp: { host: '127.0.0.1', port: httpPort, apiKey: ' ' + httpKey + ' ' },
   scratchDirectory: './data/http-jobs',
 };
@@ -547,6 +550,7 @@ function effective() {
       NODE_OPTIONS: '',
       FS_API_KEY: configuredKey,
       FS_PORT: '39999',
+      FS_CATALOG_QUERY_TIMEOUT_MS: '1000',
       PORTABLE_HTTP_API_KEY: '',
     },
   });
@@ -566,6 +570,7 @@ assert.deepEqual(httpEffective.limits, stdioEffective.limits);
 assert.equal(httpEffective.snapshotFormat, stdioEffective.snapshotFormat);
 assert.equal(httpEffective.limits.snapshot.scratchDirectory, join(kit, 'data/http-jobs'));
 assert.equal(httpEffective.limits.snapshot.maxTreeRawPartBytes, 65536);
+assert.equal(httpEffective.limits.catalogQueryTimeoutMs, 17000);
 assert.equal(runCheck().configuredTransport, 'http');
 reports.push('stdio-http-effective-config-parity-and-isolated-preflight: PASS');
 noKeys(
@@ -597,6 +602,7 @@ await save(httpConfig);
 const binaryPath = join(capRoot, 'original.bin');
 const binary = Buffer.from([0, 255, 1, 128, 13, 10]);
 await writeFile(binaryPath, binary);
+await mkdir(join(capRoot, 'Empty folder'));
 const endpoint = 'http://127.0.0.1:' + httpPort;
 const httpArtifacts = new Map();
 let httpJobId;
@@ -662,12 +668,28 @@ for (const phase of ['initial', 'restart']) {
     );
     const tools = (await httpClient.listTools()).tools;
     assert.deepEqual(tools.map((tool) => tool.name).sort(), httpEffective.tools.sort());
-    assert.equal(tools.length, 15);
+    assert.equal(tools.length, 16);
     const httpCall = async (name, args) => {
       const response = await httpClient.callTool({ name, arguments: args });
       assert(!response.isError, JSON.stringify(response));
       return response;
     };
+    const startupDeadline = Date.now() + 30000;
+    let startupVersion;
+    while (!startupVersion) {
+      const roots = await httpCall('list_roots', {});
+      const [root] = (roots.structuredContent ?? roots._meta).rootDetails;
+      assert.notEqual(root.catalog.state, 'failed', JSON.stringify(root.catalog));
+      startupVersion = root.catalog.version;
+      if (startupVersion) {
+        assert.equal(root.catalog.state, 'idle');
+        break;
+      }
+      assert(phase === 'initial' && Date.now() < startupDeadline, 'Missing startup catalog');
+      await delay(50);
+    }
+    if (phase === 'restart') assert.equal(startupVersion, httpCatalogVersion);
+    reports.push('http-catalog-startup-' + phase + ': PASS');
     assert.deepEqual(bytes(await httpCall('get_file', { path: binaryPath })), binary);
     const submission = await httpCall('snapshot', { path: capRoot });
     const submitted = submission.structuredContent ?? submission._meta;
@@ -703,6 +725,7 @@ for (const phase of ['initial', 'restart']) {
       });
       assert(!response.isError, JSON.stringify(response));
       const catalog = response.structuredContent ?? response._meta;
+      assert.equal(catalog.version, startupVersion);
       assert.deepEqual(
         catalog.entries.map((entry) => entry.name),
         ['original.bin'],
@@ -711,6 +734,34 @@ for (const phase of ['initial', 'restart']) {
       if (phase === 'restart') assert.equal(catalog.version, httpCatalogVersion);
       httpCatalogVersion = catalog.version;
       reports.push('http-catalog-visible-to-another-client-' + phase + ': PASS');
+      const query = await anotherClient.callTool({
+        name: 'query_index',
+        arguments: {
+          path: capRoot,
+          sql: 'SELECT count(*) AS total FROM files WHERE name = ?',
+          params: ['original.bin'],
+        },
+      });
+      assert(!query.isError, JSON.stringify(query));
+      const count = query.structuredContent ?? query._meta;
+      assert.equal(count.version, catalog.version);
+      assert.deepEqual(count.columns, ['total']);
+      assert.deepEqual(count.rows, [[1]]);
+      assert.equal(count.truncated, false);
+      reports.push('http-query-index-' + phase + ': PASS');
+      const directories = await anotherClient.callTool({
+        name: 'query_index',
+        arguments: {
+          path: capRoot,
+          sql: 'SELECT relative_path, kind FROM catalog_entries WHERE kind = ?',
+          params: ['directory'],
+        },
+      });
+      assert(!directories.isError, JSON.stringify(directories));
+      const entries = directories.structuredContent ?? directories._meta;
+      assert.equal(entries.version, catalog.version);
+      assert.deepEqual(entries.rows, [['Empty folder', 'directory']]);
+      reports.push('http-query-index-directory-' + phase + ': PASS');
     } finally {
       await anotherClient.close();
     }

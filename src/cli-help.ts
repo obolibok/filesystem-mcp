@@ -135,6 +135,10 @@ const ENV_HELP: HelpRow[] = [
   },
   { flags: 'FS_SEARCH_TIMEOUT_MS', desc: 'Search timeout in ms (default 5000, 100–60000)' },
   {
+    flags: 'FS_CATALOG_QUERY_TIMEOUT_MS',
+    desc: 'query_index timeout in ms (default 15000, 1000–60000)',
+  },
+  {
     flags: 'FS_SNAPSHOT_DIR',
     desc: 'Durable snapshot/bundle job scratch directory (separate from source roots)',
   },
