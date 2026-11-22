@@ -141,9 +141,9 @@ export class FileCatalog {
   private async enqueueMissingRoots(fs: GuardedFileSystem): Promise<void> {
     const signal = this.shutdown.signal;
     for (const root of fs.pathGuard.getAllowedDirectories()) {
-      if (signal.aborted) return;
       let path = root;
       try {
+        signal.throwIfAborted();
         path = await withAbort(fs.pathGuard.validateExistingDirectory(root, signal), signal);
         const target = await withAbort(this.target(fs, path, true), signal);
         if (!target) continue;
