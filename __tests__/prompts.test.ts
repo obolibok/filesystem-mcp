@@ -1,15 +1,58 @@
 import type { TextContent } from '@modelcontextprotocol/server';
 
 import assert from 'node:assert/strict';
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { buildSectionsRecord, renderSections } from '../src/instructions.js';
+import { buildSectionsRecord, INSTRUCTIONS_URI, renderSections } from '../src/instructions.js';
 import {
   cleanupTestRoot,
+  createStdioClient,
   createTestClientPair,
   createTestRoot,
   type TestClientContext,
 } from './helpers.js';
+
+it('advertises the published catalog in all MCP help surfaces only when enabled', async (t) => {
+  const base = await createTestRoot();
+  t.after(() => cleanupTestRoot(base));
+  const root = join(base, 'source');
+  await mkdir(root);
+  for (const enabled of ['0', '1']) {
+    const { client, close } = await createStdioClient(
+      root,
+      {
+        FS_CATALOG_ENABLED: enabled,
+        FS_CATALOG_INDEX_ON_STARTUP: '0',
+        FS_SNAPSHOT_DIR: join(base, `jobs-${enabled}`),
+      },
+      ['--read-only'],
+    );
+    try {
+      const { messages } = await client.getPrompt({
+        name: 'get-help',
+        arguments: { topic: 'tools_overview' },
+      });
+      const prompt = messages[0]?.content;
+      const { contents } = await client.readResource({ uri: INSTRUCTIONS_URI });
+      const resource = contents[0];
+      assert.equal(prompt?.type, 'text');
+      assert(resource && 'text' in resource);
+      for (const text of [client.getInstructions() ?? '', prompt.text, resource.text]) {
+        assert.equal(text.includes('query_index'), enabled === '1');
+        assert.equal(text.includes('search_index'), enabled === '1');
+        assert.match(text, /snapshot -> job_status/u);
+      }
+      assert.equal(
+        prompt.text.includes('Catalog: index_root, search_index, query_index'),
+        enabled === '1',
+      );
+    } finally {
+      await close();
+    }
+  }
+});
 
 describe('MCP Prompts Tests (MCP Client)', () => {
   let tmpDir: string;

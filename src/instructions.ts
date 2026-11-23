@@ -1,8 +1,10 @@
+import { parseTrueEnvFlag } from './core/primitives.js';
 import {
   DEFAULT_SEARCH_CONTENT_RESULTS,
   getMaxTextFileSize,
   MAX_SEARCH_RESULTS,
 } from './core/util.js';
+import { INDEX_ROOT, QUERY_INDEX, SEARCH_INDEX } from './tools/catalog.js';
 import {
   BUNDLE,
   CANCEL_JOB,
@@ -19,6 +21,11 @@ import {
   STAT,
 } from './tools/index.js';
 
+const catalogEnabled = parseTrueEnvFlag(process.env['FS_CATALOG_ENABLED']);
+const catalogGuide =
+  `When ${LIST_ROOTS.name} reports an indexed root, use ${SEARCH_INDEX.name} for routine filters with cursor pagination ` +
+  `and ${QUERY_INDEX.name} for counts, grouping, substring matches or combined conditions on the published index.`;
+
 function buildToolsOverview(readOnly: boolean): string {
   const rows: [string, string[]][] = [
     ['Navigate', [LIST_ROOTS.name, LIST.name, FIND_FILES.name]],
@@ -26,6 +33,9 @@ function buildToolsOverview(readOnly: boolean): string {
     ['Read', [READ.name, GET_FILE.name]],
     ['Jobs', [SNAPSHOT.name, BUNDLE.name, JOB_STATUS.name, CANCEL_JOB.name, GET_ARTIFACT.name]],
   ];
+
+  if (catalogEnabled)
+    rows.push(['Catalog', [INDEX_ROOT.name, SEARCH_INDEX.name, QUERY_INDEX.name]]);
 
   // Under --read-only the mutating tools are never registered, so advertising
   // them here would point the model at tools that are not there. Drop the row
@@ -49,8 +59,10 @@ export const INSTRUCTIONS_URI = 'internal://instructions';
 export const INSTRUCTIONS_SUMMARY =
   'Navigation guide for filesystem-mcp. Never guess paths: use list_roots and select the requested scope. ' +
   'Choose list for one folder, find_files for names/globs, search_text for content, ' +
-  'snapshot -> job_status for recursive inventories/file totals (get_artifact for the index), ' +
   'read for text, get_file for one original, bundle -> job_status -> get_artifact for selected originals. ' +
+  (catalogEnabled
+    ? `${catalogGuide} Use snapshot -> job_status -> get_artifact to export an inventory. Use forceRefresh for a fresh walk. `
+    : 'Use snapshot -> job_status for recursive inventories and file totals, and get_artifact for the inventory files. ') +
   'A known root needs no broad find_files before snapshot.';
 
 export function buildSectionsRecord(readOnly: boolean): Record<string, string> {
@@ -63,7 +75,7 @@ export function buildSectionsRecord(readOnly: boolean): Record<string, string> {
       'root_selection: Select the scope requested by the user; never silently choose the first of several roots. Omit path only when root entries resolve to exactly one filesystem location; with roots at multiple locations, provide an explicit path.',
       'modern_root_grants: Modern clients do not automatically send workspace roots. Call a tool with a concrete path and approve its grant when elicitation is available.',
       `path_resolution: Use returned roots/paths or concrete user-provided paths. Discover unknown children with ${LIST.name} or ${FIND_FILES.name}; a known root can go straight to ${SNAPSHOT.name}.`,
-      'published_catalog: When tools/list offers the catalog tools and list_roots reports an indexed root, use search_index for name, prefix, extension or modification-time filters with cursor pagination. Use query_index for counts, grouping, substring matches or combined conditions on that same published index. Use snapshot to export an inventory or to request a fresh walk.',
+      ...(catalogEnabled ? [`published_catalog: ${catalogGuide}`] : []),
       '```',
     ].join('\n'),
     tools_overview: [
@@ -81,8 +93,15 @@ export function buildSectionsRecord(readOnly: boolean): Record<string, string> {
       'sensitive_paths: Sensitive file paths (.env, *.pem, *id_rsa*) are denied by default.',
       `enforced_limits: max file size ${maxFileMb} MB, file search cap ${MAX_SEARCH_RESULTS} results, content search cap ${MAX_SEARCH_RESULTS} matches (default page ${DEFAULT_SEARCH_CONTENT_RESULTS}).`,
       `${GET_FILE.name}: Returns one byte-exact, size-limited file as an MCP embedded resource plus a resource_link; the receiving host decides whether to materialize it as a file.`,
-      `${LIST.name}: maxDepth=1 opens only the requested folder. limit stops collection across all pages (default 20000 files/folders); pageSize caps each response (default 1000). Totals describe the collected set; truncated/stoppedReason=limit means completeness is unconfirmed. Every page shows the warning. Cursors only page that set and can use a different pageSize; they do not resume traversal. maxEntries is no longer accepted. Use ${SNAPSHOT.name} for a recursive index or file total.`,
-      `${FIND_FILES.name}/${SEARCH_TEXT.name}: limit stops collection across all pages (default/cap ${MAX_SEARCH_RESULTS} files / matching lines); pageSize sets response size (defaults 100 / 500). maxDepth=0 opens only the base directory; default/cap 100. Sorts collected results, not globally first N. maxResults is removed; use limit/pageSize. Totals count collected matches only; truncated/stoppedReason=limit or timeout means completeness is unconfirmed. Every partial page warns; cursors only page that set and never resume the scan. For a recursive index or file total use ${SNAPSHOT.name}.`,
+      `${LIST.name}: maxDepth=1 opens only the requested folder. limit stops collection across all pages (default 20000 files/folders); pageSize caps each response (default 1000). Totals describe the collected set; truncated/stoppedReason=limit means completeness is unconfirmed. Every page shows the warning. Cursors only page that set and can use a different pageSize; they do not resume traversal. maxEntries is no longer accepted.`,
+      `${FIND_FILES.name}/${SEARCH_TEXT.name}: limit stops collection across all pages (default/cap ${MAX_SEARCH_RESULTS} files / matching lines); pageSize sets response size (defaults 100 / 500). maxDepth=0 opens only the base directory; default/cap 100. Sorts collected results, not globally first N. maxResults is removed; use limit/pageSize. Totals count collected matches only; truncated/stoppedReason=limit or timeout means completeness is unconfirmed. Every partial page warns; cursors only page that set and never resume the scan.`,
+      ...(catalogEnabled
+        ? [
+            `${INDEX_ROOT.name}: Reads metadata in one allowed root and publishes a new generation. Check list_roots for indexedAt, state and errors. If indexing is queued or running, wait for that request to finish.`,
+            `${SEARCH_INDEX.name}: Filters by exact name, prefix, extension or modification time. Reuse the cursor with the same filters. Results carry absolute paths for get_file.`,
+            `${QUERY_INDEX.name}: Use SELECT COUNT(*) FROM files to count indexed files in the requested path. Use catalog_entries and kind for queries that include directories. Check version, observed and policyExcluded. For pages, use a stable ORDER BY and compare version across calls.`,
+          ]
+        : []),
       `${SNAPSHOT.name}: Creates or reuses a recursive CSV/ZIP metadata index, without copying original contents. Reads guarded sources and writes separate scratch under policy, quota and deadline limits. Reuses a matching completed, complete snapshot up to maxAgeMs (default one hour from walk start), joins matching queued/running work, or starts a job. maxAgeMs=0 forbids completed reuse but still joins running work. Poll ${JOB_STATUS.name} for summary counters; fetch manifest/ZIP parts with ${GET_ARTIFACT.name} only when the index is needed. forceRefresh starts a new scan; use an optional idempotencyKey for safe retries, especially with forceRefresh. A forced retry without a key starts another scan. Reuse does not extend artifact TTL (default 24 hours after completion). Shared cancellation affects all observers; closing a request does not cancel the job. Source/.gitignore changes are not detected automatically; choose maxAgeMs for the requested freshness, and forceRefresh only when a new walk is required.`,
       `${JOB_STATUS.name}: queued/running counters are provisional progress. completed means the producer finished successfully, but may have complete=false; failed/cancelled/interrupted are not successful inventories. Check complete, stopReason, errors/fatalError, metadataPersistence and resultExpired before reporting a result. For a completed snapshot, complete=true means the walk finished within its selected scope and exclusions, not coverage of every physical file on a disk.`,
       'snapshot_counters: filesWritten counts file records written to CSV, not original bytes or guaranteed unique physical files. directoriesVisited counts opened directories including the root; entriesSeen counts enumerated entries without the root, not files. inaccessibleSkipped counts access failures including directory/iteration/ignore-rule failures; never add it to filesWritten as a file total.',
