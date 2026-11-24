@@ -570,7 +570,11 @@ export async function writeSnapshotFromRecords(
   ctx: JobRunContext,
   options: SnapshotWalkOptions,
   hooks: SnapshotPipelineHooks = {},
-  observation?: { startedAt: string; endedAt: string },
+  observation?: {
+    startedAt: string;
+    endedAt: string;
+    catalog?: { version: string; policyExcluded: number; inheritedIgnore: boolean };
+  },
 ): Promise<string> {
   const startedAt = ctx.job.startedAt ?? new Date().toISOString();
   const parts: StoredArtifact[] = [];
@@ -694,6 +698,7 @@ export async function writeSnapshotFromRecords(
       endedAt: observation?.endedAt ?? endedAt,
       atomic: false,
     },
+    ...(observation?.catalog ? { catalog: observation.catalog } : {}),
     csv: {
       encoding: 'UTF-8',
       bom: false,

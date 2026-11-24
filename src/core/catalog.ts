@@ -203,7 +203,11 @@ export class FileCatalog {
   }
 
   private async policy(fs: GuardedFileSystem): Promise<string> {
-    return `1:${String(this.config.maxWalkDepth)}:${await fs.pathGuard.snapshotPolicyFingerprint()}`;
+    return this.policyKey(await fs.pathGuard.snapshotPolicyFingerprint());
+  }
+
+  private policyKey(fingerprint: string): string {
+    return `1:${String(this.config.maxWalkDepth)}:${fingerprint}`;
   }
 
   private matches(
@@ -503,22 +507,66 @@ export class FileCatalog {
     if (!this.matches(version, target)) return undefined;
     const scope = this.store.scope(version.id, target.relativePath);
     if (!scope || scope.inheritedIgnore || scope.counters.policyExcluded) return undefined;
+    setGeneration(version.id);
+    return this.writeCatalogSnapshot(version, scope, target.relativePath, ctx, options);
+  }
+
+  async publishedGeneration(fs: GuardedFileSystem, path: string): Promise<string> {
+    return (await this.readScope(fs, path)).version.id;
+  }
+
+  async exportPublishedSnapshot(
+    fs: GuardedFileSystem,
+    ctx: JobRunContext,
+    options: SnapshotWalkOptions,
+    setGeneration: (id: string) => void,
+  ): Promise<string> {
+    const source = await fs.pathGuard.validateExistingDirectory(ctx.job.sourceRoot, ctx.signal);
+    if (source !== ctx.job.sourceRoot)
+      throw new FsError(ErrorCode.ACCESS_DENIED, 'Catalog export source changed');
+    const { target, version, scope } = this.requirePublishedScope(await this.target(fs, source));
+    ctx.signal.throwIfAborted();
+    if (version.policy !== this.policyKey(ctx.job.policyFingerprint ?? ''))
+      throw new FsError(ErrorCode.ACCESS_DENIED, 'Catalog export access policy changed');
+    setGeneration(version.id);
+    return this.writeCatalogSnapshot(version, scope, target.relativePath, ctx, options, true);
+  }
+
+  private async writeCatalogSnapshot(
+    version: CatalogVersion,
+    scope: CatalogScope,
+    relativePath: string,
+    ctx: JobRunContext,
+    options: SnapshotWalkOptions,
+    includeCatalogMetadata = false,
+  ): Promise<string> {
     this.readers.set(version.id, (this.readers.get(version.id) ?? 0) + 1);
     try {
-      setGeneration(version.id);
       ctx.job.observationStartedAt = version.startedAt;
       ctx.job.provenance = {
         ...version.provenance,
         root: { ...version.provenance.root, path: ctx.job.sourceRoot },
       };
-      const { policyExcluded: _excluded, ...counters } = scope.counters;
+      const { policyExcluded = 0, ...counters } = scope.counters;
       Object.assign(ctx.job.counters, counters);
       return await writeSnapshotFromRecords(
-        this.records(version.id, scope, target.relativePath, ctx, options),
+        this.records(version.id, scope, relativePath, ctx, options),
         ctx,
         options,
         {},
-        version,
+        {
+          startedAt: version.startedAt,
+          endedAt: version.endedAt,
+          ...(includeCatalogMetadata
+            ? {
+                catalog: {
+                  version: version.id,
+                  policyExcluded,
+                  inheritedIgnore: scope.inheritedIgnore,
+                },
+              }
+            : {}),
+        },
       );
     } finally {
       const readers = this.readers.get(version.id) ?? 1;
@@ -588,7 +636,10 @@ export class FileCatalog {
   }
 
   private async readScope(fs: GuardedFileSystem, path: string) {
-    const target = await this.target(fs, path);
+    return this.requirePublishedScope(await this.target(fs, path));
+  }
+
+  private requirePublishedScope(target: CatalogTarget | undefined) {
     const version = target ? this.store.active(target.root) : undefined;
     if (!target || !this.matches(version, target)) {
       const message =

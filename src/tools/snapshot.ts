@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import * as z from 'zod/v4';
 
-import { ErrorCode } from '../core/errors.js';
+import { ErrorCode, FsError } from '../core/errors.js';
 import { GuardedFileSystem } from '../core/fs.js';
 import { fingerprintJobInput, resolveSnapshotRoot } from '../core/job-manager.js';
 import { defaultFalseBoolean, RequiredPath } from '../core/schema.js';
@@ -39,6 +39,10 @@ const SnapshotOutputSchema = z.strictObject({
   reason: z.enum(['created', 'completed_reuse', 'inflight_reuse', 'idempotent_replay']),
   job: JobStatusOutputSchema,
 });
+
+function snapshotRootId(path: string): string {
+  return `root-${createHash('sha256').update(path).digest('hex').slice(0, 16)}`;
+}
 
 function snapshotTool(tree: boolean) {
   return defineTool({
@@ -96,7 +100,6 @@ function snapshotTool(tree: boolean) {
         maxAgeMs: args.maxAgeMs,
         forceRefresh: args.forceRefresh,
       });
-      const sourceRootId = `root-${createHash('sha256').update(sourceRoot).digest('hex').slice(0, 16)}`;
       const workerFs = new GuardedFileSystem(ctx.fs.pathGuard);
       const submitted = await ctx.jobManager.submit({
         kind: 'snapshot',
@@ -111,7 +114,7 @@ function snapshotTool(tree: boolean) {
           forceRefresh: args.forceRefresh,
         },
         sourceRoot,
-        sourceRootId,
+        sourceRootId: snapshotRootId(sourceRoot),
         reuseGuard: ctx.fs.pathGuard,
         input: {
           includeHidden: args.includeHidden,
@@ -151,3 +154,81 @@ function snapshotTool(tree: boolean) {
 
 export const SNAPSHOT = snapshotTool(true);
 export const STABLE_SNAPSHOT = snapshotTool(false);
+
+function exportIndexTool(tree: boolean) {
+  return defineTool({
+    name: 'export_index',
+    title: 'Export Published File Catalog',
+    description:
+      'Export the published SQLite index for one allowed root or indexed subfolder, regardless of index age. ' +
+      'This never scans source files or builds an index. The manifest records the generation, observation times and the number of entries excluded by policy. ' +
+      (tree ? 'Produces tree-depth-v1 CSV/ZIP. ' : 'Produces stable file-only CSV/ZIP. ') +
+      'Poll job_status and use get_artifact for the manifest and ZIP parts. Complete means every published record for the path was exported.',
+    input: z.strictObject({ path: RequiredPath.describe('An indexed root or indexed subfolder.') }),
+    output: SnapshotOutputSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      openWorldHint: false,
+    },
+    sourceMutating: false,
+    defaultErrorCode: ErrorCode.IO_ERROR,
+    accessPaths: (args) => [args.path],
+    run: async ({ path }, ctx) => {
+      const catalog = ctx.jobManager.catalog;
+      if (!catalog) throw new FsError(ErrorCode.INVALID_INPUT, 'File catalog is disabled');
+      const sourceRoot = await ctx.fs.pathGuard.validateExistingDirectory(path, ctx.signal);
+      await ctx.jobManager.assertScratchSeparated(sourceRoot);
+      const policyFingerprint = await ctx.fs.pathGuard.snapshotPolicyFingerprint();
+      const configFingerprint = ctx.jobManager.snapshotConfigFingerprint(tree);
+      const options = {
+        includeHidden: false,
+        includeIgnored: false,
+        ...(tree ? { layout: 'tree-depth-v1' as const } : {}),
+      };
+      const identity = {
+        version: 1,
+        kind: 'published-catalog-export',
+        sourceRoot,
+        policyFingerprint,
+        configFingerprint,
+        ...options,
+      };
+      const forGeneration = (generation: string) =>
+        fingerprintJobInput({ ...identity, generation });
+      const fingerprint = forGeneration(await catalog.publishedGeneration(ctx.fs, sourceRoot));
+      const fs = new GuardedFileSystem(ctx.fs.pathGuard);
+      const submitted = await ctx.jobManager.submit({
+        kind: 'snapshot',
+        fingerprint,
+        automaticReuse: {
+          fingerprint,
+          policyFingerprint,
+          configFingerprint,
+          requestFingerprint: fingerprint,
+          maxAgeMs: Number.POSITIVE_INFINITY,
+          forceRefresh: false,
+        },
+        sourceRoot,
+        sourceRootId: snapshotRootId(sourceRoot),
+        reuseGuard: ctx.fs.pathGuard,
+        input: { ...options, catalogExport: true },
+        run: (runCtx) =>
+          catalog.exportPublishedSnapshot(fs, runCtx, options, (generation) => {
+            runCtx.job.reuseFingerprint = forGeneration(generation);
+          }),
+      });
+      return {
+        structured: {
+          reused: submitted.reused,
+          reason: submitted.reason,
+          job: jobStatusValue(submitted.job),
+        },
+        text: `Index export job ${submitted.job.jobId} (${submitted.job.state}, ${submitted.reason}). Poll job_status for artifacts.`,
+      };
+    },
+  });
+}
+
+export const EXPORT_INDEX = exportIndexTool(true);
+export const STABLE_EXPORT_INDEX = exportIndexTool(false);

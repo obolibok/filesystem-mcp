@@ -61,8 +61,8 @@ try {
   const tools = await request('tools/list', {});
   const names = tools.tools.map((tool) => tool.name);
   assert.equal(names.includes('snapshot_tree'), false);
-  assert.equal(names.length, config.catalogEnabled ? 16 : 13);
-  for (const name of ['index_root', 'search_index', 'query_index'])
+  assert.equal(names.length, config.catalogEnabled ? 17 : 13);
+  for (const name of ['index_root', 'search_index', 'query_index', 'export_index'])
     assert.equal(names.includes(name), config.catalogEnabled);
   assert.match(
     tools.tools.find((tool) => tool.name === 'snapshot').description,

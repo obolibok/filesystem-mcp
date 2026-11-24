@@ -17,3 +17,18 @@
 ## Work record
 
 Ветка `codex/027-export-published-index` от `27a81501`.
+
+- Реализация `0ed3c7d9`, PR #27. Выгрузка использует актуальное пригодное
+  поколение к началу задания. Манифест сохраняет исходный интервал индексации
+  и добавляет `catalog.version`, `catalog.policyExcluded` и `catalog.inheritedIgnore`.
+- Проверен индекс старше 30 дней с исключениями, подпапка с наследуемым
+  `.gitignore`, оба формата, повторная выдача, SHA-256 артефактов и отсутствие
+  запуска индексации или обхода источника при экспорте. Регрессия для обычного
+  `snapshot` с исключениями тоже прошла.
+- Windows `npm run check` — 602 PASS, 13 пропусков. Portable из `0ed3c7d9`
+  прошёл Check и Verify 62/62. HTTP-проверки получили manifest и ZIP, а после
+  рестарта переиспользовали готовое задание.
+- [CI #195](https://github.com/obolibok/filesystem-mcp/actions/runs/45370410281)
+  выполнил `npm run check` для `0ed3c7d9` на Windows и Ubuntu.
+- ZIP `out/FileMCP-027-pilot-0ed3c7d9.zip` проверен по `SHA256SUMS.json` и CRC.
+  SHA-256 `db01c963935367e874be54f9f506648638f69b306cd001637ae1f5e223ad9c13`.
