@@ -8,6 +8,7 @@ import { INDEX_ROOT, QUERY_INDEX, SEARCH_INDEX } from './tools/catalog.js';
 import {
   BUNDLE,
   CANCEL_JOB,
+  EXPORT_INDEX,
   FIND_FILES,
   GET_ARTIFACT,
   GET_FILE,
@@ -24,7 +25,8 @@ import {
 const catalogEnabled = parseTrueEnvFlag(process.env['FS_CATALOG_ENABLED']);
 const catalogGuide =
   `When ${LIST_ROOTS.name} reports an indexed root, use ${SEARCH_INDEX.name} for routine filters with cursor pagination ` +
-  `and ${QUERY_INDEX.name} for counts, grouping, substring matches or combined conditions on the published index.`;
+  `and ${QUERY_INDEX.name} for counts, grouping, substring matches or combined conditions on the published index. ` +
+  `Use ${EXPORT_INDEX.name} to download the published index at any age.`;
 
 function buildToolsOverview(readOnly: boolean): string {
   const rows: [string, string[]][] = [
@@ -35,7 +37,10 @@ function buildToolsOverview(readOnly: boolean): string {
   ];
 
   if (catalogEnabled)
-    rows.push(['Catalog', [INDEX_ROOT.name, SEARCH_INDEX.name, QUERY_INDEX.name]]);
+    rows.push([
+      'Catalog',
+      [INDEX_ROOT.name, SEARCH_INDEX.name, QUERY_INDEX.name, EXPORT_INDEX.name],
+    ]);
 
   // Under --read-only the mutating tools are never registered, so advertising
   // them here would point the model at tools that are not there. Drop the row
@@ -100,6 +105,7 @@ export function buildSectionsRecord(readOnly: boolean): Record<string, string> {
             `${INDEX_ROOT.name}: Reads metadata in one allowed root and publishes a new generation. Check list_roots for indexedAt, state and errors. If indexing is queued or running, wait for that request to finish.`,
             `${SEARCH_INDEX.name}: Filters by exact name, prefix, extension or modification time. Reuse the cursor with the same filters. Results carry absolute paths for get_file.`,
             `${QUERY_INDEX.name}: Use SELECT COUNT(*) FROM files to count indexed files in the requested path. Use catalog_entries and kind for queries that include directories. Check version, observed and policyExcluded. For pages, use a stable ORDER BY and compare version across calls.`,
+            `${EXPORT_INDEX.name}: Downloads the published records for one allowed indexed root or subfolder. Poll job_status and use get_artifact for the manifest and ZIP parts. Check catalog.version, catalog.policyExcluded and observed in the manifest. Use snapshot for a source inventory or a fresh walk.`,
           ]
         : []),
       `${SNAPSHOT.name}: Creates or reuses a recursive CSV/ZIP metadata index, without copying original contents. Reads guarded sources and writes separate scratch under policy, quota and deadline limits. Reuses a matching completed, complete snapshot up to maxAgeMs (default one hour from walk start), joins matching queued/running work, or starts a job. maxAgeMs=0 forbids completed reuse but still joins running work. Poll ${JOB_STATUS.name} for summary counters; fetch manifest/ZIP parts with ${GET_ARTIFACT.name} only when the index is needed. forceRefresh starts a new scan; use an optional idempotencyKey for safe retries, especially with forceRefresh. A forced retry without a key starts another scan. Reuse does not extend artifact TTL (default 24 hours after completion). Shared cancellation affects all observers; closing a request does not cancel the job. Source/.gitignore changes are not detected automatically; choose maxAgeMs for the requested freshness, and forceRefresh only when a new walk is required.`,

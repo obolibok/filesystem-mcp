@@ -75,6 +75,7 @@ const catalog = runCheck({ FS_CATALOG_ENABLED: '0' });
 assert.equal(catalog.catalogEnabled, true);
 assert(catalog.tools.includes('index_root') && catalog.tools.includes('search_index'));
 assert(catalog.tools.includes('query_index'));
+assert(catalog.tools.includes('export_index'));
 assert(
   catalog.rootResponse.structuredContent.rootDetails.every(
     (root) => root.catalog.indexed === false,
@@ -607,6 +608,7 @@ const endpoint = 'http://127.0.0.1:' + httpPort;
 const httpArtifacts = new Map();
 let httpJobId;
 let httpCatalogVersion;
+let httpExportJobId;
 for (const phase of ['initial', 'restart']) {
   let stderr = '';
   const child = spawn(node, [launcher], {
@@ -668,7 +670,7 @@ for (const phase of ['initial', 'restart']) {
     );
     const tools = (await httpClient.listTools()).tools;
     assert.deepEqual(tools.map((tool) => tool.name).sort(), httpEffective.tools.sort());
-    assert.equal(tools.length, 16);
+    assert.equal(tools.length, 17);
     const httpCall = async (name, args) => {
       const response = await httpClient.callTool({ name, arguments: args });
       assert(!response.isError, JSON.stringify(response));
@@ -775,6 +777,38 @@ for (const phase of ['initial', 'restart']) {
       httpArtifacts.set(part.artifactId, zip);
     }
     reports.push('http-auth-discovery-original-multipart-SHA-CRC-' + phase + ': PASS');
+
+    const exportResponse = await httpCall('export_index', { path: capRoot });
+    const submittedExport = exportResponse.structuredContent ?? exportResponse._meta;
+    let exportJob = submittedExport.job;
+    if (phase === 'restart') {
+      assert.equal(submittedExport.reason, 'completed_reuse');
+      assert.equal(exportJob.jobId, httpExportJobId);
+    }
+    assert.notEqual(exportJob.jobId, httpJobId);
+    const exportDeadline = Date.now() + 30000;
+    while (['queued', 'running'].includes(exportJob.state)) {
+      assert(Date.now() < exportDeadline, 'HTTP index export timed out');
+      await delay(50);
+      const state = await httpCall('job_status', { jobId: exportJob.jobId });
+      exportJob = state.structuredContent ?? state._meta;
+    }
+    assert.equal(exportJob.state, 'completed', JSON.stringify(exportJob));
+    httpExportJobId = exportJob.jobId;
+    const exported = JSON.parse(
+      bytes(await httpCall('get_artifact', { artifactId: exportJob.manifestArtifactId })),
+    );
+    assert.deepEqual(exported.catalog, {
+      version: startupVersion,
+      policyExcluded: 0,
+      inheritedIgnore: false,
+    });
+    assert.deepEqual(exported.observed, manifest.observed);
+    const [exportPart] = exported.parts;
+    const exportZip = bytes(await httpCall('get_artifact', { artifactId: exportPart.artifactId }));
+    assert.equal(createHash('sha256').update(exportZip).digest('hex'), exportPart.sha256);
+    assert.equal(unzipSingle(exportZip).length, exportPart.rawBytes);
+    reports.push('http-export-index-artifacts-' + phase + ': PASS');
   } finally {
     try {
       await httpClient.close();

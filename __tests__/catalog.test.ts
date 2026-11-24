@@ -60,6 +60,7 @@ interface Manifest {
   schema: string;
   root: { path: string };
   observed: SearchResult['observed'] & { atomic: boolean };
+  catalog?: { version: string; policyExcluded: number; inheritedIgnore: boolean };
   complete: boolean;
   counters: Record<string, number>;
   parts: { artifactId: string; sha256: string; zipBytes: number; rows: number }[];
@@ -332,10 +333,14 @@ async function bytes(
 
 async function snapshot(client: Client, path: string, extra: Record<string, unknown> = {}) {
   const { job } = await call<{ job: { jobId: string } }>(client, 'snapshot', { path, ...extra });
+  return snapshotArtifacts(client, job.jobId);
+}
+
+async function snapshotArtifacts(client: Client, jobId: string) {
   const terminal = await waitFor(
     () =>
       call<{ state: string; manifestArtifactId?: string }>(client, 'job_status', {
-        jobId: job.jobId,
+        jobId,
       }),
     (current) => !['queued', 'running'].includes(current.state),
   );
@@ -370,6 +375,111 @@ async function tree(client: Client, path: string, extra: Record<string, unknown>
   );
   return { manifest, nodes: mergeTrees(parts) };
 }
+
+test('exports an aged published index with policy exclusions', { timeout: 90_000 }, async (t) => {
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'filemcp-export-index-')));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const root = join(base, 'source');
+  const scope = join(root, 'selected');
+  const scratch = join(base, 'jobs');
+  await mkdir(scope, { recursive: true });
+  await Promise.all([
+    writeFile(join(root, '.gitignore'), 'selected/ignored.txt\n'),
+    writeFile(join(scope, 'ignored.txt'), 'synthetic'),
+    writeFile(join(scope, 'source.txt'), 'synthetic'),
+    writeFile(join(scope, 'restricted.pem'), 'synthetic'),
+  ]);
+  const env = clientEnv(scratch, { FS_CATALOG_INDEX_ON_STARTUP: '0' });
+  const initial = await createStdioClient(root, env, ['--read-only']);
+  let generation: string;
+  try {
+    assert.equal(
+      (await initial.client.callTool({ name: 'export_index', arguments: { path: root } })).isError,
+      true,
+    );
+    assert.equal((await status(initial.client, root)).state, 'idle');
+    const request = await call<{ requestId: string }>(initial.client, 'index_root', { path: root });
+    const ready = await waitFor(
+      () => status(initial.client, root),
+      (value) => value.indexed,
+    );
+    assert.equal(ready.version, request.requestId);
+    assert.equal(ready.policyExcluded, 1);
+    generation = request.requestId;
+  } finally {
+    await initial.close();
+  }
+
+  // Use the ordinary stored version format with a walk older than the snapshot age cap.
+  const startedAt = '2024-01-01T00:00:00.000Z';
+  const endedAt = '2024-01-01T00:01:00.000Z';
+  const db = new DatabaseSync(join(scratch, 'catalog.sqlite'));
+  try {
+    db.prepare(
+      "UPDATE generations SET version = json_set(version, '$.startedAt', ?, '$.endedAt', ?) WHERE id = ?",
+    ).run(startedAt, endedAt, generation);
+  } finally {
+    db.close();
+  }
+  await writeFile(join(scope, 'after-index.txt'), 'synthetic');
+  interface Submitted {
+    reason: string;
+    job: { jobId: string };
+  }
+  const current = await createStdioClient(root, env, ['--read-only']);
+  try {
+    const submitted = await call<Submitted>(current.client, 'export_index', { path: root });
+    assert.equal(submitted.reason, 'created');
+    const { manifest, archives } = await snapshotArtifacts(current.client, submitted.job.jobId);
+    assert.equal(manifest.complete, true);
+    assert.deepEqual(manifest.catalog, {
+      version: generation,
+      policyExcluded: 1,
+      inheritedIgnore: false,
+    });
+    assert.deepEqual(manifest.observed, { startedAt, endedAt, atomic: false });
+    const parts = await Promise.all(
+      archives.map((zip, i) => {
+        const expected = manifest.parts[i];
+        assert(expected);
+        return verifyTreeZip(zip, expected.sha256);
+      }),
+    );
+    assert.deepEqual(
+      [...mergeTrees(parts).keys()].sort(),
+      [JSON.stringify(['selected', 'source.txt']), JSON.stringify(['selected'])].sort(),
+    );
+    const repeated = await call<Submitted>(current.client, 'export_index', { path: root });
+    assert.equal(repeated.reason, 'completed_reuse');
+    assert.equal(repeated.job.jobId, submitted.job.jobId);
+    assert.equal((await status(current.client, root)).version, generation);
+    assert.equal((await status(current.client, root)).state, 'idle');
+  } finally {
+    await current.close();
+  }
+
+  const stable = await createStdioClient(root, { ...env, FS_SNAPSHOT_FORMAT: 'stable' }, [
+    '--read-only',
+  ]);
+  try {
+    const submitted = await call<Submitted>(stable.client, 'export_index', { path: scope });
+    const { manifest, archives } = await snapshotArtifacts(stable.client, submitted.job.jobId);
+    assert.equal(manifest.schema, 'filesystem-mcp.snapshot-manifest');
+    assert.equal(manifest.root.path, normalizePath(scope));
+    assert.deepEqual(manifest.catalog, {
+      version: generation,
+      policyExcluded: 1,
+      inheritedIgnore: true,
+    });
+    const parts = await Promise.all(archives.map((zip) => verifySnapshotZip(zip, true)));
+    assert.deepEqual(
+      parts.flatMap((part) => [...part.paths]),
+      ['source.txt'],
+    );
+  } finally {
+    await stable.close();
+  }
+});
 
 test(
   'catalog startup keeps active job files with the scratch owner',
@@ -490,11 +600,12 @@ test(
     let version: string;
     try {
       const names = (await first.client.listTools()).tools.map((tool) => tool.name);
-      assert.equal(names.length, 16);
+      assert.equal(names.length, 17);
       assert(
         names.includes('index_root') &&
           names.includes('search_index') &&
-          names.includes('query_index'),
+          names.includes('query_index') &&
+          names.includes('export_index'),
       );
       assert.equal((await status(first.client, root)).indexed, false);
       const result = await tree(first.client, scope);

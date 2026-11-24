@@ -24,7 +24,7 @@ import { PATCH } from './patch.js';
 import { READ } from './read.js';
 import { REPLACE_TEXT } from './replace-text.js';
 import { SEARCH_TEXT } from './search-text.js';
-import { SNAPSHOT, STABLE_SNAPSHOT } from './snapshot.js';
+import { EXPORT_INDEX, SNAPSHOT, STABLE_EXPORT_INDEX, STABLE_SNAPSHOT } from './snapshot.js';
 import { STAT } from './stat.js';
 
 export const ALL_TOOLS = [
@@ -61,9 +61,19 @@ export function registeredTools(
   catalogEnabled = false,
 ): readonly DefinedTool[] {
   const tools = readOnly ? ALL_TOOLS.filter((t) => !MUTATING_TOOL_NAMES.has(t.name)) : ALL_TOOLS;
-  return [...tools, ...(catalogEnabled ? [INDEX_ROOT, SEARCH_INDEX, QUERY_INDEX] : [])].map(
-    (tool) => (tool === SNAPSHOT && snapshotFormat === 'stable' ? STABLE_SNAPSHOT : tool),
-  );
+  return [
+    ...tools.map((tool) =>
+      tool === SNAPSHOT && snapshotFormat === 'stable' ? STABLE_SNAPSHOT : tool,
+    ),
+    ...(catalogEnabled
+      ? [
+          INDEX_ROOT,
+          SEARCH_INDEX,
+          QUERY_INDEX,
+          snapshotFormat === 'stable' ? STABLE_EXPORT_INDEX : EXPORT_INDEX,
+        ]
+      : []),
+  ];
 }
 
 // Re-exported so documentation surfaces quote `.name` off the definition rather
@@ -74,6 +84,7 @@ export function registeredTools(
 export {
   BUNDLE,
   CANCEL_JOB,
+  EXPORT_INDEX,
   FIND_FILES,
   GET_ARTIFACT,
   GET_FILE,

@@ -42,10 +42,11 @@ it('advertises the published catalog in all MCP help surfaces only when enabled'
       for (const text of [client.getInstructions() ?? '', prompt.text, resource.text]) {
         assert.equal(text.includes('query_index'), enabled === '1');
         assert.equal(text.includes('search_index'), enabled === '1');
+        assert.equal(text.includes('export_index'), enabled === '1');
         assert.match(text, /snapshot -> job_status/u);
       }
       assert.equal(
-        prompt.text.includes('Catalog: index_root, search_index, query_index'),
+        prompt.text.includes('Catalog: index_root, search_index, query_index, export_index'),
         enabled === '1',
       );
     } finally {
