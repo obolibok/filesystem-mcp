@@ -83,9 +83,16 @@ whitespace-only строка сохраняют скрытый prompt без з�
 Свежесть snapshot задаётся в каждом tool call через `maxAgeMs` (default 1 час
 от начала обхода) и `forceRefresh`. Модель выбирает их по задаче и указаниям
 пользователя; отдельной настройки default freshness в config.json/env нет.
-`limits.FS_SNAPSHOT_RESULT_TTL_MS` отвечает за хранение всех manifest/ZIP snapshot
-и bundle: default 24 часа после завершения job, максимум 30 суток. Раздельных
-сроков по типу или размеру выгрузки сейчас нет. Детали повторной выдачи и restart —
+При включённом каталоге `export_index` принимает `path` опубликованного корня
+или подпапки и выгружает пригодное поколение любого возраста. Получите `jobId`,
+дождитесь `completed` через `job_status` и заберите манифест и ZIP-части через
+`get_artifact`. Проверьте `catalog.version`, `catalog.policyExcluded` и `observed`
+в манифесте. Полнота относится к выгрузке записей в выбранном формате.
+Для инвентаризации источника с требованием к свежести используйте `snapshot`.
+
+`limits.FS_SNAPSHOT_RESULT_TTL_MS` задаёт срок хранения manifest и ZIP для
+`snapshot`, `export_index` и `bundle`. По умолчанию это 24 часа после завершения
+задания, максимум 30 суток. Детали повторной выдачи и restart —
 в [разделах 6–7 инструкции комплекта](../../scripts/windows-portable/template/README.md#6-минимальная-проверка-перед-рабочими-данными).
 
 Для параллельных экземпляров, в том числе из разных аккаунтов, нужны отдельные
@@ -108,7 +115,9 @@ runtime key и уточнения инструкции от 03.11 в README.md/R
 
 Шаблон содержит `"snapshotFormat": "tree"`; отсутствие поля также выбирает tree.
 Явное `"snapshotFormat": "stable"` возвращает прежний file-only CSV/manifest.
-Оба режима публикуют один snapshot и 13 read-only tools. Любой иной тип/значение
+Оба режима публикуют один `snapshot`. В portable с выключенным каталогом
+доступны 13 инструментов, а при `catalogEnabled: true` доступны 17, включая
+`export_index`. Любой иной тип/значение `snapshotFormat`
 отклоняется до старта MCP. Launcher после очистки inherited FS_* явно задаёт
 FS_SNAPSHOT_FORMAT из config; inherited env не меняет выбор.
 
