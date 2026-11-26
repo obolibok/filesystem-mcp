@@ -83,6 +83,13 @@ export class PageSnapshotStore {
     return snapshotId;
   }
 
+  getQueryKey(snapshotId: string): string {
+    this.pruneExpired();
+    const entry = this.byId.get(snapshotId);
+    if (!entry) throw invalidCursor();
+    return entry.queryKey;
+  }
+
   read<T, M = undefined>(snapshotId: string, queryKey: string): PageSnapshot<T, M> {
     this.pruneExpired();
     const entry = this.byId.get(snapshotId);

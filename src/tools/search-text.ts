@@ -1,12 +1,13 @@
-import { dirname } from 'node:path';
+import { dirname, posix } from 'node:path';
 
 import * as z from 'zod/v4';
 
 import { SearchStoppedReasonSchema } from '../core/concurrency.js';
-import { pageQueryKey, paginate } from '../core/cursor.js';
-import { ErrorCode, FsError } from '../core/errors.js';
+import { pageQueryKey, paginate, readPageQuery } from '../core/cursor.js';
+import { ErrorCode, FsError, isFsError } from '../core/errors.js';
 import { formatCount, pageTrailer, scanWarning, truncateProgressPattern } from '../core/fmt.js';
 import { Logger } from '../core/observability.js';
+import { invalidCursor } from '../core/page-store.js';
 import { toPosixRelative } from '../core/path.js';
 import {
   CursorSchema,
@@ -14,6 +15,7 @@ import {
   includeHiddenField,
   includeIgnoredField,
   isBlank,
+  MAX_PATH_LENGTH,
   maxDepthField,
   NextCursorSchema,
   NonNegInt,
@@ -24,7 +26,7 @@ import {
 import type { SearchContentOptions } from '../core/search.js';
 import { searchContent } from '../core/search.js';
 import type { JsonResourceResult } from '../core/store.js';
-import { putJsonResource } from '../core/store.js';
+import { MAX_RESOURCE_ENTRY_BYTES, putJsonResource } from '../core/store.js';
 import {
   DEFAULT_SEARCH_CONTENT_RESULTS,
   DEFAULT_SEARCH_TIMEOUT_MS,
@@ -41,11 +43,19 @@ import { defineTool, type ToolCtx } from './define.js';
  */
 if (process.env['FS_MAX_INLINE_MATCHES'] !== undefined) {
   Logger.warn(
-    'FS_MAX_INLINE_MATCHES is deprecated and ignored: pageSize sets the search_text page size; limit caps collected matching lines. It will be removed in the next major release.',
+    'FS_MAX_INLINE_MATCHES is deprecated and ignored: pageSize caps lines per search_text page within its 16 KiB budget; limit caps collected matching lines. It will be removed in the next major release.',
   );
 }
 
-// Type Definitions
+// Reserve space for the optional, fixed-name resource_link block too.
+const INLINE_TEXT_BYTES = 16_384 - 256;
+const MAX_SNIPPET_POINTS = 500;
+// The longest UTF-8 spelling of a path accepted by the read/get_file schema.
+const MAX_INLINE_PATH_BYTES = MAX_PATH_LENGTH * 3;
+const MAX_REPEATED_QUERY_BYTES = 1024;
+const CONTEXT_REDUCED = '\n// Context reduced to fit the page.';
+
+type SearchQuery = z.infer<typeof GrepQuerySchema>;
 type SearchInput = z.infer<typeof GrepInputSchema>;
 type SearchOutput = z.infer<typeof GrepOutputSchema>;
 type SearchMatchPayload = NonNullable<SearchOutput['matches']>[number];
@@ -64,7 +74,7 @@ interface SearchContentPageMetadata {
   readonly skippedUnsupportedEncoding?: number;
 }
 
-const GrepInputSchema = z.strictObject({
+const GrepQuerySchema = z.strictObject({
   path: OptionalPath.describe(
     'File to search, or directory to search under; omit only when allowed root entries resolve to exactly one filesystem location. With roots at multiple locations, provide an explicit path. Naming a file searches that file alone: pattern is ignored and hidden/ignored filtering does not apply.',
   ),
@@ -79,7 +89,7 @@ const GrepInputSchema = z.strictObject({
       message: 'searchPattern cannot be empty or whitespace-only',
     })
     .describe(
-      'Exact literal text or RE2 regex pattern to search for in file contents. When isRegex=true, uses RE2 syntax (no lookahead, lookbehind, or backreferences). Cannot be empty or whitespace-only.',
+      'Literal text or RE2 pattern. Regexes do not support lookaround or backreferences. Required for a new search; omit for a cursor-only continuation.',
     )
     .meta({ examples: ['TODO', 'function\\s+(\\w+)', 'import.*from'] }),
   isRegex: defaultFalseBoolean('Treat searchPattern as a regex (default: literal text match)'),
@@ -94,7 +104,7 @@ const GrepInputSchema = z.strictObject({
   pageSize: PositiveInt.max(MAX_SEARCH_RESULTS)
     .default(DEFAULT_SEARCH_CONTENT_RESULTS)
     .describe(
-      'Matching lines per page; can change between pages (default 500). Does not limit traversal.',
+      'Maximum matching lines per page (default 500), subject to the 16 KiB output budget. Can change between pages.',
     ),
   context: z
     .uint32()
@@ -102,11 +112,52 @@ const GrepInputSchema = z.strictObject({
     .optional()
     .default(0)
     .describe(
-      'Lines of context to return either side of each match, like grep -C (default: 0, max: 10)',
+      'Context lines on either side of each match (default 0, max 10); each is clipped and may be dropped to fit the page.',
     ),
   maxDepth: maxDepthField(),
   cursor: CursorSchema,
 });
+
+// Publish defaults while leaving absent fields undefined so a cursor-only
+// call can reject extra query fields, including explicitly supplied defaults.
+function optionalQueryField<T extends z.ZodType>(field: z.ZodDefault<T>) {
+  return field
+    .unwrap()
+    .optional()
+    .meta({ ...field.meta(), default: field.parse(undefined) });
+}
+
+const GrepInputSchema = GrepQuerySchema.extend({
+  searchPattern: GrepQuerySchema.shape.searchPattern.optional(),
+  isRegex: optionalQueryField(GrepQuerySchema.shape.isRegex),
+  includeHidden: optionalQueryField(GrepQuerySchema.shape.includeHidden),
+  includeIgnored: optionalQueryField(GrepQuerySchema.shape.includeIgnored),
+  caseSensitive: optionalQueryField(GrepQuerySchema.shape.caseSensitive),
+  limit: optionalQueryField(GrepQuerySchema.shape.limit),
+  context: optionalQueryField(GrepQuerySchema.shape.context),
+  maxDepth: optionalQueryField(GrepQuerySchema.shape.maxDepth),
+  pageSize: optionalQueryField(GrepQuerySchema.shape.pageSize),
+})
+  .superRefine((args, ctx) => {
+    if (args.searchPattern !== undefined) return;
+    if (args.cursor === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['searchPattern'],
+        message: 'searchPattern is required for a new search',
+      });
+      return;
+    }
+    const extraFields = Object.keys(args).filter((key) => key !== 'cursor' && key !== 'pageSize');
+    if (extraFields.length > 0) {
+      ctx.addIssue({ code: 'unrecognized_keys', keys: extraFields });
+    }
+  })
+  .meta({ anyOf: [{ required: ['searchPattern'] }, { required: ['cursor'] }] });
+
+// A configured root may be longer than a user-supplied path. The path here
+// has already been saved by the server, and is reauthorized on every replay.
+const StoredGrepQuerySchema = GrepQuerySchema.extend({ path: z.string() });
 
 const GrepOutputSchema = z.strictObject({
   matches: z
@@ -114,8 +165,16 @@ const GrepOutputSchema = z.strictObject({
       z.strictObject({
         file: z.string().describe('File path relative to the search root'),
         line: PositiveInt.describe('1-indexed line number of the match'),
-        column: NonNegInt.optional().describe('0-indexed column offset of the match start'),
-        content: z.string().describe('Full text of the matching line'),
+        column: NonNegInt.describe(
+          '0-indexed UTF-16 column of the match start in the original line',
+        ),
+        content: z.string().describe('Up to 500 Unicode code points surrounding the first match'),
+        clippedBefore: z.literal(true).optional().describe('The beginning of the line was omitted'),
+        clippedAfter: z.literal(true).optional().describe('The end of the line was omitted'),
+        matchClipped: z
+          .literal(true)
+          .optional()
+          .describe('The first match itself exceeds the fragment'),
         matchCount: NonNegInt.optional().describe('Number of pattern occurrences on this line'),
         before: z
           .array(z.string())
@@ -128,6 +187,10 @@ const GrepOutputSchema = z.strictObject({
       }),
     )
     .describe('Flat list of matches sorted by file path then line number'),
+  contextReduced: z
+    .literal(true)
+    .optional()
+    .describe('Neighboring lines were dropped to fit the page'),
   totalMatches: NonNegInt.optional().describe(
     "Total matching lines, one per entry in matches (not per occurrence); see that entry's matchCount for occurrences on a line.",
   ),
@@ -160,13 +223,59 @@ const GrepOutputSchema = z.strictObject({
     .string()
     .optional()
     .describe(
-      'URI to the full match list in the resource store; first page only, whenever the response is incomplete — more pages follow, or the engine cut the search',
+      'Optional first-page resource with all collected match fragments when the result spans pages or the scan stopped early',
     ),
   nextCursor: NextCursorSchema,
 });
 
+function contextSnippet(text: string): string {
+  if (text.length <= MAX_SNIPPET_POINTS) return text;
+  const points = Array.from(text.slice(0, MAX_SNIPPET_POINTS * 2 + 1));
+  return points.length > MAX_SNIPPET_POINTS
+    ? points.slice(0, MAX_SNIPPET_POINTS - 1).join('') + '…'
+    : text;
+}
+
+function matchSnippet(
+  text: string,
+  column: number,
+  matchEnd: number,
+): Pick<SearchMatchPayload, 'content' | 'clippedBefore' | 'clippedAfter' | 'matchClipped'> {
+  if (text.length <= MAX_SNIPPET_POINTS) return { content: text };
+
+  // At most two UTF-16 units per code point. The extra unit at each far end
+  // keeps a partial surrogate pair outside the selected 500 code points.
+  const span = MAX_SNIPPET_POINTS * 2 + 1;
+  const match = Array.from(text.slice(column, Math.min(matchEnd, column + span)));
+  const before = Array.from(text.slice(Math.max(0, column - span), column));
+  const after = Array.from(text.slice(matchEnd, matchEnd + span));
+  const space = Math.max(0, MAX_SNIPPET_POINTS - match.length);
+  const rightCount = Math.min(after.length, space - Math.min(before.length, Math.floor(space / 2)));
+  const leftCount = Math.min(before.length, space - rightCount);
+
+  const left = before.slice(before.length - leftCount).join('');
+  const hit = match.slice(0, MAX_SNIPPET_POINTS).join('');
+  const right = after.slice(0, rightCount).join('');
+  return {
+    content: left + hit + right,
+    ...(left.length < column ? { clippedBefore: true } : {}),
+    ...(column + hit.length + right.length < text.length ? { clippedAfter: true } : {}),
+    ...(column + hit.length < matchEnd ? { matchClipped: true } : {}),
+  };
+}
+
+function displayPath(file: string): string {
+  return Buffer.byteLength(file, 'utf8') <= MAX_INLINE_PATH_BYTES
+    ? file
+    : '…/' + contextSnippet(posix.basename(file)) + ' [path clipped, full path in metadata]';
+}
+
 function matchRow(m: SearchMatchPayload): string {
-  return `${m.file}:${String(m.line)}: ${m.content}`;
+  const markers = ['column ' + String(m.column)];
+  if (m.clippedBefore) markers.push('left clipped');
+  if (m.clippedAfter) markers.push('right clipped');
+  if (m.matchClipped) markers.push('match clipped');
+  return `${displayPath(m.file)}:${String(m.line)}: ${m.content} [${markers.join(', ')}]`;
 }
 
 /**
@@ -175,8 +284,7 @@ function matchRow(m: SearchMatchPayload): string {
  * where a match wins over context, so a line two windows share prints once,
  * and as a match when it is one. The maps iterate in line order without a
  * sort: matches arrive sorted, each window is contiguous, and setting an
- * existing key keeps its slot. Without context the rows are the bare match
- * lines, byte-identical to before the option existed.
+ * existing key keeps its slot.
  */
 function renderRows(matches: readonly SearchMatchPayload[], withContext: boolean): string[] {
   if (!withContext) return matches.map(matchRow);
@@ -185,7 +293,7 @@ function renderRows(matches: readonly SearchMatchPayload[], withContext: boolean
     const lines = byFile.get(m.file) ?? new Map<number, string>();
     byFile.set(m.file, lines);
     const setContext = (n: number, text: string): void => {
-      if (!lines.has(n)) lines.set(n, `${m.file}-${String(n)}- ${text}`);
+      if (!lines.has(n)) lines.set(n, `${displayPath(m.file)}-${String(n)}- ${text}`);
     };
     const before = m.before ?? [];
     before.forEach((text, k) => {
@@ -214,7 +322,7 @@ function buildSearchMatchDetail(totalMatches: number, filesMatched: number): str
   return `${matchDetail} · ${formatCount(filesMatched, 'file', 'files')}`;
 }
 
-function skipSummary(output: SearchOutput): string {
+function skipSummary(output: SearchContentPageMetadata): string {
   const skipped: string[] = [];
   if (output.skippedBinary) {
     skipped.push(formatCount(output.skippedBinary, 'binary file', 'binary files'));
@@ -282,17 +390,17 @@ function buildSortedPayloads(result: SearchResultValue): SearchMatchPayload[] {
     file: getRelativeFile(match.file),
     line: match.line,
     column: match.column,
-    content: match.content,
+    ...matchSnippet(match.content, match.column, match.matchEnd),
     matchCount: match.matchCount,
-    ...(match.before !== undefined ? { before: match.before } : {}),
-    ...(match.after !== undefined ? { after: match.after } : {}),
+    ...(match.before !== undefined ? { before: match.before.map(contextSnippet) } : {}),
+    ...(match.after !== undefined ? { after: match.after.map(contextSnippet) } : {}),
   }));
 
   payloads.sort((l, r) => l.file.localeCompare(r.file) || l.line - r.line);
   return payloads;
 }
 
-function buildSearchContentOptions(args: SearchInput, signal?: AbortSignal): SearchContentOptions {
+function buildSearchContentOptions(args: SearchQuery, signal?: AbortSignal): SearchContentOptions {
   return {
     includeHidden: args.includeHidden,
     filePattern: args.pattern ?? '**/*',
@@ -312,7 +420,7 @@ function buildSearchContentOptions(args: SearchInput, signal?: AbortSignal): Sea
  * result paths; keep the file itself literal, without glob/hidden/ignore filters.
  */
 async function resolveSearchScope(
-  args: SearchInput,
+  args: SearchQuery,
   ctx: ToolCtx,
 ): Promise<{ basePath: string; singleFile?: string }> {
   const requested = await ctx.fs.pathGuard.resolvePathOrRoot(args.path, ctx.signal);
@@ -330,17 +438,155 @@ async function resolveSearchScope(
   };
 }
 
+function resolveSearchQuery(input: SearchInput, ctx: ToolCtx): SearchQuery {
+  if (input.searchPattern !== undefined) {
+    const result = GrepQuerySchema.safeParse(input);
+    if (!result.success) throw new FsError(ErrorCode.INVALID_INPUT, z.prettifyError(result.error));
+    return result.data;
+  }
+  if (input.cursor === undefined) throw invalidCursor();
+  const query = readPageQuery(ctx.pageStore, input.cursor, 'search_text');
+  const result = StoredGrepQuerySchema.safeParse({ ...query, ...input });
+  if (!result.success) throw invalidCursor();
+  return result.data;
+}
+
+function continuationArgs(args: SearchQuery, requestedPath: string): Record<string, unknown> {
+  const full = { ...args, path: requestedPath, cursor: undefined };
+  // Large supplied patterns (including JSON escapes) must leave space for
+  // a complete match row. The compact call recovers this same stored query.
+  if (
+    Buffer.byteLength(JSON.stringify(full), 'utf8') <= MAX_REPEATED_QUERY_BYTES &&
+    OptionalPath.safeParse(requestedPath).success
+  ) {
+    return full;
+  }
+  return { pageSize: args.pageSize };
+}
+
+function searchTrailer(
+  offset: number,
+  shown: number,
+  total: number,
+  nextCursor: string | undefined,
+  nextArgs: Record<string, unknown>,
+): string {
+  return pageTrailer({
+    offset,
+    shown,
+    total,
+    noun: 'matches',
+    tool: 'search_text',
+    nextCursor,
+    nextArgs,
+  });
+}
+
+function fitPageSize(
+  items: readonly SearchMatchPayload[],
+  metadata: SearchContentPageMetadata,
+  offset: number,
+  cursorAfter: (shown: number) => string | undefined,
+  nextArgs: Record<string, unknown>,
+  context: number,
+): number {
+  const fixedBytes = Buffer.byteLength(
+    scanWarning(metadata.stoppedReason, metadata.limit) +
+      skipSummary(metadata) +
+      (context > 0 ? CONTEXT_REDUCED : ''),
+    'utf8',
+  );
+  let rowBytes = 0;
+  let fits = 0;
+  for (const [index, item] of items.entries()) {
+    rowBytes += Buffer.byteLength(matchRow(item), 'utf8') + (index > 0 ? 1 : 0);
+    if (rowBytes + fixedBytes > INLINE_TEXT_BYTES) break;
+    const shown = index + 1;
+    const trailer = searchTrailer(
+      offset,
+      shown,
+      metadata.totalMatches,
+      cursorAfter(shown),
+      nextArgs,
+    );
+    if (rowBytes + fixedBytes + Buffer.byteLength(trailer, 'utf8') <= INLINE_TEXT_BYTES)
+      fits = shown;
+  }
+  // With the row, path and repeated-query caps, one row always fits.
+  return fits;
+}
+
+function renderPage(
+  page: readonly SearchMatchPayload[],
+  metadata: SearchContentPageMetadata,
+  trailer: string,
+  args: SearchQuery,
+): { text: string; matches: readonly SearchMatchPayload[]; contextReduced: boolean } {
+  const scan = scanWarning(metadata.stoppedReason, metadata.limit);
+  const skips = skipSummary(metadata);
+  const { context } = args;
+  for (let radius = context; radius >= 0; radius--) {
+    const matches =
+      radius === context
+        ? page
+        : page.map((match) => ({
+            ...match,
+            before: radius === 0 ? [] : (match.before?.slice(-radius) ?? []),
+            after: match.after?.slice(0, radius) ?? [],
+          }));
+    const rows = renderRows(matches, radius > 0);
+    const contextReduced = radius < context;
+    const text =
+      scan +
+      (rows.length === 0
+        ? `No matches for '${contextSnippet(args.searchPattern.toWellFormed())}'`
+        : rows.join('\n')) +
+      skips +
+      (contextReduced ? CONTEXT_REDUCED : '') +
+      trailer;
+    if (Buffer.byteLength(text, 'utf8') <= INLINE_TEXT_BYTES) {
+      return { text, matches, contextReduced };
+    }
+  }
+  throw new FsError(ErrorCode.UNKNOWN, 'Search page exceeds its text budget.');
+}
+
+function externalizeSearch(
+  store: NonNullable<ToolCtx['resourceStore']>,
+  matches: readonly SearchMatchPayload[],
+  metadata: SearchContentPageMetadata,
+): JsonResourceResult | undefined {
+  // Avoid allocating an oversized pretty-printed JSON document. The actual
+  // store enforces the exact limit, including indentation and metadata.
+  let bytes = 0;
+  for (const match of matches) {
+    bytes += Buffer.byteLength(JSON.stringify(match), 'utf8');
+    if (bytes > MAX_RESOURCE_ENTRY_BYTES) return undefined;
+  }
+  try {
+    return putJsonResource(
+      store,
+      'Search matches',
+      searchContentOutput(matches, metadata, undefined, undefined),
+    );
+  } catch (error) {
+    if (isFsError(error) && error.code === ErrorCode.TOO_LARGE) return undefined;
+    throw error;
+  }
+}
+
 async function handleSearchContent(
-  args: SearchInput,
+  input: SearchInput,
   ctx: ToolCtx,
 ): Promise<{
   structured: SearchOutput;
-  offset: number;
-  total: number;
-  nextArgs: SearchInput;
+  text: string;
   link?: ReturnType<typeof putJsonResource>['link'];
 }> {
+  const args = resolveSearchQuery(input, ctx);
   const requestedPath = await ctx.fs.pathGuard.resolvePathOrRoot(args.path, ctx.signal);
+  if (args.cursor !== undefined) ctx.fs.pathGuard.assertPathAllowed(requestedPath);
+  const nextArgs = continuationArgs(args, requestedPath);
   const queryKey = pageQueryKey({
     method: 'search_text',
     path: requestedPath,
@@ -356,11 +602,17 @@ async function handleSearchContent(
   });
   const { resourceStore } = ctx;
 
-  const paged = await paginate<SearchMatchPayload, SearchContentPageMetadata, JsonResourceResult>({
+  const paged = await paginate<
+    SearchMatchPayload,
+    SearchContentPageMetadata,
+    JsonResourceResult | undefined
+  >({
     store: ctx.pageStore,
     queryKey,
     cursor: args.cursor,
     pageSize: args.pageSize,
+    selectPageSize: ({ items, metadata, offset, cursorAfter }) =>
+      fitPageSize(items, metadata, offset, cursorAfter, nextArgs, args.context),
     produce: async () => {
       const { basePath, singleFile } = await resolveSearchScope(args, ctx);
 
@@ -397,26 +649,26 @@ async function handleSearchContent(
         truncated: result.summary.truncated,
       };
     },
+
     externalize: resourceStore
-      ? (matches, metadata) =>
-          putJsonResource(
-            resourceStore,
-            `'${args.searchPattern}' matches`,
-            searchContentOutput(matches, metadata, undefined, undefined),
-          )
+      ? (matches, metadata) => externalizeSearch(resourceStore, matches, metadata)
       : undefined,
   });
 
+  const trailer = searchTrailer(
+    paged.offset,
+    paged.page.length,
+    paged.metadata.totalMatches,
+    paged.nextCursor,
+    nextArgs,
+  );
+  const { text, matches, contextReduced } = renderPage(paged.page, paged.metadata, trailer, args);
   return {
-    structured: searchContentOutput(
-      paged.page,
-      paged.metadata,
-      paged.nextCursor,
-      paged.resource?.entry.uri,
-    ),
-    offset: paged.offset,
-    total: paged.metadata.totalMatches,
-    nextArgs: { ...args, path: requestedPath },
+    structured: {
+      ...searchContentOutput(matches, paged.metadata, paged.nextCursor, paged.resource?.entry.uri),
+      ...(contextReduced ? { contextReduced: true } : {}),
+    },
+    text,
     ...(paged.resource ? { link: paged.resource.link } : {}),
   };
 }
@@ -425,14 +677,11 @@ export const SEARCH_TEXT = defineTool({
   name: 'search_text',
   title: 'Search Content',
   description:
-    'Search file contents by text or regex (grep-style). Returns matching lines with file path, ' +
-    '1-indexed line number and 0-indexed column offset. ' +
-    'Set context=N to also return N lines either side of each match (grep -C). ' +
-    'Scope to specific file types with pattern (e.g. **/*.ts). ' +
-    'Binary and unsupported-encoding files are skipped and counted in the response. ' +
-    'limit caps matching lines across pages (default/cap 10000); pageSize sets response size (default 500). ' +
-    'maxDepth prunes directory traversal: 0 = base only, default/cap 100. Sorts the collected subset, not globally first N. maxResults is removed; use limit/pageSize. ' +
-    'Set includeHidden=true to include dotfiles. Use find_files to search by filename instead.',
+    'Search text or RE2 regex in files. Shows up to 500 code points around the first match per line, ' +
+    'with original path, line (1-based) and UTF-16 column (0-based). Pages cap output at 16 KiB and drop context first. ' +
+    'Use read or get_file for originals. limit caps collected lines (default/cap 10000); pageSize caps lines per page (default 500). ' +
+    'Run the Next page JSON to continue. maxDepth bounds traversal (0 = base only, default/cap 100). ' +
+    'Sorts the collected subset. Skips and counts binary files and unsupported encodings. Use find_files for filenames.',
   input: GrepInputSchema,
   output: GrepOutputSchema,
   annotations: {
@@ -443,34 +692,19 @@ export const SEARCH_TEXT = defineTool({
   },
   timeoutMs: DEFAULT_SEARCH_TIMEOUT_MS,
   defaultErrorCode: ErrorCode.UNKNOWN,
+  maxErrorTextBytes: INLINE_TEXT_BYTES,
   progress: (args) => ({
     label: 'Search',
-    subject: truncateProgressPattern(args.searchPattern),
+    ...(args.searchPattern !== undefined
+      ? { subject: truncateProgressPattern(args.searchPattern) }
+      : {}),
   }),
   progressDone: (_args, result) => ({
     detail: buildSearchMatchDetail(result.totalMatches ?? 0, result.filesMatched ?? 0),
   }),
   accessPaths: (args) => (args.path ? [args.path] : []),
   run: async (args, ctx) => {
-    const { structured, offset, total, nextArgs, link } = await handleSearchContent(args, ctx);
-    const rows = renderRows(structured.matches, args.context > 0);
-    const body = rows.length > 0 ? rows.join('\n') : `No matches for '${args.searchPattern}'`;
-    const text =
-      scanWarning(structured.stoppedReason, structured.limit) +
-      body +
-      skipSummary(structured) +
-      pageTrailer({
-        offset,
-        shown: structured.matches.length,
-        total,
-        noun: 'matches',
-        tool: 'search_text',
-        nextCursor: structured.nextCursor,
-        nextArgs,
-      });
-    if (link) {
-      return { structured, text, resources: [link] };
-    }
-    return { structured, text };
+    const { structured, text, link } = await handleSearchContent(args, ctx);
+    return { structured, text, ...(link ? { resources: [link] } : {}) };
   },
 });

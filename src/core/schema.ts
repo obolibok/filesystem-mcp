@@ -41,7 +41,7 @@ const FILE_KINDS = MIME_KINDS;
 export type FileKind = (typeof FILE_KINDS)[number];
 export const FileKind = z.enum(FILE_KINDS);
 
-const MAX_PATH_LENGTH = 4096;
+export const MAX_PATH_LENGTH = 4096;
 
 const SHELL_METACHAR_RE = /[\n\r;|`]/;
 

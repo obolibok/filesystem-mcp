@@ -16,7 +16,7 @@ interface ResourceEntry {
 
 const MAX_ENTRIES = 64;
 const MAX_TOTAL_BYTES = 25 * MIB;
-const MAX_ENTRY_BYTES = 10 * MIB;
+export const MAX_RESOURCE_ENTRY_BYTES = 10 * MIB;
 const ENTRY_TTL_MS = 60 * 1000;
 
 function isExpired(entry: ResourceEntry, now = Date.now()): boolean {
@@ -109,7 +109,7 @@ export class ResourceStore {
 
   private checkBeforePut(entryBytes: number): void {
     const changed = this.pruneExpiredEntries();
-    if (entryBytes > MAX_ENTRY_BYTES) {
+    if (entryBytes > MAX_RESOURCE_ENTRY_BYTES) {
       this.emitListChanged(changed);
       throw new FsError(ErrorCode.TOO_LARGE, `Resource too large to cache (${entryBytes} bytes).`);
     }

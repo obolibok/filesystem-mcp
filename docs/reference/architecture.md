@@ -202,7 +202,9 @@ Portable preflight показывает только эти warnings даже п
 частичный результат после deadline/cancel. Explicit TIMEOUT/CANCELLED также допустим.
 `limit`, `truncated`, counters и stoppedReason одинаковы в `_meta` и JSON resource.
 Оба JSON resources содержат объект результата с полным собранным массивом;
-find_files больше не externalizes только массив без metadata.
+find_files больше не externalizes только массив без metadata. В ресурсе
+search_text хранятся фрагменты. Если они превышают лимит ResourceStore,
+результаты по-прежнему доступны через страницы.
 
 Поиск использует bounded guarded ветку `globEntries` и walker 010, с Node
 `path.matchesGlob` и прежним раскрытием hidden patterns. `maxDepth=0/1/2`
@@ -221,11 +223,24 @@ best-effort чтение ignore rules сохраняет log warning.
 файл, включая glob metacharacters в его имени, независимо от directory filters.
 Cursor перелистывает собранный набор и не продолжает обход после limit/timeout.
 Перед rows каждой частичной страницы, включая последнюю, стоит warning с effective
-limit и смыслом totals. Next page — полный исполняемый JSON с path, filters,
-limit, pageSize и cursor. Identity включает effective scope и все query options
-кроме pageSize: его можно менять. Без cursor выполняется новый scan; TTL/stores
+limit и смыслом totals. Next page содержит исполняемый JSON. Для search_text
+с объёмным запросом достаточно cursor и pageSize: scope и query options
+восстанавливаются из снимка, текущий PathGuard проверяет доступ к scope.
+При повторе исходных аргументов все query options и scope по-прежнему должны
+совпадать. pageSize можно менять. Без cursor выполняется новый scan; TTL/stores
 не изменились. [Протокол и live-матрица 011](../testing/011-bounded-search.md)
 различают локальные wire проверки и ещё не выполненный целевой ChatGPT опыт.
+
+`search_text` возвращает фрагмент до 500 Unicode code points вокруг первого
+совпадения, сохраняя исходные относительный путь, номер строки (с 1) и позицию
+в UTF-16 units (с 0). Обрезка краёв и самого совпадения указана в тексте и
+`_meta`. Соседние строки ограничены 500 code points. Бюджет модельной выдачи
+16 384 байта UTF-8 включает пути, фрагменты, диагностику и JSON продолжения.
+При нехватке места сначала сокращается соседний контекст. Следующая страница
+начинается с первой невыданной записи. Исходную строку выдаёт `read`, исходный
+файл — `get_file`. Если байтовый размер пути из рекурсивного обхода превышает
+максимально возможный для аргумента read/get_file, в тексте показано имя
+файла с меткой, а точный путь сохранён в `_meta`.
 
 `job_status` сохраняет JSON text и `structuredContent`. Во время queued/running
 counters являются progress; даже `complete=true` в это время не доказывает завершение.

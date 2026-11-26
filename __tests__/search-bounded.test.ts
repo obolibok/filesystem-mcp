@@ -1416,6 +1416,61 @@ it('search wire deadline with zero matches yields a visible partial warning and 
   assert.deepEqual(observed.counts(), { reads: 2, closes: 2 });
 });
 
+it('search_text pages a partial deadline result without restarting the scan', async (t) => {
+  const root = await fixture(t);
+  const line = '🙂'.repeat(650) + 'token';
+  await writeTestFile(root, 'partial.txt', Array.from({ length: 16 }, () => line).join('\n'));
+  const pair = await createTestClientPair([root]);
+  t.after(() => pair.close());
+  const observed = observe(t, root, async (entry, signal) => {
+    if (entry !== null) return;
+    assert(signal);
+    if (!signal.aborted) {
+      await new Promise<void>((resolve) =>
+        signal.addEventListener('abort', () => resolve(), { once: true }),
+      );
+    }
+  });
+
+  const name = 'search_text';
+  let response = await pair.client.callTool({
+    name,
+    arguments: { ...query(name, root), limit: 60, pageSize: 10000 },
+  });
+  const afterScan = observed.counts();
+  assert.equal(afterScan.closes, 1);
+  assert.deepEqual(observed.textReads, ['partial.txt']);
+  const all: string[] = [];
+  let pages = 0;
+  for (;;) {
+    const text = firstTextBlock(response).text ?? '';
+    assert.notEqual(response.isError, true, text);
+    const bytes =
+      Buffer.byteLength(text, 'utf8') +
+      response.content
+        .slice(1)
+        .reduce((sum, block) => sum + Buffer.byteLength(JSON.stringify(block), 'utf8'), 0);
+    assert(bytes <= 16384);
+    const meta = response._meta as unknown as SearchMeta;
+    assert.equal(meta.stoppedReason, 'timeout');
+    assert.equal(meta.truncated, true);
+    assert.equal(meta.totalMatches, 16);
+    assert(text.startsWith('// scan stopped early: hit the time limit'));
+    assert(text.includes('Cursors page only collected results; they do not resume the scan.'));
+    all.push(...rows(meta));
+    pages++;
+    if (!meta.nextCursor) break;
+    assert(all.length < 16);
+    response = await pair.client.callTool({ name, arguments: continuation(text, name) });
+  }
+  assert(pages > 1);
+  assert.deepEqual(
+    all,
+    Array.from({ length: 16 }, (_, i) => `partial.txt:${String(i + 1)}`),
+  );
+  assert.deepEqual(observed.counts(), afterScan);
+});
+
 it('search ignore negation, complex globs, source boundaries and no-follow junctions are preserved', async (t) => {
   const root = await fixture(t);
   const outside = await createTestRoot();

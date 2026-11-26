@@ -286,19 +286,29 @@ For example, call find_files with
 or search_text with
 `{"path":"/workspace","pattern":"**/*.txt","searchPattern":"TODO","limit":100,"pageSize":25,"context":1}`.
 Execute the complete JSON after `Next page: <tool>` in the response; it repeats
-the path, query, filters, limit and pageSize with the next cursor. Only pageSize
-may change. Cursors page the collected set, expire after about 60 seconds, and
-never continue a stopped traversal. Calling again without a cursor runs a new scan.
+the path, query, filters, limit and pageSize with the next cursor. A compact
+search_text continuation can carry only the cursor and pageSize, reusing the
+stored query. Only pageSize may change. Cursors page the collected set, expire
+after about 60 seconds, and never continue a stopped traversal. Calling again
+without a cursor runs a new scan.
+
+Each search_text page is capped at 16 KiB of model-visible UTF-8 output,
+including paths, context, diagnostics and continuation arguments. Matching lines
+show up to 500 Unicode code points around the first match. Clipping is marked,
+and the original 1-based line and 0-based UTF-16 column are preserved. Neighboring
+lines are also clipped and may be dropped before the page shows fewer matching
+lines. Use read for the original lines or get_file for the original file.
 
 The scan stops on the limit-th match without reading ahead. Even exactly limit
 matches have `truncated=true`, `stoppedReason="limit"`: completeness is unconfirmed.
 Every partial page, including the last, warns before its rows. Totals count
-collected matches only; `_meta` and the first-page JSON resource carry the same
-effective limit, counters and stop state. Results are sorted within the collected
-subset, not globally first N. Sparse/no-match patterns can still require many
-files or OS calls; depth and cooperative cancellation bound that work. A deadline
-or cancellation produces a visible partial `stoppedReason="timeout"` result or an
-explicit error. Native I/O cannot be forcibly interrupted; eventual handles close.
+collected matches only. `_meta` and the first-page JSON resource, when available,
+carry the same effective limit, counters and stop state. The search_text resource
+contains the collected fragments and is offered when it fits the resource store.
+Sorting applies to the collected subset. Sparse/no-match patterns can still
+require many files or OS calls, within the depth and cooperative cancellation
+limits. A deadline or cancellation produces a visible partial
+`stoppedReason="timeout"` result or an explicit error. Native I/O cannot be forcibly interrupted; eventual handles close.
 Use snapshot for a recursive inventory or file total.
 
 ```bash
@@ -599,7 +609,7 @@ Flags take precedence when both are set.
 | `FS_MAX_REQUEST_BYTES`                | Max HTTP request body bytes (default 4194304, 1024–268435456).                                                                                                                                              |
 | `FS_KEEPALIVE_TIMEOUT_MS`             | HTTP keep-alive timeout in ms; set above any fronting proxy's idle timeout (default 5000, 1000–600000).                                                                                                     |
 | `FS_MAX_WATCHERS`                     | Max concurrent file watchers (default 256, 1–4096).                                                                                                                                                         |
-| `FS_MAX_INLINE_MATCHES`               | Deprecated and ignored; `pageSize` sets the `search_text` page size; `limit` caps collected matching lines. Logs a warning when set; removed in the next major.                                             |
+| `FS_MAX_INLINE_MATCHES`               | Deprecated and ignored; `pageSize` caps matches per `search_text` page (16 KiB max); `limit` caps collected lines. Warns when set; removed in the next major.                                               |
 | `FS_MAX_READ_MANY_BYTES`              | Max total bytes across a batched `read` (default 524288, 10240–104857600).                                                                                                                                  |
 | `FS_SEARCH_TIMEOUT_MS`                | Search timeout in ms (default 5000, 100–60000).                                                                                                                                                             |
 | `FS_SNAPSHOT_FORMAT`                  | Snapshot creation format: `tree` (default, tree-depth-v1) or `stable` (file-only CSV). Invalid values stop startup.                                                                                         |
