@@ -39,12 +39,30 @@
 | 025          | [SQL для опубликованного каталога](../tasks/025-catalog-sql.md)                               | done   | 024                |
 | 026          | [Встроенная справка каталога](../tasks/026-catalog-help.md)                                   | done   | 025                |
 | 027          | [Выгрузка опубликованного индекса](../tasks/027-export-published-index.md)                    | done   | 025, 026           |
-| 028          | [Бюджет контекста search_text](../tasks/028-search-text-context-budget.md)                    | active | 011                |
+| 028          | [Бюджет контекста search_text](../tasks/028-search-text-context-budget.md)                    | review | 011                |
 
 proposed — направление без назначения; ready — согласованная карточка;
 active — назначен исполнитель; review — проверяемый результат; done — принят
 и интегрирован. При новом назначении сохранять фактические thread, branch и base.
 Центральную доску ведёт планирование, coding-чаты — Work record своих карточек.
+
+## На проверке
+
+- **028 (26.11)** — `search_text` выдаёт до 500 Unicode code points на
+  совпадение и до 16 КиБ UTF-8 на модельный ответ. Ревью коммита `556d9f58`,
+  полный локальный check, CI Windows/Ubuntu и portable Verify 62/62 прошли.
+  На комплекте stdio/HTTP вернули по 11 записей из .mbt и .txt в 5 071 байте.
+  Все 60 Unicode-совпадений прошли по шести страницам без дублей. Пакет
+  `FileMCP-028-pilot-556d9f58.zip`, SHA-256
+  `da854f17d8d27dc691707bd70a80778f5decf638fd90fb3a30ac892d6178eaaa`.
+  Остаётся прогон с Flash в тестовом Open WebUI перед интеграцией.
+  [PR #28](https://github.com/obolibok/filesystem-mcp/pull/28),
+  [CI #200](https://github.com/obolibok/filesystem-mcp/actions/runs/45819447409).
+
+  Отдельный длинный литерал из 6 500 одинаковых иероглифов задерживается в
+  синхронном вызове RE2. То же воспроизведено на portable 027 напрямую
+  в поисковом модуле. Задача 028 ограничивает выдачу и сохраняет поведение
+  поискового движка.
 
 ## Последняя приёмка
 
