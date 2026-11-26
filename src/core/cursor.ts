@@ -2,6 +2,17 @@ import { ErrorCode, FsError } from './errors.js';
 import type { PageSnapshot, PageSnapshotStore } from './page-store.js';
 import { invalidCursor } from './page-store.js';
 
+type PageSizeSelector<T, M> = (params: {
+  items: readonly T[];
+  metadata: M;
+  offset: number;
+  cursorAfter: (shown: number) => string | undefined;
+}) => number;
+
+// A fresh page is sized before we know whether it needs a stored snapshot.
+// This placeholder has the same encoded length as an actual snapshot UUID.
+const PREVIEW_SNAPSHOT_ID = '00000000-0000-0000-0000-000000000000';
+
 interface PageCursor {
   readonly snapshotId: string;
   readonly offset: number;
@@ -11,23 +22,39 @@ function encodePageCursor(cursor: PageCursor): string {
   return Buffer.from(JSON.stringify(cursor)).toString('base64url');
 }
 
+function cursorAfter(snapshotId: string, nextOffset: number, total: number): string | undefined {
+  return nextOffset < total ? encodePageCursor({ snapshotId, offset: nextOffset }) : undefined;
+}
+
+function selectPageSize<T, M>(
+  snapshot: PageSnapshot<T, M>,
+  offset: number,
+  pageSize: number,
+  snapshotId: string,
+  select: PageSizeSelector<T, M> | undefined,
+): number {
+  if (!select) return pageSize;
+  return select({
+    items: snapshot.items.slice(offset, offset + pageSize),
+    metadata: snapshot.metadata,
+    offset,
+    cursorAfter: (shown) => cursorAfter(snapshotId, offset + shown, snapshot.items.length),
+  });
+}
+
 function pageResult<T, M>(
   snapshotId: string,
   offset: number,
   pageSize: number,
   snapshot: PageSnapshot<T, M>,
 ): Page<T, M> {
-  if (offset >= snapshot.items.length) throw invalidCursor();
   const page = snapshot.items.slice(offset, offset + pageSize);
   const nextOffset = offset + page.length;
   return {
     page,
     metadata: snapshot.metadata,
     offset,
-    nextCursor:
-      nextOffset < snapshot.items.length
-        ? encodePageCursor({ snapshotId, offset: nextOffset })
-        : undefined,
+    nextCursor: cursorAfter(snapshotId, nextOffset, snapshot.items.length),
   };
 }
 
@@ -89,19 +116,35 @@ export async function paginate<T, M, R>(params: {
   queryKey: string;
   cursor: string | undefined;
   pageSize: number;
+  selectPageSize?: PageSizeSelector<T, M>;
   produce: () => Promise<ProducedPage<T, M>>;
   externalize?: ((items: readonly T[], metadata: M) => R) | undefined;
 }): Promise<PaginatedPage<T, M, R>> {
   if (params.cursor !== undefined) {
     const decoded = decodePageCursor(params.cursor);
     const snapshot = params.store.read<T, M>(decoded.snapshotId, params.queryKey);
-    return pageResult(decoded.snapshotId, decoded.offset, params.pageSize, snapshot);
+    if (decoded.offset >= snapshot.items.length) throw invalidCursor();
+    const pageSize = selectPageSize(
+      snapshot,
+      decoded.offset,
+      params.pageSize,
+      decoded.snapshotId,
+      params.selectPageSize,
+    );
+    return pageResult(decoded.snapshotId, decoded.offset, pageSize, snapshot);
   }
   const produced = await params.produce();
   const { items, metadata } = produced;
-  const incomplete = items.length > params.pageSize || produced.truncated;
+  const pageSize = selectPageSize(
+    produced,
+    0,
+    params.pageSize,
+    PREVIEW_SNAPSHOT_ID,
+    params.selectPageSize,
+  );
+  const incomplete = items.length > pageSize || produced.truncated;
   const first: Page<T, M> =
-    items.length <= params.pageSize
+    items.length <= pageSize
       ? { page: items, metadata, nextCursor: undefined, offset: 0 }
       : pageResult(
           params.store.create({
@@ -110,11 +153,25 @@ export async function paginate<T, M, R>(params: {
             metadata,
           }),
           0,
-          params.pageSize,
-          { items, metadata },
+          pageSize,
+          produced,
         );
   if (!incomplete || params.externalize === undefined) return first;
   return { ...first, resource: params.externalize(produced.items, produced.metadata) };
+}
+
+/** Recover the query only. The caller must reauthorize its scope before paging. */
+export function readPageQuery(
+  store: PageSnapshotStore,
+  cursor: string,
+  method: string,
+): Record<string, unknown> {
+  const { snapshotId } = decodePageCursor(cursor);
+  const { method: storedMethod, ...query } = JSON.parse(store.getQueryKey(snapshotId)) as {
+    method: string;
+  } & Record<string, unknown>;
+  if (storedMethod !== method) throw invalidCursor();
+  return query;
 }
 
 function decodePageCursor(cursor: string): PageCursor {

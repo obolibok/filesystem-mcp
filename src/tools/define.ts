@@ -22,6 +22,8 @@ import {
   TRACEPARENT_META_KEY,
 } from '@modelcontextprotocol/server';
 
+import { StringDecoder } from 'node:string_decoder';
+
 import * as z from 'zod/v4';
 
 import { ErrorCode, formatUnknownErrorMessage, Problem } from '../core/errors.js';
@@ -129,6 +131,7 @@ export interface ToolDef<I extends z.ZodType, O extends z.ZodType> {
   readonly progress?: (args: z.infer<I>) => ProgressCtx;
   readonly progressDone?: (args: z.infer<I>, result: z.infer<O>) => Partial<ProgressCtx>;
   readonly defaultErrorCode?: ErrorCode;
+  readonly maxErrorTextBytes?: number;
   /**
    * The filesystem paths this tool will operate on, extracted from its parsed
    * args. The executor runs an access-grant pre-check over these BEFORE `run`
@@ -229,6 +232,19 @@ function buildSuccessResponse<O>(result: RunResult<O>): CallToolResult {
   };
 }
 
+function boundedErrorText(text: string, maxBytes: number | undefined): string {
+  if (maxBytes === undefined) return text;
+  const wellFormed = text.toWellFormed();
+  if (Buffer.byteLength(wellFormed, 'utf8') <= maxBytes) return wellFormed;
+  const marker = '\n[error text clipped]'.slice(0, maxBytes);
+  const prefix = Buffer.from(wellFormed, 'utf8').subarray(
+    0,
+    maxBytes - Buffer.byteLength(marker, 'utf8'),
+  );
+  // write() buffers an incomplete last character and does not include it.
+  return new StringDecoder('utf8').write(prefix) + marker;
+}
+
 class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
   readonly signal: AbortSignal;
   private readonly def: ToolDef<I, O>;
@@ -304,7 +320,7 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
   }
 
   private async failProgress(error: unknown): Promise<{ isError: true; content: ContentBlock[] }> {
-    const errMsg = formatUnknownErrorMessage(error);
+    const errMsg = boundedErrorText(formatUnknownErrorMessage(error), this.def.maxErrorTextBytes);
     const message = plainMessage('fail', { ...this.#progressCtx, error: errMsg });
     this.#progressSession.fail(error, message);
     await this.#flushProgress();
@@ -313,7 +329,9 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
       this.def.defaultErrorCode ?? ErrorCode.UNKNOWN,
     );
     return {
-      content: [{ type: 'text' as const, text: errorText }],
+      content: [
+        { type: 'text' as const, text: boundedErrorText(errorText, this.def.maxErrorTextBytes) },
+      ],
       isError: true,
     };
   }
@@ -424,7 +442,11 @@ class ToolExecutor<I extends z.ZodType, O extends z.ZodType> {
  * the same schema — so the argument is redundant here and deliberately ignored.
  * Reusing one instance across schemas would silently validate against `schema`.
  */
-function zodJsonSchemaValidator(schema: z.ZodType, toolName: string): jsonSchemaValidator {
+function zodJsonSchemaValidator(
+  schema: z.ZodType,
+  toolName: string,
+  maxErrorTextBytes: number | undefined,
+): jsonSchemaValidator {
   return {
     getValidator<U>(): JsonSchemaValidator<U> {
       return (input: unknown) => {
@@ -436,17 +458,18 @@ function zodJsonSchemaValidator(schema: z.ZodType, toolName: string): jsonSchema
             errorMessage: undefined,
           };
         }
+        const errorMessage =
+          z.prettifyError(result.error) +
+          ((toolName === 'find_files' || toolName === 'search_text') &&
+          result.error.issues.some(
+            (issue) => issue.code === 'unrecognized_keys' && issue.keys.includes('maxResults'),
+          )
+            ? '\nmaxResults is no longer accepted; use limit for the total collect cap and pageSize for results per page.'
+            : '');
         return {
           valid: false as const,
           data: undefined,
-          errorMessage:
-            z.prettifyError(result.error) +
-            ((toolName === 'find_files' || toolName === 'search_text') &&
-            result.error.issues.some(
-              (issue) => issue.code === 'unrecognized_keys' && issue.keys.includes('maxResults'),
-            )
-              ? '\nmaxResults is no longer accepted; use limit for the total collect cap and pageSize for results per page.'
-              : ''),
+          errorMessage: boundedErrorText(errorMessage, maxErrorTextBytes),
         };
       };
     },
@@ -513,7 +536,7 @@ export function defineTool<I extends z.ZodType, O extends z.ZodType>(
     description: def.description,
     inputSchema: fromJsonSchema<z.infer<I>>(
       inputJsonSchema,
-      zodJsonSchemaValidator(def.input, def.name),
+      zodJsonSchemaValidator(def.input, def.name, def.maxErrorTextBytes),
     ),
     // No `outputSchema`, ever. Publishing one obliges the result to carry
     // `structuredContent` (clients enforce it), and every tool that authors its

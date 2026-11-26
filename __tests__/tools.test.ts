@@ -2124,13 +2124,13 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
       (firstTextBlock(result).text ?? '').startsWith(
         [
           'a.txt-1- import x',
-          'a.txt:2: NEEDLE one',
+          'a.txt:2: NEEDLE one [column 0]',
           'a.txt-3- const y',
-          'a.txt:4: NEEDLE two',
+          'a.txt:4: NEEDLE two [column 0]',
           'a.txt-5- }',
           '--',
           'b.txt-1- foo',
-          'b.txt:2: NEEDLE',
+          'b.txt:2: NEEDLE [column 0]',
           'b.txt-3- bar',
         ].join('\n'),
       ),
@@ -2167,7 +2167,7 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     );
     assert.strictEqual(
       firstTextBlock(result).text,
-      ['c.txt-1- x', 'c.txt:2: NEEDLE a', 'c.txt:3: NEEDLE b'].join('\n'),
+      ['c.txt-1- x', 'c.txt:2: NEEDLE a [column 0]', 'c.txt:3: NEEDLE b [column 0]'].join('\n'),
     );
   });
 
@@ -2324,27 +2324,36 @@ describe('P0 Functional Tests - Tools (MCP Client)', () => {
     const full = JSON.parse(content.text) as { matches: unknown[]; truncated: boolean };
     assert.equal(full.matches.length, MAX_SEARCH_RESULTS);
     assert.equal(full.truncated, true);
-    const last = await harness.client.callTool({
-      name: 'search_text',
-      arguments: {
-        path: file,
-        searchPattern: 'CAPPED',
-        pageSize: MAX_SEARCH_RESULTS,
-        cursor: metadata.nextCursor,
-      },
-    });
-    assert.notEqual(last.isError, true);
-    const lastMeta = last._meta as {
-      matches: unknown[];
-      truncated: boolean;
-      nextCursor?: string;
-      resourceUri?: string;
-    };
-    assert.equal(lastMeta.matches.length, MAX_SEARCH_RESULTS - 5);
-    assert.equal(lastMeta.truncated, true);
-    assert.equal(lastMeta.nextCursor, undefined);
-    assert.equal(lastMeta.resourceUri, undefined);
-    assert((firstTextBlock(last).text ?? '').startsWith('// scan stopped early:'));
+    let cursor: string | undefined = metadata.nextCursor;
+    const seen: number[] = [];
+    while (cursor !== undefined) {
+      const next = await harness.client.callTool({
+        name: 'search_text',
+        arguments: { path: file, searchPattern: 'CAPPED', pageSize: MAX_SEARCH_RESULTS, cursor },
+      });
+      const nextText = firstTextBlock(next).text ?? '';
+      assert.notEqual(next.isError, true, nextText);
+      const nextMeta = next._meta as {
+        matches: { line: number }[];
+        truncated: boolean;
+        stoppedReason?: string;
+        nextCursor?: string;
+        resourceUri?: string;
+      };
+      assert.equal(nextMeta.truncated, true);
+      assert.equal(nextMeta.stoppedReason, 'limit');
+      assert.equal(nextMeta.resourceUri, undefined);
+      assert(nextText.startsWith('// scan stopped early:'));
+      assert(Buffer.byteLength(nextText, 'utf8') <= 16384);
+      assert(nextMeta.matches.length > 0);
+      seen.push(...nextMeta.matches.map((match) => match.line));
+      assert(seen.length <= MAX_SEARCH_RESULTS - 5);
+      cursor = nextMeta.nextCursor;
+    }
+    assert.deepEqual(
+      seen,
+      Array.from({ length: MAX_SEARCH_RESULTS - 5 }, (_, i) => i + 6),
+    );
   });
 
   it('HTTP pagination survives the per-request server factory', async () => {

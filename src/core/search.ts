@@ -19,6 +19,8 @@ interface SearchResult {
   line: number;
   /** 0-indexed column of the first occurrence on the line. */
   column: number;
+  /** End offset of the first occurrence in UTF-16 code units. */
+  matchEnd: number;
   content: string;
   matchCount?: number;
   /** Up to `context` lines either side of the match; absent when context is 0. */
@@ -166,16 +168,20 @@ function findLineMatches(
   regex: Regex,
   line: string,
   signal?: AbortSignal,
-): { count: number; column: number } | undefined {
+): { count: number; column: number; matchEnd: number } | undefined {
   let count = 0;
   let column = -1;
+  let matchEnd = 0;
   for (const match of execMatches(regex, line)) {
     signal?.throwIfAborted();
-    if (column === -1) column = match.start;
+    if (count === 0) {
+      column = match.start;
+      matchEnd = match.end;
+    }
     count++;
     if (count >= MAX_MATCHES_PER_LINE) break;
   }
-  return count > 0 ? { count, column } : undefined;
+  return count > 0 ? { count, column, matchEnd } : undefined;
 }
 
 export interface SearchContentOptions {
@@ -318,6 +324,7 @@ export async function searchContent(
               file: entry.path,
               line: i + 1,
               column: found.column,
+              matchEnd: found.matchEnd,
               content: line,
               matchCount: found.count,
               ...(context > 0
