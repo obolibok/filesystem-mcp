@@ -1,6 +1,6 @@
 # 028 — Бюджет контекста `search_text`
 
-Статус: active. Ветка: `codex/028-search-text-context-budget`.
+Статус: done. Ветка: `codex/028-search-text-context-budget`.
 
 ## Контракт
 
@@ -77,5 +77,17 @@
   Prettier, Knip и тесты (609 passed, 0 failed, 13 skipped). Пропуски связаны
   с POSIX-only условиями и недоступными file symlinks на Windows.
   `git diff --check` прошёл. Локальный результат готов к ревью.
-- Portable Verify и тестовый Open WebUI с моделью Flash входят в отдельную
-  приёмку после ревью.
+
+## Приёмка 26.11.2026
+
+Коммит `556d9f58` прошёл ревью, CI Windows/Ubuntu и portable Verify 62/62.
+На готовом пакете stdio и HTTP вернули по 11 записей из .mbt и .txt в 5 071
+байте. 60 Unicode-совпадений прошли по шести страницам без пропусков и дублей.
+Максимум в этих прогонах составил 15 765 байт. Пользователь подтвердил
+результат с Flash в тестовом Open WebUI. Merge `d4b238ba`.
+[PR #28](https://github.com/obolibok/filesystem-mcp/pull/28),
+[CI #200](https://github.com/obolibok/filesystem-mcp/actions/runs/45819447409).
+
+В отдельном стресс-тесте литерал из 6 500 одинаковых иероглифов занимает
+около 37 секунд на строку в синхронном вызове RE2. Задержка воспроизводится
+на portable 027 и 028 до построения страницы ответа.

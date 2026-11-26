@@ -104,9 +104,7 @@ Verify 24/24 PASS, packaged production audit — 0, ZIP parity SHA/CRC — PASS.
    019 адаптирует v2.12.0 b23023f2. Возможные узкие задачи без назначения:
    EXDEV move staging/cleanup, replace_text match limit, list partial timeout.
    Сначала подтвердить gap в fork. Общий merge upstream не назначен.
-4. Tunnel/PowerShell Ctrl+C после Windows Sleep: намерение пользователя проверить;
-   диагноза и назначенной задачи нет. Обычный graceful shutdown ранее проходил.
-5. Опыт 005 требует выборки, исходного вопроса и эталона. Не превращать его
+4. Опыт 005 требует выборки, исходного вопроса и эталона. Не превращать его
    автоматически в новую реализацию RAG backend.
 
 ## Порядок следующего чата
